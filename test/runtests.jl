@@ -2,6 +2,8 @@ using FCANN
 using Base.Test
 
 #auxiliary function tests
+requestCostFunctions()
+
 println("Testing AUX functions for 0 hidden layer network")
 println("------------------------------------------------")
 println("Testing paramter initialization")
@@ -49,6 +51,8 @@ assert(params == [(T0, B0)])
 println("TEST PASSED")
 println()
 
+rm("testParams")
+
 println("Testing prediction output")
 X = randn(Float32, 10000, 10)
 Y = predict(T0, B0, X)
@@ -72,6 +76,12 @@ assert(err < 0.015)
 
 println("Lambda = 1.0")
 err = checkNumGrad(1.0f0)
+assert(err < 0.015)
+println("TEST PASSED")
+println()
+
+println("Squared Error Cost Function")
+err = checkNumGrad(0.0f0, costFunc = "sqErr")
 assert(err < 0.015)
 println("TEST PASSED")
 println()
@@ -113,29 +123,75 @@ println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers")
-record, T, B = fullTrain(name, 1000, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1)
+record, T, B = fullTrain(name, 200, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1)
 assert(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers from previous endpoint")
-record, T, B = fullTrain(name, 1000, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 2, startID = 1)
+record, T, B = fullTrain(name, 200, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 2, startID = 1)
 assert(record[end] < record[1])
 println("TEST PASSED")
 println()
 
+println("Adding 4 cores to test multitrain algorithms")
+addprocs(4)
+@everywhere using FCANN
+println("--------------------------------------------")
+println("Testing archEval")
+archEval(name, 1000, 1024, [[1], [2], [3], [2, 2]])
+println("TEST PASSED")
+println()
 
-# filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX.csv")
+rm(string("archEval_", name, "_", M, "_input_", O, "_output_ADAMAX.csv"))
 
-# rm("Xtrain_test.csv")
-# rm("Xtest_test.csv")
-# rm("ytrain_test.csv")
-# rm("ytest_test.csv")
-# rm("1_costRecord_Test.csv")
-# rm("1_timeRecord_test.csv")
-# rm("1_performance_test.csv")
-# rm("1_params_test.csv")
+println("Testing evalLayers")
+evalLayers(name, 100, 1024, [100, 200, 400, 800], layers=[2, 4, 6])
+println("TEST PASSED")
+println()
 
+rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_0.002_alpha_ADAMAX.csv"))
+
+println("Testing smartEvalLayers")
+smartEvalLayers(name, 100, 1024, [100, 200], layers=[1, 2], tau=0.05f0)
+println("TEST PASSED")
+println()
+
+rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_100_epochs_smartParams_ADAMAX.csv"))
+
+println("Testing multiTrain")
+multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 4, 1)
+println("TEST PASSED")
+println()
+
+filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.0_L2_1.0_maxNorm_0.002_alpha_0.1_decayRate_ADAMAX")
+
+rm(string("1_multiParams_", filename, ".bin"))
+rm(string("1_multiPerformance_", filename, ".csv"))
+
+
+# Remove generated files
+rm("Xtrain_test.csv")
+rm("Xtest_test.csv")
+rm("ytrain_test.csv")
+rm("ytest_test.csv")
+
+filename = string(name, "_", M, "_input_", [], "_hidden_", O, "_output_0.0_L2_Inf_maxNorm_0.002_alpha_ADAMAX.csv")
+rm(string("1_costRecord_", filename))
+rm(string("1_timeRecord_", filename))
+rm(string("1_performance_", filename))
+rm(string("1_params_", filename[1:end-4]))
+
+filename = string(name, "_", M, "_input_", [2, 2], "_hidden_", O, "_output_0.0_L2_Inf_maxNorm_0.002_alpha_ADAMAX.csv")
+rm(string("1_costRecord_", filename))
+rm(string("1_timeRecord_", filename))
+rm(string("1_performance_", filename))
+rm(string("1_params_", filename[1:end-4]))
+
+rm(string("2_costRecord_", filename))
+rm(string("2_timeRecord_", filename))
+rm(string("2_performance_", filename))
+rm(string("2_params_", filename[1:end-4]))
 
 
 

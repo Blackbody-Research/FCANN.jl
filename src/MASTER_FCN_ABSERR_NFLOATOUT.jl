@@ -1,11 +1,11 @@
 #include minibatch stochastic gradient descent ADAMAX algorithm which includes
 #function to read train and test sets with a specified name.  Forming the batches
 #is also part of the ADAMAX algorithm
-include("ADAMAXTRAIN_FCN_ABSERR_NFLOATOUT.jl")
+include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
 
 
 """
-	archEval(name, N, batchSize, hiddenList, alpha = 0.001f0)
+	archEval(name, N, batchSize, hiddenList, alpha = 0.002f0)
 
 Train neural networks with architectures specified in 'hiddenList' computing the training and test set
 errors for each architecture and saving results to file.
@@ -34,7 +34,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0)
 	M = size(X, 2)
 	O = size(Y, 2)
 
-	filename = string(name, "_", M, "_input_", O, "_output__ADAMAX.csv")
+	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX.csv")
 
 	header = ["Layers" "Num Params" "Train Error" "Test Error"]
 	body = @parallel (vcat) for hidden = hiddenList
@@ -52,8 +52,8 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0)
 		outTrain = predict(T, B, X)
 		outTest = predict(T, B, Xtest)
 
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 
 		numParams = length(theta2Params(B, T))
 		[length(hidden) numParams Jtrain Jtest]
@@ -62,7 +62,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0)
 	Xtrain_lin = [ones(size(Y, 1)) X]
 	Xtest_lin = [ones(size(Ytest, 1)) Xtest]
 	betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
-	line1 = [0 M+1 mean(abs(Xtrain_lin*betas .- Y)) mean(abs(Xtest_lin*betas .- Ytest))]
+	line1 = [0 M+1 mean(abs.(Xtrain_lin*betas .- Y)) mean(abs.(Xtest_lin*betas .- Ytest))]
 	if isfile(string("archEval_", filename))
 		f = open(string("archEval_", filename), "a")
 		writecsv(f, body)
@@ -98,8 +98,8 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0)
 		outTrain = predict(T, B, X[:, cols])
 		outTest = predict(T, B, Xtest[:, cols])
 
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 
 		numParams = length(theta2Params(B, T))
 		[length(hidden) numParams Jtrain Jtest]
@@ -108,7 +108,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0)
 	Xtrain_lin = [ones(size(Y, 1)) X[:, cols]]
 	Xtest_lin = [ones(size(Ytest, 1)) Xtest[:, cols]]
 	betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
-	line1 = [0 M+1 mean(abs(Xtrain_lin*betas .- Y)) mean(abs(Xtest_lin*betas .- Ytest))]
+	line1 = [0 M+1 mean(abs.(Xtrain_lin*betas .- Y)) mean(abs.(Xtest_lin*betas .- Ytest))]
 	if isfile(string("archEval_", filename))
 		f = open(string("archEval_", filename), "a")
 		writecsv(f, body)
@@ -153,8 +153,8 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 		outTrain = predict(T, B, X)
 		outTest = predict(T, B, Xtest)
 
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 
 		numParams = length(theta2Params(B, T))
 		[length(hidden[2]) numParams hidden[1] hidden[2][1] Jtrain Jtest median(GFLOPS)]	
@@ -219,7 +219,7 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 end
 
 
-@everywhere function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0)
+function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0)
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -356,7 +356,7 @@ end
 		c4 = out4[3]
 		println(string("Current x values are ", [x1, x2, x4, x3]))
 
-		while (abs(c4-c2)/(0.5f0*(c4+c2)) > tau) & ((2.0f0*(x4-x2)/(x4+x2)) > tau)
+		while (abs.(c4-c2)/(0.5f0*(c4+c2)) > tau) & ((2.0f0*(x4-x2)/(x4+x2)) > tau)
 			if c4 < c2
 				x1 = x2
 				x2 = x4
@@ -647,7 +647,7 @@ end
 		end
 		c2 = out2[3]
 		
-		# if 2.0f0*abs(c2 - min(c1, c3))/(c2+min(c1, c3)) < tau
+		# if 2.0f0*abs.(c2 - min(c1, c3))/(c2+min(c1, c3)) < tau
 		# 	status = (c2 < min(c1, c3))
 		# 	(x2, out2, status)
 		# else
@@ -658,7 +658,7 @@ end
 			c4 = out4[3]
 			println(string("Current x values are ", [x1, x2, x4, x3]))
 
-			while (abs(c4-c2)/(0.5f0*(c4+c2)) > tau) & ((2.0f0*(x4-x2)/(x4+x2)) > tau)
+			while (abs.(c4-c2)/(0.5f0*(c4+c2)) > tau) & ((2.0f0*(x4-x2)/(x4+x2)) > tau)
 				
 				if c4 < c2
 					x1 = x2
@@ -788,8 +788,8 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 		T, B, bestCost, record, timeRecord, GFLOPS = out
 		outTrain = predict(T, B, X, dropout)
 		outTest = predict(T, B, Xtest, dropout)
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 		l = length(record)
 
 		#final 3 points of training cost
@@ -906,8 +906,8 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0)
 		T, B, bestCost, record = ADAMAXTrainNN(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha, printProgress = true)
 		outTrain = predict(T, B, X)
 		outTest = predict(T, B, Xtest)
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 		[lambda Jtrain Jtest]
 	end
 	writecsv(string("L2Reg_", filename), [header; body])
@@ -959,8 +959,8 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 		T, B, bestCost, record, timeRecord, GFLOPS = ADAMAXTrainNN(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true)
 		outTrain = predict(T, B, X, dropout)
 		outTest = predict(T, B, Xtest, dropout)
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 		[c Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
 	end
 	if isfile(string("maxNormReg_", filename))
@@ -1004,8 +1004,8 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R)
 		T, B, bestCost, record, timeRecord, GFLOPS = ADAMAXTrainNN(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true)
 		outTrain = predict(T, B, X, dropout)
 		outTest = predict(T, B, Xtest, dropout)
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 		[dropout Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
 	end
 	if isfile(string("dropoutReg_", filename))
@@ -1052,8 +1052,8 @@ function advReg(name, N, batchSize, hidden, etaList, alpha, c = Inf)
 		T, B, bestCost, record = ADAMAXTrainNNAdv(X, Y, batchSize, T0, B0, N, M, hidden, eta, c, alpha, printProgress = true)
 		outTrain = predict(T, B, X)
 		outTest = predict(T, B, Xtest)
-		Jtrain = mean(abs(outTrain - Y))
-		Jtest = mean(abs(outTest - Ytest))
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
 		[eta Jtrain Jtest]
 	end
 	writecsv(string("advReg_", filename), [header; body])
@@ -1167,13 +1167,13 @@ function bootstrapTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R,
 	#calculate average network output
 	bootstrapOutTrain = map(a -> predict(a[1], a[2], X), bootstrapOut)	
 	combinedOutputTrain = reduce(+, bootstrapOutTrain)/length(bootstrapOutTrain)
-	errorEstTrain = mean(mapreduce(a -> abs(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
-	Jtrain = mean(abs(combinedOutputTrain - Y))
+	errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
+	Jtrain = mean(abs.(combinedOutputTrain - Y))
 		
 	bootstrapOutTest = map(a -> predict(a[1], a[2], Xtest), bootstrapOut)	
 	combinedOutputTest = reduce(+, bootstrapOutTest)/length(bootstrapOutTest)
-	errorEstTest = mean(mapreduce(a -> abs(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
-	Jtest = mean(abs(combinedOutputTest - Ytest))	
+	errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
+	Jtest = mean(abs.(combinedOutputTest - Ytest))	
 		
 	writecsv(string(ID, "_bootstrapPerformance_", filename, ".csv"), [["Training Error", "Training Error Est", "Test Error", "Test Error Est"] [Jtrain, errorEstTrain, Jtest, errorEstTest]])			
 end
@@ -1213,13 +1213,13 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	#calculate average network output
 	bootstrapOutTrain = map(a -> predict(a[1], a[2], X), bootstrapOut)	
 	combinedOutputTrain = reduce(+, bootstrapOutTrain)/length(bootstrapOutTrain)
-	errorEstTrain = mean(mapreduce(a -> abs(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
-	Jtrain = mean(abs(combinedOutputTrain - Y))
+	errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
+	Jtrain = mean(abs.(combinedOutputTrain - Y))
 		
 	bootstrapOutTest = map(a -> predict(a[1], a[2], Xtest), bootstrapOut)	
 	combinedOutputTest = reduce(+, bootstrapOutTest)/length(bootstrapOutTest)
-	errorEstTest = mean(mapreduce(a -> abs(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
-	Jtest = mean(abs(combinedOutputTest - Ytest))	
+	errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
+	Jtest = mean(abs.(combinedOutputTest - Ytest))	
 		
 	writecsv(string(ID, "_multiPerformance_", filename, ".csv"), [["Training Error", "Training Error Est", "Test Error", "Test Error Est"] [Jtrain, errorEstTrain, Jtest, errorEstTest]])			
 end
@@ -1327,12 +1327,12 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	#calculate average network output
 	fullMultiPerformance = mapreduce(vcat, 1:length(multiOut)) do i
 		combinedOutputTrain = reduce(+, multiOutTrain[1:i])/i
-		errorEstTrain = mean(mapreduce(a -> abs(a - combinedOutputTrain), +, multiOutTrain[1:i])/i)	
-		Jtrain = mean(abs(combinedOutputTrain - Y))
+		errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, multiOutTrain[1:i])/i)	
+		Jtrain = mean(abs.(combinedOutputTrain - Y))
 			
 		combinedOutputTest = reduce(+, multiOutTest[1:i])/i
-		errorEstTest = mean(mapreduce(a -> abs(a - combinedOutputTest), +, multiOutTest[1:i])/i)	
-		Jtest = mean(abs(combinedOutputTest - Ytest))
+		errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, multiOutTest[1:i])/i)	
+		Jtest = mean(abs.(combinedOutputTest - Ytest))
 		[i Jtrain errorEstTrain Jtest errorEstTest]
 	end
 		
@@ -1366,13 +1366,13 @@ function bootstrapTrainAdv(name, numEpochs, batchSize, hidden, eta, c, alpha, nu
 	#calculate average network output
 	bootstrapOutTrain = map(a -> predict(a[2], a[3], X), bootstrapOut)	
 	combinedOutputTrain = reduce(+, bootstrapOutTrain)/length(bootstrapOutTrain)
-	errorEstTrain = mean(mapreduce(a -> abs(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
-	Jtrain = mean(abs(combinedOutputTrain - Y))
+	errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
+	Jtrain = mean(abs.(combinedOutputTrain - Y))
 		
 	bootstrapOutTest = map(a -> predict(a[2], a[3], Xtest), bootstrapOut)	
 	combinedOutputTest = reduce(+, bootstrapOutTest)/length(bootstrapOutTest)
-	errorEstTest = mean(mapreduce(a -> abs(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
-	Jtest = mean(abs(combinedOutputTest - Ytest))	
+	errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
+	Jtest = mean(abs.(combinedOutputTest - Ytest))	
 		
 	writecsv(string(ID, "_bootstrapPerformance_", filename), [["Training Error", "Training Error Est", "Test Error", "Test Error Est "] [Jtrain, errorEstTrain, Jtest, errorEstTest]])		
 end
@@ -1470,12 +1470,12 @@ function evalBootstrap(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = 
 	#calculate average network output
 	fullMultiPerformance = mapreduce(vcat, 1:length(multiOut)) do i
 		combinedOutputTrain = reduce(+, multiOutTrain[1:i])/i
-		errorEstTrain = mean(mapreduce(a -> abs(a - combinedOutputTrain), +, multiOutTrain[1:i])/i)	
-		Jtrain = mean(abs(combinedOutputTrain - Y))
+		errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, multiOutTrain[1:i])/i)	
+		Jtrain = mean(abs.(combinedOutputTrain - Y))
 			
 		combinedOutputTest = reduce(+, multiOutTest[1:i])/i
-		errorEstTest = mean(mapreduce(a -> abs(a - combinedOutputTest), +, multiOutTest[1:i])/i)	
-		Jtest = mean(abs(combinedOutputTest - Ytest))
+		errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, multiOutTest[1:i])/i)	
+		Jtest = mean(abs.(combinedOutputTest - Ytest))
 		[i Jtrain errorEstTrain Jtest errorEstTest]
 	end
 		
@@ -1563,8 +1563,8 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 		outTrain = predict(T, B, X)
 		outTest = predict(T, B, Xtest)
 
-		Jtrain = mean(abs(outTrain .- Y))
-		Jtest = mean(abs(outTest .- Ytest))
+		Jtrain = mean(abs.(outTrain .- Y))
+		Jtest = mean(abs.(outTest .- Ytest))
 
 		numParams = length(theta2Params(B, T))
 		[length(hidden[2]) numParams hidden[1] hidden[2][1] Jtrain Jtest alpha R median(timeRecord[2:end] - timeRecord[1:end-1]) median(GFLOPS) success]	
@@ -1612,13 +1612,13 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 		#calculate average network output
 		bootstrapOutTrain = map(a -> predict(a[1], a[2], X), bootstrapOut)	
 		combinedOutputTrain = reduce(+, bootstrapOutTrain)/length(bootstrapOutTrain)
-		errorEstTrain = mean(mapreduce(a -> abs(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
-		Jtrain = mean(abs(combinedOutputTrain - Y))
+		errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
+		Jtrain = mean(abs.(combinedOutputTrain - Y))
 			
 		bootstrapOutTest = map(a -> predict(a[1], a[2], Xtest), bootstrapOut)	
 		combinedOutputTest = reduce(+, bootstrapOutTest)/length(bootstrapOutTest)
-		errorEstTest = mean(mapreduce(a -> abs(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
-		Jtest = mean(abs(combinedOutputTest - Ytest))
+		errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
+		Jtest = mean(abs.(combinedOutputTest - Ytest))
 		(Jtest, [c Jtrain errorEstTrain Jtest errorEstTest maximum(map(a -> a[3], bootstrapOut)) minimum(map(a -> a[4], bootstrapOut))])	
 	end
 
@@ -1729,7 +1729,7 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 		y3 = p3[2]
 		y4 = p4[2]
 
-		if (2.0f0*abs(y4-y2)/(y4+y2) < tau) | (2.0f0*(x4-x2)/(x4+x2) < tau)
+		if (2.0f0*abs.(y4-y2)/(y4+y2) < tau) | (2.0f0*(x4-x2)/(x4+x2) < tau)
 			return body
 		elseif y2 < y4
 			p3 = p4
@@ -1765,7 +1765,7 @@ end
 
 
 #=
-function archEval(name, batchSize, numEpochs, hidden_layers, useGPU = false, errFunc = (a, b) -> mean(abs(a-b)))
+function archEval(name, batchSize, numEpochs, hidden_layers, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 	Xtrain_values = map(Float32, readcsv(string("Xtrain_values_", name, ".csv")))
 	Xtest_values = map(Float32, readcsv(string("Xtest_values_", name, ".csv")))
 	ytrain = map(Float32, readcsv(string("ytrain_", name, ".csv")))
@@ -1849,7 +1849,7 @@ function archEval(name, batchSize, numEpochs, hidden_layers, useGPU = false, err
 	#end
 end
 
-function evalBootstrapFull(name, hidden_layer_size, c, suffixes, useGPU = false, errFunc = (a, b) -> mean(abs(a-b)))
+function evalBootstrapFull(name, hidden_layer_size, c, suffixes, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 	Xtrain_values = float32(readcsv(string("Xtrain_values_", name, ".csv")))
 	Xtest_values = float32(readcsv(string("Xtest_values_", name, ".csv")))
 	ytrain = float32(readcsv(string("ytrain_", name, ".csv")))
@@ -1899,11 +1899,11 @@ function evalBootstrapFull(name, hidden_layer_size, c, suffixes, useGPU = false,
 		#calculate average network output
 		trainingBootstrapOut = invY(mapreduce(a -> predict(a[1], a[2], Xtrain), hcat, out))
 		trainingOutput = mean(trainingBootstrapOut, 2)
-		trainingErrorEst = mean(abs(trainingBootstrapOut .- mean(trainingBootstrapOut, 2)), 2)
+		trainingErrorEst = mean(abs.(trainingBootstrapOut .- mean(trainingBootstrapOut, 2)), 2)
 		trainingError = errFunc(trainingOutput, invY(ytrain))
 		testBootstrapOut = invY(mapreduce(a -> predict(a[1], a[2], Xtest), hcat, out))
 		testOutput = mean(testBootstrapOut, 2)
-		testErrorEst = mean(abs(testBootstrapOut .- mean(testBootstrapOut, 2)), 2)
+		testErrorEst = mean(abs.(testBootstrapOut .- mean(testBootstrapOut, 2)), 2)
 		testError = errFunc(testOutput, invY(ytest))
 
 		writecsv(string(name, input_layer_size, "_input_", hidden_layer_size, "_hidden_", output_layer_size, "_output_", c, "_maxNorm_OPTIMIZEDGPUABSERR_bootstrapPerformance_full.csv"),  [["Training Error", "Training Error Est", "Test Error", "Test Error Est "] [trainingError, mean(trainingErrorEst), testError, mean(testErrorEst)]])
@@ -1924,14 +1924,14 @@ function evalBootstrapFull(name, hidden_layer_size, c, suffixes, useGPU = false,
 			invY(mapreduce(a -> predict(a[1], a[2], Xtrain)[:, i], hcat, out))
 		end		
 		trainingOutput = mapreduce(a -> mean(a, 2), hcat, trainingBootstrapOut)
-		trainingErrorEst = mapreduce(a -> mean(abs(a .- mean(a, 2)), 2), hcat, trainingBootstrapOut)
+		trainingErrorEst = mapreduce(a -> mean(abs.(a .- mean(a, 2)), 2), hcat, trainingBootstrapOut)
 		trainingError = errFunc(trainingOutput, invY(ytrain))
 		
 		testBootstrapOut = map(1:output_layer_size) do i
 			invY(mapreduce(a -> predict(a[1], a[2], Xtest)[:, i], hcat, out))
 		end		
 		testOutput = mapreduce(a -> mean(a, 2), hcat, testBootstrapOut)
-		testErrorEst = mapreduce(a -> mean(abs(a .- mean(a, 2)), 2), hcat, testBootstrapOut)
+		testErrorEst = mapreduce(a -> mean(abs.(a .- mean(a, 2)), 2), hcat, testBootstrapOut)
 		testError = errFunc(testOutput, invY(ytest))
 
 		writecsv(string(name, input_layer_size, "_input_", hidden_layer_size, "_hidden_", output_layer_size, "_output_", c, "_maxNorm_OPTIMIZEDABSERR_bootstrapPerformance_full.csv"),  [["Training Error", "Training Error Est", "Test Error", "Test Error Est "] [trainingError, mean(trainingErrorEst), testError, mean(testErrorEst)]])
@@ -1940,7 +1940,7 @@ function evalBootstrapFull(name, hidden_layer_size, c, suffixes, useGPU = false,
 end
 
 
-function bootstrapTrain(name, batchSize, numEpochs, hidden_layer_size, c, num, suffix, useGPU = false, errFunc = (a, b) -> mean(abs(a-b)))
+function bootstrapTrain(name, batchSize, numEpochs, hidden_layer_size, c, num, suffix, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 Xtrain_values = float32(readcsv(string("Xtrain_values_", name, ".csv")))
 	Xtest_values = float32(readcsv(string("Xtest_values_", name, ".csv")))
 	ytrain = float32(readcsv(string("ytrain_", name, ".csv")))
@@ -2007,11 +2007,11 @@ Xtrain_values = float32(readcsv(string("Xtrain_values_", name, ".csv")))
 				#calculate average network output
 				trainingBootstrapOut = invY(mapreduce(a -> predict(a[2], a[3], Xtrain), hcat, out))
 				trainingOutput = mean(trainingBootstrapOut, 2)
-				trainingErrorEst = mean(abs(trainingBootstrapOut .- mean(trainingBootstrapOut, 2)), 2)
+				trainingErrorEst = mean(abs.(trainingBootstrapOut .- mean(trainingBootstrapOut, 2)), 2)
 				trainingError = errFunc(trainingOutput, invY(ytrain))
 				testBootstrapOut = invY(mapreduce(a -> predict(a[2], a[3], Xtest), hcat, out))
 				testOutput = mean(testBootstrapOut, 2)
-				testErrorEst = mean(abs(testBootstrapOut .- mean(testBootstrapOut, 2)), 2)
+				testErrorEst = mean(abs.(testBootstrapOut .- mean(testBootstrapOut, 2)), 2)
 				testError = errFunc(testOutput, invY(ytest))
 
 				writecsv(string(name, input_layer_size, "_input_", hidden_layer_size, "_hidden_", c, "_maxNorm_OPTIMIZEDGPUABSERR_bootstrapPerformance_", suffix, ".csv"),  [["Training Error", "Training Error Est", "Test Error", "Test Error Est "] [trainingError, mean(trainingErrorEst), testError, mean(testErrorEst)]])
@@ -2041,14 +2041,14 @@ Xtrain_values = float32(readcsv(string("Xtrain_values_", name, ".csv")))
 			invY(mapreduce(a -> predict(a[2], a[3], Xtrain)[:, i], hcat, out))
 		end		
 		trainingOutput = mapreduce(a -> mean(a, 2), hcat, trainingBootstrapOut)
-		trainingErrorEst = mapreduce(a -> mean(abs(a .- mean(a, 2)), 2), hcat, trainingBootstrapOut)
+		trainingErrorEst = mapreduce(a -> mean(abs.(a .- mean(a, 2)), 2), hcat, trainingBootstrapOut)
 		trainingError = errFunc(trainingOutput, invY(ytrain))
 		
 		testBootstrapOut = map(1:output_layer_size) do i
 			invY(mapreduce(a -> predict(a[2], a[3], Xtest)[:, i], hcat, out))
 		end		
 		testOutput = mapreduce(a -> mean(a, 2), hcat, testBootstrapOut)
-		testErrorEst = mapreduce(a -> mean(abs(a .- mean(a, 2)), 2), hcat, testBootstrapOut)
+		testErrorEst = mapreduce(a -> mean(abs.(a .- mean(a, 2)), 2), hcat, testBootstrapOut)
 		testError = errFunc(testOutput, invY(ytest))
 
 		writecsv(string(name, input_layer_size, "_input_", hidden_layer_size, "_hidden_", output_layer_size, "_output_", c, "_maxNorm_OPTIMIZEDABSERR_bootstrapPerformance_", suffix, ".csv"),  [["Training Error", "Training Error Est", "Test Error", "Test Error Est "] [trainingError, mean(trainingErrorEst), testError, mean(testErrorEst)]])
@@ -2096,8 +2096,8 @@ function makeErrorSets(name, hidden_layer_size, lambda, useGPU)
 	nn_Y_train = predict(Thetas, Biases, Xtrain)
 	nn_Y_test = predict(Thetas, Biases, Xtest)
 	
-	nn_Err_train = abs(nn_Y_train - ytrain)
-	nn_Err_test = abs(nn_Y_test - ytest)
+	nn_Err_train = abs.(nn_Y_train - ytrain)
+	nn_Err_test = abs.(nn_Y_test - ytest)
 	
 	Ay = mean(nn_Err_train)
 	By = std(nn_Err_train)
@@ -2122,7 +2122,7 @@ function makeErrorSets(name, hidden_layer_size, lambda, useGPU)
 	return name2
 end
 
-function archEvalErr(name, batchSize, numEpochs, hidden_layers, hidden_layer_orig, lambdaorig, useGPUorig, useGPU = false, errFunc = (a, b) -> mean(abs(a-b)))
+function archEvalErr(name, batchSize, numEpochs, hidden_layers, hidden_layer_orig, lambdaorig, useGPUorig, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 	name2 = makeErrorSets(name, hidden_layer_orig, lambdaorig, useGPUorig)
 	
 	Xtrain = float32(readcsv(string("Xtrain_", name2, ".csv")))
@@ -2194,7 +2194,7 @@ function archEvalErr(name, batchSize, numEpochs, hidden_layers, hidden_layer_ori
 	#end
 end
 
-function regularizeErr(name, batchSize, numEpochs, hidden_layer_size, lambdavec, hidden_layer_orig, lambdaorig, useGPUorig, useGPU = false, errFunc = (a, b) -> mean(abs(a-b)))
+function regularizeErr(name, batchSize, numEpochs, hidden_layer_size, lambdavec, hidden_layer_orig, lambdaorig, useGPUorig, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 	name2 = makeErrorSets(name, hidden_layer_orig, lambdaorig, useGPUorig)
 
 	Xtrain = float32(readcsv(string("Xtrain_", name2, ".csv")))
@@ -2280,7 +2280,7 @@ end
 	
 	
 	
-function regularize(name, batchSize, numEpochs, hidden_layer_size, lambdavec, useGPU = false, errFunc = (a, b) -> mean(abs(a-b)))
+function regularize(name, batchSize, numEpochs, hidden_layer_size, lambdavec, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 	Xtrain_values = float32(readcsv(string("Xtrain_values_", name, ".csv")))
 	Xtest_values = float32(readcsv(string("Xtest_values_", name, ".csv")))
 	ytrain = float32(readcsv(string("ytrain_", name, ".csv")))
@@ -2373,7 +2373,7 @@ function regularize(name, batchSize, numEpochs, hidden_layer_size, lambdavec, us
 	#end
 end
 
-function maxNormReg(name, batchSize, numEpochs, hidden_layer_size, cvec, useGPU = false, errFunc = (a, b) -> mean(abs(a-b)))
+function maxNormReg(name, batchSize, numEpochs, hidden_layer_size, cvec, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 	Xtrain_values = float32(readcsv(string("Xtrain_values_", name, ".csv")))
 	Xtest_values = float32(readcsv(string("Xtest_values_", name, ".csv")))
 	ytrain = float32(readcsv(string("ytrain_", name, ".csv")))
@@ -2694,7 +2694,7 @@ function checkNumGrad(lambda)
 		
 	end
 	cost = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, y, lambda, a)
-	deltas = abs(funcGrad - numGrad)
+	deltas = abs.(funcGrad - numGrad)
 	
 	println(string("Cost is ", cost))
 	println([["Num Grads" "Func Grads"];[numGrad funcGrad]])

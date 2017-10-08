@@ -12,21 +12,21 @@ println("TEST PASSED")
 println()
 
 println("Testing parameters binary write")
-try rm("testParams") end
-writeParams([(T0, B0)], "testParams")
+try rm("testParams1") end
+writeParams([(T0, B0)], "testParams1")
 println("TEST PASSED")
 println()
 
 println("Testing binary parameter read")
-params = readBinParams("testParams")
-assert(params == [(T0, B0)])
+params = readBinParams("testParams1")
+@test(params == [(T0, B0)])
 println("TEST PASSED")
 println()
 
 println("Testing prediction output")
 X = randn(Float32, 10000, 10)
 Y = predict(T0, B0, X)
-assert(size(Y) == (10000, 2))
+@test(size(Y) == (10000, 2))
 println("TEST PASSED")
 println()
 
@@ -40,23 +40,21 @@ println("TEST PASSED")
 println()
 
 println("Testing parameters binary write")
-try rm("testParams") end
-writeParams([(T0, B0)], "testParams")
+try rm("testParams2") end
+writeParams([(T0, B0)], "testParams2")
 println("TEST PASSED")
 println()
 
 println("Testing binary parameter read")
-params = readBinParams("testParams")
-assert(params == [(T0, B0)])
+params = readBinParams("testParams2")
+@test (params == [(T0, B0)])
 println("TEST PASSED")
 println()
-
-rm("testParams")
 
 println("Testing prediction output")
 X = randn(Float32, 10000, 10)
 Y = predict(T0, B0, X)
-assert(size(Y) == (10000, 2))
+@test (size(Y) == (10000, 2))
 println("TEST PASSED")
 println()
 
@@ -64,25 +62,25 @@ println("Testing numerical gradient vs backpropagation")
 println("---------------------------------------------")
 println("Lambda = 0, no hidden layers")
 err = checkNumGrad(0.0f0, hidden_layers=[])
-assert(err < 0.015)
+@test (err < 0.015)
 
 println("Lambda = 0")
 err = checkNumGrad(0.0f0)
-assert(err < 0.015)
+@test (err < 0.015)
 
 println("Lambda = 0.1")
 err = checkNumGrad(0.1f0)
-assert(err < 0.015)
+@test(err < 0.015)
 
 println("Lambda = 1.0")
 err = checkNumGrad(1.0f0)
-assert(err < 0.015)
+@test(err < 0.015)
 println("TEST PASSED")
 println()
 
 println("Squared Error Cost Function")
 err = checkNumGrad(0.0f0, costFunc = "sqErr")
-assert(err < 0.015)
+@test(err < 0.015)
 println("TEST PASSED")
 println()
 
@@ -118,19 +116,19 @@ writeTestData(name, M, O)
 
 println("Training with 0 hidden layers")
 record, T, B = fullTrain(name, 1000, 1024, [], 0.0f0, Inf, 0.002f0, 0.1f0, 1)
-assert(record[end] < record[1])
+@test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers")
 record, T, B = fullTrain(name, 200, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1)
-assert(record[end] < record[1])
+@test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers from previous endpoint")
 record, T, B = fullTrain(name, 200, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 2, startID = 1)
-assert(record[end] < record[1])
+@test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
@@ -193,5 +191,6 @@ rm(string("2_timeRecord_", filename))
 rm(string("2_performance_", filename))
 rm(string("2_params_", filename[1:end-4]))
 
-
+rm("testParams1")
+rm("testParams2")
 

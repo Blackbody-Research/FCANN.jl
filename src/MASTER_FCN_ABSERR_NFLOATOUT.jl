@@ -1117,6 +1117,47 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	(record, T, B)
 end
 
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], printProg = true, writeFiles = true)
+
+	M = size(X, 2)
+	O = size(Y, 2)
+
+	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX")
+	
+	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
+	
+	(T0, B0) = if isempty(startID)
+		println(string("initializing network parameters for ", M, " input ", O, " output ", hidden, " hidden network"))
+		srand(1234)
+		initializeParams(M, hidden, O)	
+	else
+		println("reading previous session parameters")
+		readBinParams(string(startID, "_params_", filename))[1]
+	end
+	
+	#BLAS.set_num_threads(Sys.CPU_CORES)	
+	#BLAS.set_num_threads(5)	
+	srand(1234)
+	T, B, bestCost, record, timeRecord = ADAMAXTrainNN(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg)
+
+	outTrain = predict(T, B, X)
+	Jtrain = mean(abs.(outTrain - Y))
+	
+	if (O == 1) & writeFiles
+		writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [["Prediction" "Output"]; [outTrain Y]])
+	end
+
+	if writeFiles
+		writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
+		writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
+		writecsv(string(ID, "_performance_", filename, ".csv"), ["Cost", Jtrain,])
+		
+		writeParams([(T, B)], string(ID, "_params_", filename))
+	end
+	
+	(record, T, B, Jtrain, outTrain)
+end
+
 #bootstrapTrain is a function that trains a set of networks with a specified architecture over a random sampling 
 #of the training set specified in the name provided in input.  The sampling is performed with replacement N times
 #where N is the number of examples in the training set. Training uses the ADAMAX minibatch algorithm and has options for 

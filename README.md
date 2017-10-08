@@ -1,4 +1,5 @@
 # FCANN
+[![Build Status](https://travis-ci.org/Blackbody-Research/FCANN.jl.svg)](https://travis-ci.org/Blackbody-Research/FCANN.jl)
 
 Simple module for fully (F) connected (C) artificial (A) neural (N) networks (N).  Minimum functionality for changing error functions.  Current output task is fixed at regression (floating point value output) but in the future the option to define a network for classification will be added.
 

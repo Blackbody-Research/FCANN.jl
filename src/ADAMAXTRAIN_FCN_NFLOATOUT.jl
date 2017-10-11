@@ -139,61 +139,6 @@ function readInput(name)
 	(X, Xtest, Y, Ytest)
 end
 
-function readInputMRQ(name, reduction = (true, true, 0, 1:19))
-#read inputs with option to simplify input data for comparison purposes
-	X = map(Float32, readcsv(string("Xtrain_", name, ".csv")))
-	Xtest = map(Float32, readcsv(string("Xtest_", name, ".csv")))
-	Y = map(Float32, readcsv(string("ytrain_", name, ".csv")))
-	Ytest = map(Float32, readcsv(string("ytest_", name, ".csv")))
-	
-	X_quarter_labels = X[:, 1:4]
-	X_sector_labels = X[:, 5:18]
-	X_values = X[:, 19:end]
-	
-	Xtest_quarter_labels = Xtest[:, 1:4]
-	Xtest_sector_labels = Xtest[:, 5:18]
-	Xtest_values = Xtest[:, 19:end]
-	
-	T = round(Int64, size(X_values, 2)/19)
-	
-	assert(reduction[3] <= T)
-	
-	X_values_reduction = mapreduce(hcat, reduction[4]) do i
-		X_values[:, (T*(i-1)+1):(T*(i-1)+reduction[3])]
-	end
-	
-	Xtest_values_reduction = mapreduce(hcat, reduction[4]) do i
-		Xtest_values[:, (T*(i-1)+1):(T*(i-1)+reduction[3])]
-	end
-	
-	X_final = if reduction[1]
-		if reduction[2]
-			[X_quarter_labels X_sector_labels X_values_reduction]
-		else
-			[X_quarter_labels X_values_reduction]
-		end
-	elseif reduction[2]
-		[X_sector_labels X_values_reduction]
-	else
-		X_values_reduction
-	end
-	
-	Xtest_final = if reduction[1]
-		if reduction[2]
-			[Xtest_quarter_labels Xtest_sector_labels Xtest_values_reduction]
-		else
-			[Xtest_quarter_labels Xtest_values_reduction]
-		end
-	elseif reduction[2]
-		[Xtest_sector_labels Xtest_values_reduction]
-	else
-		Xtest_values_reduction
-	end
-	
-	(X_final, Xtest_final, Y, Ytest)
-	
-end
-
 function updateM!(beta1, mT, mB, TG, BG)
 	for i = 1:length(TG)
 		@simd for ii = 1:length(TG[i])
@@ -224,6 +169,22 @@ function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t)
 		end
 		@simd for ii = 1:length(B[i])
 			@inbounds B[i][ii] = B[i][ii] - (alpha/(1.0f0 - beta1^t))*mB[i][ii]/vB[i][ii]
+		end
+	end
+end
+
+function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
+	for i = 1:length(T)
+		(N, M) = size(T[i])
+		scale = 1.0f0/(1.0f0 - beta2^t)
+
+		@simd for ii = 1:length(T[i])
+			@inbounds T_avg[i][ii] = beta2*T_avg[i][ii] + (1.0f0 - beta2)*T[i][ii]
+			@inbounds T_est[i][ii] = scale*T_avg[i][ii]
+		end
+		@simd for ii = 1:length(B[i])
+			@inbounds B_avg[i][ii] = beta2*B_avg[i][ii] + (1.0f0 - beta2)*B[i][ii]
+			@inbounds B_est[i][ii] = scale*B_avg[i][ii]
 		end
 	end
 end
@@ -372,6 +333,12 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 	vT = 0.0f0*deepcopy(T0)
 	vB = 0.0f0*deepcopy(B0)
 
+	T_avg = 0.0f0*deepcopy(T0)
+	B_avg = 0.0f0*deepcopy(B0)
+
+	T_est = 0.0f0*deepcopy(T0)
+	B_est = 0.0f0*deepcopy(B0)
+
 	Thetas = deepcopy(T0)
 	Biases = deepcopy(B0)
 
@@ -399,14 +366,16 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 	while epoch <= N
 	#while epoch <= N
 		#run through an epoch in batches with randomized order
-		for batch = 1:numBatches
+		for batch in randperm(numBatches)
 			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc)
 			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
 			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
 			updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
 			if c < Inf 
-				scaleParams!(Thetas, Biases, c)
+				scaleParams!(Thetas[1:end-1], Biases[1:end-1], c)
 			end
+			#use recent time average of parameter changes for estimate
+			updateEst!(beta2, t, Thetas, Biases, T_avg, B_avg, T_est, B_est)
 			t += 1
 		end
 		timeRecord[epoch + 1] = time() - startTime
@@ -414,7 +383,7 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 		if epoch%period == 0
 			currentOut = 0.0f0
 			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
 			end
 			currentOut = currentOut/numBatches
 			
@@ -427,7 +396,7 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 			
 			if epoch/period > 1
 				if costRecord[iter+1] > costRecord[iter]
-					updateBest!(Thetas, Biases, bestThetas, bestBiases)
+					updateBest!(Thetas, Biases, T_est, B_est)
 					#alpha = max(1.0f-6, alpha*0.9f0)
 				else
 					#alpha = min(1.0f-1, alpha/0.99f0)
@@ -470,13 +439,13 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
 	end
 	currentOut = currentOut/numBatches
 
 	if currentOut < bestCost
 		bestCost = currentOut
-		updateBest!(bestThetas, bestBiases, Thetas, Biases)
+		updateBest!(bestThetas, bestBiases, T_est, B_est)
 	end
 	
 	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]

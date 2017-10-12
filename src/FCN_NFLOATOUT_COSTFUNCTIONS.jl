@@ -102,10 +102,12 @@ function tanhGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32})
 	@inbounds @simd for i = 1:l	
 		z[i] = 1.7159f0*fast_tanh(2.0f0*z[i]/3.0f0)
 	end
+	#z.=1.7159f0*fast_tanh.(2.0f0*z/3.0f0)
 
 	@inbounds @simd for i = 1:l 
 		tanh_grad_z[i] = 1.7159f0 * (1.0f0 - z[i]*z[i]/(1.7159f0*1.7159f0)) * 2.0f0 / 3.0f0
 	end
+	#tanh_grad_z.=1.7159f0 * (1.0f0 - z.*z/(1.7159f0*1.7159f0)) * 2.0f0 / 3.0f0
 end
 
 function tanhGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32}, D::Float32)

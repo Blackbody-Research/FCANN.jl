@@ -58,7 +58,7 @@ function calcOps(M, H, O, B)
 	end
 end
 
-function checkNumGrad(lambda; hidden_layers=[5, 5], costFunc="absErr")
+function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	srand(1234)
 	m = 100
 	input_layer_size = 3
@@ -139,69 +139,15 @@ function readInput(name)
 	(X, Xtest, Y, Ytest)
 end
 
-function readInputMRQ(name, reduction = (true, true, 0, 1:19))
-#read inputs with option to simplify input data for comparison purposes
-	X = map(Float32, readcsv(string("Xtrain_", name, ".csv")))
-	Xtest = map(Float32, readcsv(string("Xtest_", name, ".csv")))
-	Y = map(Float32, readcsv(string("ytrain_", name, ".csv")))
-	Ytest = map(Float32, readcsv(string("ytest_", name, ".csv")))
-	
-	X_quarter_labels = X[:, 1:4]
-	X_sector_labels = X[:, 5:18]
-	X_values = X[:, 19:end]
-	
-	Xtest_quarter_labels = Xtest[:, 1:4]
-	Xtest_sector_labels = Xtest[:, 5:18]
-	Xtest_values = Xtest[:, 19:end]
-	
-	T = round(Int64, size(X_values, 2)/19)
-	
-	assert(reduction[3] <= T)
-	
-	X_values_reduction = mapreduce(hcat, reduction[4]) do i
-		X_values[:, (T*(i-1)+1):(T*(i-1)+reduction[3])]
-	end
-	
-	Xtest_values_reduction = mapreduce(hcat, reduction[4]) do i
-		Xtest_values[:, (T*(i-1)+1):(T*(i-1)+reduction[3])]
-	end
-	
-	X_final = if reduction[1]
-		if reduction[2]
-			[X_quarter_labels X_sector_labels X_values_reduction]
-		else
-			[X_quarter_labels X_values_reduction]
-		end
-	elseif reduction[2]
-		[X_sector_labels X_values_reduction]
-	else
-		X_values_reduction
-	end
-	
-	Xtest_final = if reduction[1]
-		if reduction[2]
-			[Xtest_quarter_labels Xtest_sector_labels Xtest_values_reduction]
-		else
-			[Xtest_quarter_labels Xtest_values_reduction]
-		end
-	elseif reduction[2]
-		[Xtest_sector_labels Xtest_values_reduction]
-	else
-		Xtest_values_reduction
-	end
-	
-	(X_final, Xtest_final, Y, Ytest)
-	
-end
-
 function updateM!(beta1, mT, mB, TG, BG)
+	b2 = 1.0f0 - beta1
 	for i = 1:length(TG)
 		@simd for ii = 1:length(TG[i])
-			@inbounds mT[i][ii] = beta1*mT[i][ii] + (1.0f0 - beta1)*TG[i][ii]
+			@inbounds mT[i][ii] = beta1*mT[i][ii] + b2*TG[i][ii]
 		end
 		
 		@simd for ii = 1:length(BG[i])
-			@inbounds mB[i][ii] = beta1*mB[i][ii] + (1.0f0 - beta1)*BG[i][ii]
+			@inbounds mB[i][ii] = beta1*mB[i][ii] + b2*BG[i][ii]
 		end
 	end
 end
@@ -218,12 +164,30 @@ function updateV!(beta2, vT, vB, TG, BG)
 end
 
 function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t)
+	scale = alpha/(1.0f0 - beta1^t)
 	for i = 1:length(T)
 		@simd for ii = 1:length(T[i])
-			@inbounds T[i][ii] = T[i][ii] - (alpha/(1.0f0 - beta1^t))*mT[i][ii]/vT[i][ii]
+			@inbounds T[i][ii] = T[i][ii] - scale*mT[i][ii]/vT[i][ii]
 		end
 		@simd for ii = 1:length(B[i])
-			@inbounds B[i][ii] = B[i][ii] - (alpha/(1.0f0 - beta1^t))*mB[i][ii]/vB[i][ii]
+			@inbounds B[i][ii] = B[i][ii] - scale*mB[i][ii]/vB[i][ii]
+		end
+	end
+end
+
+function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
+	for i = 1:length(T)
+		(N, M) = size(T[i])
+		scale = 1.0f0/(1.0f0 - beta2^t)
+		b2 = 1.0f0 - beta2
+
+		@simd for ii = 1:length(T[i])
+			@inbounds T_avg[i][ii] = beta2*T_avg[i][ii] + b2*T[i][ii]
+			@inbounds T_est[i][ii] = scale*T_avg[i][ii]
+		end
+		@simd for ii = 1:length(B[i])
+			@inbounds B_avg[i][ii] = beta2*B_avg[i][ii] + b2*B[i][ii]
+			@inbounds B_est[i][ii] = scale*B_avg[i][ii]
 		end
 	end
 end
@@ -294,7 +258,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, dropout = 0.0f0, costFunc = "absErr")
+function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, dropout = 0.0f0, costFunc = "absErr")
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -372,6 +336,12 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 	vT = 0.0f0*deepcopy(T0)
 	vB = 0.0f0*deepcopy(B0)
 
+	T_avg = 0.0f0*deepcopy(T0)
+	B_avg = 0.0f0*deepcopy(B0)
+
+	T_est = 0.0f0*deepcopy(T0)
+	B_est = 0.0f0*deepcopy(B0)
+
 	Thetas = deepcopy(T0)
 	Biases = deepcopy(B0)
 
@@ -399,14 +369,16 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 	while epoch <= N
 	#while epoch <= N
 		#run through an epoch in batches with randomized order
-		for batch = 1:numBatches
+		for batch in randperm(numBatches)
 			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc)
 			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
 			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
 			updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
 			if c < Inf 
-				scaleParams!(Thetas, Biases, c)
+				scaleParams!(Thetas[1:end-1], Biases[1:end-1], c)
 			end
+			#use recent time average of parameter changes for estimate
+			updateEst!(beta2, t, Thetas, Biases, T_avg, B_avg, T_est, B_est)
 			t += 1
 		end
 		timeRecord[epoch + 1] = time() - startTime
@@ -414,7 +386,7 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 		if epoch%period == 0
 			currentOut = 0.0f0
 			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
 			end
 			currentOut = currentOut/numBatches
 			
@@ -427,7 +399,7 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 			
 			if epoch/period > 1
 				if costRecord[iter+1] > costRecord[iter]
-					updateBest!(Thetas, Biases, bestThetas, bestBiases)
+					updateBest!(Thetas, Biases, T_est, B_est)
 					#alpha = max(1.0f-6, alpha*0.9f0)
 				else
 					#alpha = min(1.0f-1, alpha/0.99f0)
@@ -470,13 +442,13 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
 	end
 	currentOut = currentOut/numBatches
 
 	if currentOut < bestCost
 		bestCost = currentOut
-		updateBest!(bestThetas, bestBiases, Thetas, Biases)
+		updateBest!(bestThetas, bestBiases, T_est, B_est)
 	end
 	
 	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
@@ -497,798 +469,798 @@ function ADAMAXTrainNN(input_data, output_data, batchSize, T0, B0, N, input_laye
 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end	
 
-function ADAMAXTrainNNAdv(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, eta, c, alpha; printProgress = false)
-#train fully connected neural network with floating point vector output and adversarial noise.  Requires the following inputs: training data, training output, batchsize
-#initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, adversarial noise parameter eta, max norm parameter c, and
-#a training rate alpha
-#Note that all floating point input variables must be float32 or single precision   
+# function ADAMAXTrainNNAdv(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, eta, c, alpha; printProgress = false)
+# #train fully connected neural network with floating point vector output and adversarial noise.  Requires the following inputs: training data, training output, batchsize
+# #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, adversarial noise parameter eta, max norm parameter c, and
+# #a training rate alpha
+# #Note that all floating point input variables must be float32 or single precision   
 	
-	lambda = 0.0f0
+# 	lambda = 0.0f0
 
-	(m, n) = size(input_data)
-	(m2, n2) = size(output_data)
-	if m2 != m 
-		error("input and output data do not match")
-	end
+# 	(m, n) = size(input_data)
+# 	(m2, n2) = size(output_data)
+# 	if m2 != m 
+# 		error("input and output data do not match")
+# 	end
 
-	#total number of examples in dataset
-	if batchSize > m
-		error("Your batchsize is larger than the total number of examples.")
-	end
+# 	#total number of examples in dataset
+# 	if batchSize > m
+# 		error("Your batchsize is larger than the total number of examples.")
+# 	end
 
-	numBatches = round(Int, ceil(m/batchSize))
+# 	numBatches = round(Int, ceil(m/batchSize))
 
 
-	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
+# 	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
 		
-	advX = similar(inputbatchData[1])
+# 	advX = similar(inputbatchData[1])
 	
-	#create memory objects used in cost function
-	num_hidden = length(hidden_layers)
+# 	#create memory objects used in cost function
+# 	num_hidden = length(hidden_layers)
 
-	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
-	for i = 1:num_hidden
-		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
+# 	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
+# 	for i = 1:num_hidden
+# 		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
 	
-	aBATCH = Array(Matrix{Float32}, num_hidden+1)
-	for i = 1:num_hidden
-		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
-	aBATCH[end] = Array{Float32}(batchSize, n2)
-	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	aBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	for i = 1:num_hidden
+# 		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
+# 	aBATCH[end] = Array{Float32}(batchSize, n2)
+# 	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
 
-	for i = 1:length(deltasBATCH)
-		deltasBATCH[i] = similar(aBATCH[i])
-	end
+# 	for i = 1:length(deltasBATCH)
+# 		deltasBATCH[i] = similar(aBATCH[i])
+# 	end
 
-	Theta_grads = similar(T0)
-	advTheta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
-		Theta_grads[i] = similar(T0[i])
-		advTheta_grads[i] = similar(T0[i])
-	end
-
-
-	Bias_grads = similar(B0)
-	advBias_grads = similar(B0)
-	for i = 1:length(B0)
-		Bias_grads[i] = similar(B0[i])
-		advBias_grads[i] = similar(B0[i])
-	end
-
-	onesVecBATCH = ones(Float32, batchSize)
-
-	numLayers = length(T0)
+# 	Theta_grads = similar(T0)
+# 	advTheta_grads = similar(T0)
+# 	for i = 1:length(Theta_grads)
+# 		Theta_grads[i] = similar(T0[i])
+# 		advTheta_grads[i] = similar(T0[i])
+# 	end
 
 
-	nnCostFunctionAdv(T0, B0, input_layer_size, hidden_layers, advX, inputbatchData[end], outputbatchData[end], eta, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
-	currentOut = 0.0f0 
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH)
-	end
-	currentOut = currentOut/numBatches
+# 	Bias_grads = similar(B0)
+# 	advBias_grads = similar(B0)
+# 	for i = 1:length(B0)
+# 		Bias_grads[i] = similar(B0[i])
+# 		advBias_grads[i] = similar(B0[i])
+# 	end
 
-	println(string("Initial cost is ", currentOut))
+# 	onesVecBATCH = ones(Float32, batchSize)
 
-	#step rate and decay term for rms prop
-	beta1 = 0.9f0
-	beta2 = 0.999f0
+# 	numLayers = length(T0)
 
-	mT = 0.0f0*deepcopy(T0)
-	mB = 0.0f0*deepcopy(B0)
 
-	vT = 0.0f0*deepcopy(T0)
-	vB = 0.0f0*deepcopy(B0)
+# 	nnCostFunctionAdv(T0, B0, input_layer_size, hidden_layers, advX, inputbatchData[end], outputbatchData[end], eta, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
+# 	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
+# 	currentOut = 0.0f0 
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	Thetas = deepcopy(T0)
-	Biases = deepcopy(B0)
+# 	println(string("Initial cost is ", currentOut))
 
-	period = 10
-	costRecord = Array{Float32}(ceil(Int, N/period)+1)
-	costRecord[1] = currentOut
+# 	#step rate and decay term for rms prop
+# 	beta1 = 0.9f0
+# 	beta2 = 0.999f0
 
-	startTime = time()
-	lastReport = startTime
+# 	mT = 0.0f0*deepcopy(T0)
+# 	mB = 0.0f0*deepcopy(B0)
 
-	timeRecord = Array(Float64, N+1)
-	timeRecord[1] = 0.0
+# 	vT = 0.0f0*deepcopy(T0)
+# 	vB = 0.0f0*deepcopy(B0)
 
-	bestThetas = deepcopy(T0)
-	bestBiases = deepcopy(B0)
-	bestCost = currentOut
-	rollingAvgCost = currentOut
+# 	Thetas = deepcopy(T0)
+# 	Biases = deepcopy(B0)
 
-	iter = 1
-	epoch = 1
-	t = 1
-	while epoch <= N
-	#while epoch <= N
-		#run through an epoch in batches with randomized order
-		for batch = 1:numBatches
-			#compute current parameter gradients and adversarial noise
-			nnCostFunctionAdv(Thetas, Biases, input_layer_size, hidden_layers, advX, inputbatchData[batch], outputbatchData[batch], eta, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
+# 	period = 10
+# 	costRecord = Array{Float32}(ceil(Int, N/period)+1)
+# 	costRecord[1] = currentOut
+
+# 	startTime = time()
+# 	lastReport = startTime
+
+# 	timeRecord = Array(Float64, N+1)
+# 	timeRecord[1] = 0.0
+
+# 	bestThetas = deepcopy(T0)
+# 	bestBiases = deepcopy(B0)
+# 	bestCost = currentOut
+# 	rollingAvgCost = currentOut
+
+# 	iter = 1
+# 	epoch = 1
+# 	t = 1
+# 	while epoch <= N
+# 	#while epoch <= N
+# 		#run through an epoch in batches with randomized order
+# 		for batch = 1:numBatches
+# 			#compute current parameter gradients and adversarial noise
+# 			nnCostFunctionAdv(Thetas, Biases, input_layer_size, hidden_layers, advX, inputbatchData[batch], outputbatchData[batch], eta, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
 			
-			#compute gradients at adversarial examples
-			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, advX, outputbatchData[batch], lambda, advTheta_grads, advBias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
+# 			#compute gradients at adversarial examples
+# 			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, advX, outputbatchData[batch], lambda, advTheta_grads, advBias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH)
 			
-			#save average between the two gradients in the original gradient arrays
-			apply!((a, b) -> (a+b)/2, advTheta_grads, Theta_grads)
-			apply!((a, b) -> (a+b)/2, advBias_grads, Bias_grads)
+# 			#save average between the two gradients in the original gradient arrays
+# 			apply!((a, b) -> (a+b)/2, advTheta_grads, Theta_grads)
+# 			apply!((a, b) -> (a+b)/2, advBias_grads, Bias_grads)
 			
-			#update parameters with modified gradient
-			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
-			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)
-			updateParams!(alpha, beta1, Thetas, Biases, mT, mB, vT, vB, t)
+# 			#update parameters with modified gradient
+# 			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
+# 			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)
+# 			updateParams!(alpha, beta1, Thetas, Biases, mT, mB, vT, vB, t)
 			
-			if c < Inf 
-				scaleParams!(Thetas, Biases, c)
-			end
-			t += 1
-		end
-		timeRecord[epoch + 1] = time() - startTime
+# 			if c < Inf 
+# 				scaleParams!(Thetas, Biases, c)
+# 			end
+# 			t += 1
+# 		end
+# 		timeRecord[epoch + 1] = time() - startTime
 
-		if epoch%period == 0
-			currentOut = 0.0f0
-			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH)
-			end
-			currentOut = currentOut/numBatches
+# 		if epoch%period == 0
+# 			currentOut = 0.0f0
+# 			for i = 1:numBatches
+# 				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH)
+# 			end
+# 			currentOut = currentOut/numBatches
 			
-			costRecord[iter + 1] = currentOut
+# 			costRecord[iter + 1] = currentOut
 			
-			if currentOut < bestCost
-				updateBest!(bestThetas, bestBiases, Thetas, Biases)
-				bestCost = currentOut
-			end
+# 			if currentOut < bestCost
+# 				updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 				bestCost = currentOut
+# 			end
 			
-			if epoch/period > 1
-				if costRecord[iter+1] > costRecord[iter]
-					updateBest!(Thetas, Biases, bestThetas, bestBiases)
-					alpha = max(1.0f-6, alpha*0.9f0)
-				else
-					alpha = min(1.0f-1, alpha/0.99f0)
-				end
-			end
+# 			if epoch/period > 1
+# 				if costRecord[iter+1] > costRecord[iter]
+# 					updateBest!(Thetas, Biases, bestThetas, bestBiases)
+# 					alpha = max(1.0f-6, alpha*0.9f0)
+# 				else
+# 					alpha = min(1.0f-1, alpha/0.99f0)
+# 				end
+# 			end
 			
-			iter += 1
-		end
+# 			iter += 1
+# 		end
 
-		currentTime = time()
-		#print status every 5 seconds
+# 		currentTime = time()
+# 		#print status every 5 seconds
 		
-		if ((currentTime - lastReport) >= 5) & printProgress
-			startEpoch = max(0, epoch-10)
-			#find average time per epoch over the last 10 epochs
-			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
-			remainingEpochs = N - epoch
+# 		if ((currentTime - lastReport) >= 5) & printProgress
+# 			startEpoch = max(0, epoch-10)
+# 			#find average time per epoch over the last 10 epochs
+# 			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
+# 			remainingEpochs = N - epoch
 
-			timeRemainingEst = remainingEpochs*epochTime
+# 			timeRemainingEst = remainingEpochs*epochTime
 
-			#elapsed = currentTime - startTime
-			#percentComplete = epoch/N
-			#totalTimeEst = elapsed / percentComplete
-			#timeRemainingEst = totalTimeEst - elapsed
-			lastReport = currentTime
-			hoursLeft = floor(timeRemainingEst/(60*60))
-			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
-			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
-			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
-			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
-		end
-		epoch += 1
-	end
+# 			#elapsed = currentTime - startTime
+# 			#percentComplete = epoch/N
+# 			#totalTimeEst = elapsed / percentComplete
+# 			#timeRemainingEst = totalTimeEst - elapsed
+# 			lastReport = currentTime
+# 			hoursLeft = floor(timeRemainingEst/(60*60))
+# 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
+# 			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
+# 			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
+# 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
+# 		end
+# 		epoch += 1
+# 	end
 
-	currentOut = 0.0f0
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH)
-	end
-	currentOut = currentOut/numBatches
+# 	currentOut = 0.0f0
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	if currentOut < bestCost
-		bestCost = currentOut
-		updateBest!(bestThetas, bestBiases, Thetas, Biases)
-	end
-	println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
-	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
-	return bestThetas, bestBiases, bestCost, costRecord, timeRecord
-end	
+# 	if currentOut < bestCost
+# 		bestCost = currentOut
+# 		updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 	end
+# 	println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
+# 	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
+# 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord
+# end	
 
-function ADAMAXTrainPowDecay(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c, alpha; R = 1.0f0, printProgress = false, dropout = 0.0f0)
-#train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
-#initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
-#a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
-#Note that all floating point input variables must be float32 or single precision   
-	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
-	(m, n) = size(input_data)
-	(m2, n2) = size(output_data)
-	if m2 != m 
-		error("input and output data do not match")
-	end
+# function ADAMAXTrainPowDecay(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c, alpha; R = 1.0f0, printProgress = false, dropout = 0.0f0)
+# #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
+# #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
+# #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
+# #Note that all floating point input variables must be float32 or single precision   
+# 	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
+# 	(m, n) = size(input_data)
+# 	(m2, n2) = size(output_data)
+# 	if m2 != m 
+# 		error("input and output data do not match")
+# 	end
 
-	#total number of examples in dataset
-	if batchSize > m
-		error("Your batchsize is larger than the total number of examples.")
-	end
+# 	#total number of examples in dataset
+# 	if batchSize > m
+# 		error("Your batchsize is larger than the total number of examples.")
+# 	end
 
-	numBatches = round(Int, ceil(m/batchSize))
-	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
-    total_ops = fops + bops + pops
+# 	numBatches = round(Int, ceil(m/batchSize))
+# 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
+#     total_ops = fops + bops + pops
 
-	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
+# 	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
 		
-	#create memory objects used in cost function
-	num_hidden = length(hidden_layers)
+# 	#create memory objects used in cost function
+# 	num_hidden = length(hidden_layers)
 
-	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
-	for i = 1:num_hidden
-		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
+# 	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
+# 	for i = 1:num_hidden
+# 		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
 	
-	aBATCH = Array(Matrix{Float32}, num_hidden+1)
-	for i = 1:num_hidden
-		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
-	aBATCH[end] = Array{Float32}(batchSize, n2)
-	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	aBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	for i = 1:num_hidden
+# 		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
+# 	aBATCH[end] = Array{Float32}(batchSize, n2)
+# 	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
 
-	for i = 1:length(deltasBATCH)
-		deltasBATCH[i] = similar(aBATCH[i])
-	end
+# 	for i = 1:length(deltasBATCH)
+# 		deltasBATCH[i] = similar(aBATCH[i])
+# 	end
 
-	Theta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
-		Theta_grads[i] = similar(T0[i])
-	end
-
-
-	Bias_grads = similar(B0)
-	for i = 1:length(B0)
-		Bias_grads[i] = similar(B0[i])
-	end
-
-	onesVecBATCH = ones(Float32, batchSize)
-
-	numLayers = length(T0)
+# 	Theta_grads = similar(T0)
+# 	for i = 1:length(Theta_grads)
+# 		Theta_grads[i] = similar(T0[i])
+# 	end
 
 
+# 	Bias_grads = similar(B0)
+# 	for i = 1:length(B0)
+# 		Bias_grads[i] = similar(B0[i])
+# 	end
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
-	currentOut = 0.0f0 
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-	end
-	currentOut = currentOut/numBatches
+# 	onesVecBATCH = ones(Float32, batchSize)
 
-	println(string("Initial cost is ", currentOut))
+# 	numLayers = length(T0)
 
-	#step rate and decay term for rms prop
-	beta1 = 0.9f0
-	beta2 = 0.999f0
 
-	mT = 0.0f0*deepcopy(T0)
-	mB = 0.0f0*deepcopy(B0)
 
-	vT = 0.0f0*deepcopy(T0)
-	vB = 0.0f0*deepcopy(B0)
+# 	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
+# 	currentOut = 0.0f0 
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	Thetas = deepcopy(T0)
-	Biases = deepcopy(B0)
+# 	println(string("Initial cost is ", currentOut))
 
-	period = 10
-	costRecord = Array{Float32}(ceil(Int, N/period)+1)
-	costRecord[1] = currentOut
+# 	#step rate and decay term for rms prop
+# 	beta1 = 0.9f0
+# 	beta2 = 0.999f0
 
-	startTime = time()
-	lastReport = startTime
+# 	mT = 0.0f0*deepcopy(T0)
+# 	mB = 0.0f0*deepcopy(B0)
 
-	timeRecord = Array(Float64, N+1)
-	timeRecord[1] = 0.0
+# 	vT = 0.0f0*deepcopy(T0)
+# 	vB = 0.0f0*deepcopy(B0)
 
-	bestThetas = deepcopy(T0)
-	bestBiases = deepcopy(B0)
-	bestCost = currentOut
-	rollingAvgCost = currentOut
+# 	Thetas = deepcopy(T0)
+# 	Biases = deepcopy(B0)
 
-	iter = 1
-	epoch = 1
-	eta = alpha
-	t = 1
-	while epoch <= N
-	#while epoch <= N
-		#run through an epoch in batches with randomized order
-		for batch = 1:numBatches
-			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
-			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
-			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
-			updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
-			if c < Inf 
-				scaleParams!(Thetas, Biases, c)
-			end
-			t += 1
-		end
-		timeRecord[epoch + 1] = time() - startTime
+# 	period = 10
+# 	costRecord = Array{Float32}(ceil(Int, N/period)+1)
+# 	costRecord[1] = currentOut
 
-		if epoch%period == 0
-			currentOut = 0.0f0
-			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-			end
-			currentOut = currentOut/numBatches
+# 	startTime = time()
+# 	lastReport = startTime
+
+# 	timeRecord = Array(Float64, N+1)
+# 	timeRecord[1] = 0.0
+
+# 	bestThetas = deepcopy(T0)
+# 	bestBiases = deepcopy(B0)
+# 	bestCost = currentOut
+# 	rollingAvgCost = currentOut
+
+# 	iter = 1
+# 	epoch = 1
+# 	eta = alpha
+# 	t = 1
+# 	while epoch <= N
+# 	#while epoch <= N
+# 		#run through an epoch in batches with randomized order
+# 		for batch = 1:numBatches
+# 			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
+# 			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
+# 			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
+# 			updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
+# 			if c < Inf 
+# 				scaleParams!(Thetas, Biases, c)
+# 			end
+# 			t += 1
+# 		end
+# 		timeRecord[epoch + 1] = time() - startTime
+
+# 		if epoch%period == 0
+# 			currentOut = 0.0f0
+# 			for i = 1:numBatches
+# 				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 			end
+# 			currentOut = currentOut/numBatches
 			
-			costRecord[iter + 1] = currentOut
+# 			costRecord[iter + 1] = currentOut
 			
-			if currentOut < bestCost
-				updateBest!(bestThetas, bestBiases, Thetas, Biases)
-				bestCost = currentOut
-			end
+# 			if currentOut < bestCost
+# 				updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 				bestCost = currentOut
+# 			end
 			
-			if epoch/period > 1
-				if costRecord[iter+1] > costRecord[iter]
-					updateBest!(Thetas, Biases, bestThetas, bestBiases)
-					#alpha = max(1.0f-6, alpha*0.9f0)
-				else
-					#alpha = min(1.0f-1, alpha/0.99f0)
-				end
-			end
+# 			if epoch/period > 1
+# 				if costRecord[iter+1] > costRecord[iter]
+# 					updateBest!(Thetas, Biases, bestThetas, bestBiases)
+# 					#alpha = max(1.0f-6, alpha*0.9f0)
+# 				else
+# 					#alpha = min(1.0f-1, alpha/0.99f0)
+# 				end
+# 			end
 			
-			iter += 1
-		end
+# 			iter += 1
+# 		end
 
-		if epoch > 100
-			#println(string("eta = ", eta))
-			eta = alpha/sqrt(R*epoch)
-		end
-		currentTime = time()
-		#print status every 5 seconds
+# 		if epoch > 100
+# 			#println(string("eta = ", eta))
+# 			eta = alpha/sqrt(R*epoch)
+# 		end
+# 		currentTime = time()
+# 		#print status every 5 seconds
 		
-		if ((currentTime - lastReport) >= 5) & printProgress
-			startEpoch = max(0, epoch-10)
-			#find average time per epoch over the last 10 epochs
-			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
-			remainingEpochs = N - epoch
+# 		if ((currentTime - lastReport) >= 5) & printProgress
+# 			startEpoch = max(0, epoch-10)
+# 			#find average time per epoch over the last 10 epochs
+# 			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
+# 			remainingEpochs = N - epoch
 
-			timeRemainingEst = remainingEpochs*epochTime
+# 			timeRemainingEst = remainingEpochs*epochTime
 
-			#elapsed = currentTime - startTime
-			#percentComplete = epoch/N
-			#totalTimeEst = elapsed / percentComplete
-			#timeRemainingEst = totalTimeEst - elapsed
-			lastReport = currentTime
-			hoursLeft = floor(timeRemainingEst/(60*60))
-			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
-			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
-			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
-			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
-		end
-		epoch += 1
-	end
+# 			#elapsed = currentTime - startTime
+# 			#percentComplete = epoch/N
+# 			#totalTimeEst = elapsed / percentComplete
+# 			#timeRemainingEst = totalTimeEst - elapsed
+# 			lastReport = currentTime
+# 			hoursLeft = floor(timeRemainingEst/(60*60))
+# 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
+# 			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
+# 			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
+# 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
+# 		end
+# 		epoch += 1
+# 	end
 
-	currentOut = 0.0f0
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-	end
-	currentOut = currentOut/numBatches
+# 	currentOut = 0.0f0
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	if currentOut < bestCost
-		bestCost = currentOut
-		updateBest!(bestThetas, bestBiases, Thetas, Biases)
-	end
+# 	if currentOut < bestCost
+# 		bestCost = currentOut
+# 		updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 	end
 	
-	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
-    train_time = timeRecord[end]
-    timePerBatch = train_time/N/numBatches
-    GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
+# 	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
+#     train_time = timeRecord[end]
+#     timePerBatch = train_time/N/numBatches
+#     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
-	if dropout == 0.0f0
-		println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
-	else
-		println(string("Completed training with dropout factor of ", dropout))
-		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
-	end
-	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
-	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
-    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
-    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
-	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
-end	
+# 	if dropout == 0.0f0
+# 		println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
+# 	else
+# 		println(string("Completed training with dropout factor of ", dropout))
+# 		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
+# 	end
+# 	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
+# 	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
+#     println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
+#     println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+# 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
+# end	
 
-function ADAMAXTrainRecDecay(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c, alpha; R = 1.0f0, printProgress = false, dropout = 0.0f0)
-#train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
-#initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
-#a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
-#Note that all floating point input variables must be float32 or single precision   
-	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
-	(m, n) = size(input_data)
-	(m2, n2) = size(output_data)
-	if m2 != m 
-		error("input and output data do not match")
-	end
+# function ADAMAXTrainRecDecay(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c, alpha; R = 1.0f0, printProgress = false, dropout = 0.0f0)
+# #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
+# #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
+# #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
+# #Note that all floating point input variables must be float32 or single precision   
+# 	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
+# 	(m, n) = size(input_data)
+# 	(m2, n2) = size(output_data)
+# 	if m2 != m 
+# 		error("input and output data do not match")
+# 	end
 
-	#total number of examples in dataset
-	if batchSize > m
-		error("Your batchsize is larger than the total number of examples.")
-	end
+# 	#total number of examples in dataset
+# 	if batchSize > m
+# 		error("Your batchsize is larger than the total number of examples.")
+# 	end
 
-	numBatches = round(Int, ceil(m/batchSize))
-	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
-    total_ops = fops + bops + pops
+# 	numBatches = round(Int, ceil(m/batchSize))
+# 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
+#     total_ops = fops + bops + pops
 
-	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
+# 	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
 		
-	#create memory objects used in cost function
-	num_hidden = length(hidden_layers)
+# 	#create memory objects used in cost function
+# 	num_hidden = length(hidden_layers)
 
-	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
-	for i = 1:num_hidden
-		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
+# 	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
+# 	for i = 1:num_hidden
+# 		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
 	
-	aBATCH = Array(Matrix{Float32}, num_hidden+1)
-	for i = 1:num_hidden
-		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
-	aBATCH[end] = Array{Float32}(batchSize, n2)
-	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	aBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	for i = 1:num_hidden
+# 		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
+# 	aBATCH[end] = Array{Float32}(batchSize, n2)
+# 	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
 
-	for i = 1:length(deltasBATCH)
-		deltasBATCH[i] = similar(aBATCH[i])
-	end
+# 	for i = 1:length(deltasBATCH)
+# 		deltasBATCH[i] = similar(aBATCH[i])
+# 	end
 
-	Theta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
-		Theta_grads[i] = similar(T0[i])
-	end
-
-
-	Bias_grads = similar(B0)
-	for i = 1:length(B0)
-		Bias_grads[i] = similar(B0[i])
-	end
-
-	onesVecBATCH = ones(Float32, batchSize)
-
-	numLayers = length(T0)
+# 	Theta_grads = similar(T0)
+# 	for i = 1:length(Theta_grads)
+# 		Theta_grads[i] = similar(T0[i])
+# 	end
 
 
+# 	Bias_grads = similar(B0)
+# 	for i = 1:length(B0)
+# 		Bias_grads[i] = similar(B0[i])
+# 	end
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
-	currentOut = 0.0f0 
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-	end
-	currentOut = currentOut/numBatches
+# 	onesVecBATCH = ones(Float32, batchSize)
 
-	println(string("Initial cost is ", currentOut))
+# 	numLayers = length(T0)
 
-	#step rate and decay term for rms prop
-	beta1 = 0.9f0
-	beta2 = 0.999f0
 
-	mT = 0.0f0*deepcopy(T0)
-	mB = 0.0f0*deepcopy(B0)
 
-	vT = 0.0f0*deepcopy(T0)
-	vB = 0.0f0*deepcopy(B0)
+# 	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
+# 	currentOut = 0.0f0 
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	Thetas = deepcopy(T0)
-	Biases = deepcopy(B0)
+# 	println(string("Initial cost is ", currentOut))
 
-	period = 10
-	costRecord = Array{Float32}(ceil(Int, N/period)+1)
-	costRecord[1] = currentOut
+# 	#step rate and decay term for rms prop
+# 	beta1 = 0.9f0
+# 	beta2 = 0.999f0
 
-	startTime = time()
-	lastReport = startTime
+# 	mT = 0.0f0*deepcopy(T0)
+# 	mB = 0.0f0*deepcopy(B0)
 
-	timeRecord = Array(Float64, N+1)
-	timeRecord[1] = 0.0
+# 	vT = 0.0f0*deepcopy(T0)
+# 	vB = 0.0f0*deepcopy(B0)
 
-	bestThetas = deepcopy(T0)
-	bestBiases = deepcopy(B0)
-	bestCost = currentOut
-	rollingAvgCost = currentOut
+# 	Thetas = deepcopy(T0)
+# 	Biases = deepcopy(B0)
 
-	iter = 1
-	epoch = 1
-	eta = alpha
-	t = 1
-	while epoch <= N
-	#while epoch <= N
-		#run through an epoch in batches with randomized order
-		for batch = 1:numBatches
-			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
-			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
-			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
-			updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
-			if c < Inf 
-				scaleParams!(Thetas, Biases, c)
-			end
-			t += 1
-		end
-		timeRecord[epoch + 1] = time() - startTime
+# 	period = 10
+# 	costRecord = Array{Float32}(ceil(Int, N/period)+1)
+# 	costRecord[1] = currentOut
 
-		if epoch%period == 0
-			currentOut = 0.0f0
-			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-			end
-			currentOut = currentOut/numBatches
+# 	startTime = time()
+# 	lastReport = startTime
+
+# 	timeRecord = Array(Float64, N+1)
+# 	timeRecord[1] = 0.0
+
+# 	bestThetas = deepcopy(T0)
+# 	bestBiases = deepcopy(B0)
+# 	bestCost = currentOut
+# 	rollingAvgCost = currentOut
+
+# 	iter = 1
+# 	epoch = 1
+# 	eta = alpha
+# 	t = 1
+# 	while epoch <= N
+# 	#while epoch <= N
+# 		#run through an epoch in batches with randomized order
+# 		for batch = 1:numBatches
+# 			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
+# 			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
+# 			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
+# 			updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
+# 			if c < Inf 
+# 				scaleParams!(Thetas, Biases, c)
+# 			end
+# 			t += 1
+# 		end
+# 		timeRecord[epoch + 1] = time() - startTime
+
+# 		if epoch%period == 0
+# 			currentOut = 0.0f0
+# 			for i = 1:numBatches
+# 				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 			end
+# 			currentOut = currentOut/numBatches
 			
-			costRecord[iter + 1] = currentOut
+# 			costRecord[iter + 1] = currentOut
 			
-			if currentOut < bestCost
-				updateBest!(bestThetas, bestBiases, Thetas, Biases)
-				bestCost = currentOut
-			end
+# 			if currentOut < bestCost
+# 				updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 				bestCost = currentOut
+# 			end
 			
-			if epoch/period > 1
-				if costRecord[iter+1] > costRecord[iter]
-					updateBest!(Thetas, Biases, bestThetas, bestBiases)
-					#alpha = max(1.0f-6, alpha*0.9f0)
-				else
-					#alpha = min(1.0f-1, alpha/0.99f0)
-				end
-			end
+# 			if epoch/period > 1
+# 				if costRecord[iter+1] > costRecord[iter]
+# 					updateBest!(Thetas, Biases, bestThetas, bestBiases)
+# 					#alpha = max(1.0f-6, alpha*0.9f0)
+# 				else
+# 					#alpha = min(1.0f-1, alpha/0.99f0)
+# 				end
+# 			end
 			
-			iter += 1
-		end
+# 			iter += 1
+# 		end
 
-		if epoch > 100
-			#println(string("eta = ", eta))
-			eta = alpha/(1.0f0 + R*epoch)
-		end
-		currentTime = time()
-		#print status every 5 seconds
+# 		if epoch > 100
+# 			#println(string("eta = ", eta))
+# 			eta = alpha/(1.0f0 + R*epoch)
+# 		end
+# 		currentTime = time()
+# 		#print status every 5 seconds
 		
-		if ((currentTime - lastReport) >= 5) & printProgress
-			startEpoch = max(0, epoch-10)
-			#find average time per epoch over the last 10 epochs
-			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
-			remainingEpochs = N - epoch
+# 		if ((currentTime - lastReport) >= 5) & printProgress
+# 			startEpoch = max(0, epoch-10)
+# 			#find average time per epoch over the last 10 epochs
+# 			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
+# 			remainingEpochs = N - epoch
 
-			timeRemainingEst = remainingEpochs*epochTime
+# 			timeRemainingEst = remainingEpochs*epochTime
 
-			#elapsed = currentTime - startTime
-			#percentComplete = epoch/N
-			#totalTimeEst = elapsed / percentComplete
-			#timeRemainingEst = totalTimeEst - elapsed
-			lastReport = currentTime
-			hoursLeft = floor(timeRemainingEst/(60*60))
-			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
-			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
-			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
-			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
-		end
-		epoch += 1
-	end
+# 			#elapsed = currentTime - startTime
+# 			#percentComplete = epoch/N
+# 			#totalTimeEst = elapsed / percentComplete
+# 			#timeRemainingEst = totalTimeEst - elapsed
+# 			lastReport = currentTime
+# 			hoursLeft = floor(timeRemainingEst/(60*60))
+# 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
+# 			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
+# 			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
+# 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
+# 		end
+# 		epoch += 1
+# 	end
 
-	currentOut = 0.0f0
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-	end
-	currentOut = currentOut/numBatches
+# 	currentOut = 0.0f0
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	if currentOut < bestCost
-		bestCost = currentOut
-		updateBest!(bestThetas, bestBiases, Thetas, Biases)
-	end
+# 	if currentOut < bestCost
+# 		bestCost = currentOut
+# 		updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 	end
 	
-	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
-    train_time = timeRecord[end]
-    timePerBatch = train_time/N/numBatches
-    GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
+# 	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
+#     train_time = timeRecord[end]
+#     timePerBatch = train_time/N/numBatches
+#     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
-	if dropout == 0.0f0
-		println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
-	else
-		println(string("Completed training with dropout factor of ", dropout))
-		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
-	end
-	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
-	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
-    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
-    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
-	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
-end	
+# 	if dropout == 0.0f0
+# 		println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
+# 	else
+# 		println(string("Completed training with dropout factor of ", dropout))
+# 		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
+# 	end
+# 	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
+# 	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
+#     println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
+#     println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+# 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
+# end	
 
-function ADAMAXTrainLinDecay(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c, alpha; R = 10000, printProgress = false, dropout = 0.0f0)
-#train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
-#initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
-#a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
-#Note that all floating point input variables must be float32 or single precision   
-	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
-	(m, n) = size(input_data)
-	(m2, n2) = size(output_data)
-	if m2 != m 
-		error("input and output data do not match")
-	end
+# function ADAMAXTrainLinDecay(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c, alpha; R = 10000, printProgress = false, dropout = 0.0f0)
+# #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
+# #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
+# #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
+# #Note that all floating point input variables must be float32 or single precision   
+# 	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
+# 	(m, n) = size(input_data)
+# 	(m2, n2) = size(output_data)
+# 	if m2 != m 
+# 		error("input and output data do not match")
+# 	end
 
-	#total number of examples in dataset
-	if batchSize > m
-		error("Your batchsize is larger than the total number of examples.")
-	end
+# 	#total number of examples in dataset
+# 	if batchSize > m
+# 		error("Your batchsize is larger than the total number of examples.")
+# 	end
 
-	numBatches = round(Int, ceil(m/batchSize))
-	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
-    total_ops = fops + bops + pops
+# 	numBatches = round(Int, ceil(m/batchSize))
+# 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
+#     total_ops = fops + bops + pops
 
-	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
+# 	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
 		
-	#create memory objects used in cost function
-	num_hidden = length(hidden_layers)
+# 	#create memory objects used in cost function
+# 	num_hidden = length(hidden_layers)
 
-	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
-	for i = 1:num_hidden
-		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
+# 	tanh_grad_zBATCH = Array(Matrix{Float32}, num_hidden)
+# 	for i = 1:num_hidden
+# 		tanh_grad_zBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
 	
-	aBATCH = Array(Matrix{Float32}, num_hidden+1)
-	for i = 1:num_hidden
-		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
-	end
-	aBATCH[end] = Array{Float32}(batchSize, n2)
-	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	aBATCH = Array(Matrix{Float32}, num_hidden+1)
+# 	for i = 1:num_hidden
+# 		aBATCH[i] = Array{Float32}(batchSize, hidden_layers[i])
+# 	end
+# 	aBATCH[end] = Array{Float32}(batchSize, n2)
+# 	deltasBATCH = Array(Matrix{Float32}, num_hidden+1)
 
-	for i = 1:length(deltasBATCH)
-		deltasBATCH[i] = similar(aBATCH[i])
-	end
+# 	for i = 1:length(deltasBATCH)
+# 		deltasBATCH[i] = similar(aBATCH[i])
+# 	end
 
-	Theta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
-		Theta_grads[i] = similar(T0[i])
-	end
-
-
-	Bias_grads = similar(B0)
-	for i = 1:length(B0)
-		Bias_grads[i] = similar(B0[i])
-	end
-
-	onesVecBATCH = ones(Float32, batchSize)
-
-	numLayers = length(T0)
+# 	Theta_grads = similar(T0)
+# 	for i = 1:length(Theta_grads)
+# 		Theta_grads[i] = similar(T0[i])
+# 	end
 
 
+# 	Bias_grads = similar(B0)
+# 	for i = 1:length(B0)
+# 		Bias_grads[i] = similar(B0[i])
+# 	end
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
-	currentOut = 0.0f0 
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-	end
-	currentOut = currentOut/numBatches
+# 	onesVecBATCH = ones(Float32, batchSize)
 
-	println(string("Initial cost is ", currentOut))
+# 	numLayers = length(T0)
 
-	#step rate and decay term for rms prop
-	beta1 = 0.9f0
-	beta2 = 0.999f0
 
-	mT = 0.0f0*deepcopy(T0)
-	mB = 0.0f0*deepcopy(B0)
 
-	vT = 0.0f0*deepcopy(T0)
-	vB = 0.0f0*deepcopy(B0)
+# 	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
+# 	currentOut = 0.0f0 
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	Thetas = deepcopy(T0)
-	Biases = deepcopy(B0)
+# 	println(string("Initial cost is ", currentOut))
 
-	period = 10
-	costRecord = Array{Float32}(ceil(Int, N/period)+1)
-	costRecord[1] = currentOut
+# 	#step rate and decay term for rms prop
+# 	beta1 = 0.9f0
+# 	beta2 = 0.999f0
 
-	startTime = time()
-	lastReport = startTime
+# 	mT = 0.0f0*deepcopy(T0)
+# 	mB = 0.0f0*deepcopy(B0)
 
-	timeRecord = Array(Float64, N+1)
-	timeRecord[1] = 0.0
+# 	vT = 0.0f0*deepcopy(T0)
+# 	vB = 0.0f0*deepcopy(B0)
 
-	bestThetas = deepcopy(T0)
-	bestBiases = deepcopy(B0)
-	bestCost = currentOut
-	rollingAvgCost = currentOut
+# 	Thetas = deepcopy(T0)
+# 	Biases = deepcopy(B0)
 
-	iter = 1
-	epoch = 1
-	F = alpha/(R-100)
-	t = 1
-	while epoch <= N
-	#while epoch <= N
-		#run through an epoch in batches with randomized order
-		for batch = 1:numBatches
-			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
-			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
-			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
-			updateParams!(alpha, beta1, Thetas, Biases, mT, mB, vT, vB, t)
-			if c < Inf 
-				scaleParams!(Thetas, Biases, c)
-			end
-			t += 1
-		end
-		timeRecord[epoch + 1] = time() - startTime
+# 	period = 10
+# 	costRecord = Array{Float32}(ceil(Int, N/period)+1)
+# 	costRecord[1] = currentOut
 
-		if epoch%period == 0
-			currentOut = 0.0f0
-			for i in randperm(numBatches)
-				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-			end
-			currentOut = currentOut/numBatches
+# 	startTime = time()
+# 	lastReport = startTime
+
+# 	timeRecord = Array(Float64, N+1)
+# 	timeRecord[1] = 0.0
+
+# 	bestThetas = deepcopy(T0)
+# 	bestBiases = deepcopy(B0)
+# 	bestCost = currentOut
+# 	rollingAvgCost = currentOut
+
+# 	iter = 1
+# 	epoch = 1
+# 	F = alpha/(R-100)
+# 	t = 1
+# 	while epoch <= N
+# 	#while epoch <= N
+# 		#run through an epoch in batches with randomized order
+# 		for batch = 1:numBatches
+# 			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout)
+# 			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
+# 			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
+# 			updateParams!(alpha, beta1, Thetas, Biases, mT, mB, vT, vB, t)
+# 			if c < Inf 
+# 				scaleParams!(Thetas, Biases, c)
+# 			end
+# 			t += 1
+# 		end
+# 		timeRecord[epoch + 1] = time() - startTime
+
+# 		if epoch%period == 0
+# 			currentOut = 0.0f0
+# 			for i in randperm(numBatches)
+# 				currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 			end
+# 			currentOut = currentOut/numBatches
 			
-			costRecord[iter + 1] = currentOut
+# 			costRecord[iter + 1] = currentOut
 			
-			if currentOut < bestCost
-				updateBest!(bestThetas, bestBiases, Thetas, Biases)
-				bestCost = currentOut
-			end
+# 			if currentOut < bestCost
+# 				updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 				bestCost = currentOut
+# 			end
 			
-			if epoch/period > 1
-				if costRecord[iter+1] > costRecord[iter]
-					updateBest!(Thetas, Biases, bestThetas, bestBiases)
-					#alpha = max(1.0f-6, alpha*0.9f0)
-				else
-					#alpha = min(1.0f-1, alpha/0.99f0)
-				end
-			end
+# 			if epoch/period > 1
+# 				if costRecord[iter+1] > costRecord[iter]
+# 					updateBest!(Thetas, Biases, bestThetas, bestBiases)
+# 					#alpha = max(1.0f-6, alpha*0.9f0)
+# 				else
+# 					#alpha = min(1.0f-1, alpha/0.99f0)
+# 				end
+# 			end
 			
-			iter += 1
-		end
+# 			iter += 1
+# 		end
 
-		if epoch > 100
-			#println(string("eta = ", eta))
-			alpha = max(1.0f-8, alpha - F)
-		end
+# 		if epoch > 100
+# 			#println(string("eta = ", eta))
+# 			alpha = max(1.0f-8, alpha - F)
+# 		end
 
-		currentTime = time()
-		#print status every 5 seconds
+# 		currentTime = time()
+# 		#print status every 5 seconds
 		
-		if ((currentTime - lastReport) >= 5) & printProgress
-			startEpoch = max(0, epoch-10)
-			#find average time per epoch over the last 10 epochs
-			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
-			remainingEpochs = N - epoch
+# 		if ((currentTime - lastReport) >= 5) & printProgress
+# 			startEpoch = max(0, epoch-10)
+# 			#find average time per epoch over the last 10 epochs
+# 			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
+# 			remainingEpochs = N - epoch
 
-			timeRemainingEst = remainingEpochs*epochTime
+# 			timeRemainingEst = remainingEpochs*epochTime
 
-			#elapsed = currentTime - startTime
-			#percentComplete = epoch/N
-			#totalTimeEst = elapsed / percentComplete
-			#timeRemainingEst = totalTimeEst - elapsed
-			lastReport = currentTime
-			hoursLeft = floor(timeRemainingEst/(60*60))
-			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
-			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
-			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
-			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
-		end
-		epoch += 1
-	end
+# 			#elapsed = currentTime - startTime
+# 			#percentComplete = epoch/N
+# 			#totalTimeEst = elapsed / percentComplete
+# 			#timeRemainingEst = totalTimeEst - elapsed
+# 			lastReport = currentTime
+# 			hoursLeft = floor(timeRemainingEst/(60*60))
+# 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
+# 			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
+# 			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
+# 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
+# 		end
+# 		epoch += 1
+# 	end
 
-	currentOut = 0.0f0
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
-	end
-	currentOut = currentOut/numBatches
+# 	currentOut = 0.0f0
+# 	for i = 1:numBatches
+# 		currentOut += nnCostFunctionNOGRAD(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout)
+# 	end
+# 	currentOut = currentOut/numBatches
 
-	if currentOut < bestCost
-		bestCost = currentOut
-		updateBest!(bestThetas, bestBiases, Thetas, Biases)
-	end
+# 	if currentOut < bestCost
+# 		bestCost = currentOut
+# 		updateBest!(bestThetas, bestBiases, Thetas, Biases)
+# 	end
 	
-	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
-    train_time = timeRecord[end]
-    timePerBatch = train_time/N/numBatches
-    GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
+# 	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
+#     train_time = timeRecord[end]
+#     timePerBatch = train_time/N/numBatches
+#     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
-	if dropout == 0.0f0
-		println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
-	else
-		println(string("Completed training with dropout factor of ", dropout))
-		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
-	end
-	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
-	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
-    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
-    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
-	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
-end	
+# 	if dropout == 0.0f0
+# 		println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
+# 	else
+# 		println(string("Completed training with dropout factor of ", dropout))
+# 		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha))
+# 	end
+# 	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
+# 	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
+#     println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
+#     println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+# 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
+# end	

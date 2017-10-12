@@ -125,7 +125,7 @@ function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array
 					CUBLAS.blascopy!(hidden_layers[i-1]*hidden_layers[i], d_Thetas[i],1, d_Theta_grads[i],1)
 				end
 			end
-			CUBLAS.blascopy!(hidden_layers[num_hidden], d_Thetas[end],1, d_Theta_grads[end],1)
+			CUBLAS.blascopy!(hidden_layers[num_hidden]*output_layer_size, d_Thetas[end],1, d_Theta_grads[end],1)
 		end
 
 

@@ -32,6 +32,7 @@ function setBackend(b::Symbol)
         println(string("Selected backend: ", b, " is not available."))
     end
     println(string("Backend is set to ", backend))
+    return backend
 end
 
 function getBackend()

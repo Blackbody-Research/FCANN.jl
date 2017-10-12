@@ -1,5 +1,4 @@
-setBackend(:GPU)
-backend = getBackend()
+backend = setBackend(:GPU)
 if backend != :GPU
     println("Skipping GPU tests")
 else

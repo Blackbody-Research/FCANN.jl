@@ -1,6 +1,5 @@
 println("-----------------------Testing CPU Multi Core-------------------------------------")
-setBackend(:CPU)
-backend = getBackend()
+backend = setBackend(:CPU)
 println("Adding 4 cores to test multitrain algorithms")
 addprocs(4)
 @everywhere using FCANN

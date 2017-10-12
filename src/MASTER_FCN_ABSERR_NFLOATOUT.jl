@@ -1556,7 +1556,12 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 		""
 	end
 	
-	println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", cpu_name))
+	if backend == :CPU
+		println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", cpu_name))
+	else
+		println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", gpu_name))
+	end
+	
 	println("Time to train on ", backend, " took ", train_time, " seconds for ", N, " epochs")
 	println("Average time of ", timePerBatch/batchSize/1e-9, " ns per example")
 	println("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize)

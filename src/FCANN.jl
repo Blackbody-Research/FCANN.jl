@@ -1,13 +1,4 @@
 module FCANN
-include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
-
-function requestCostFunctions()
-    assert(length(costFuncList) == length(costFuncNames))
-    assert(length(costFuncList) == length(costFuncDerivsList))
-    println("Available cost functions are: ")
-    [println(n) for n in costFuncNames]
-    println("------------------------------")
-end
 
 function availableBackends()
     if Pkg.installed("CUBLAS") == nothing
@@ -23,8 +14,14 @@ end
 global backend = :CPU
 global backendList = availableBackends()
 
-if in(:GPU, backendList)
-    using CUBLAS, CUDAdrv
+include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
+
+function requestCostFunctions()
+    assert(length(costFuncList) == length(costFuncNames))
+    assert(length(costFuncList) == length(costFuncDerivsList))
+    println("Available cost functions are: ")
+    [println(n) for n in costFuncNames]
+    println("------------------------------")
 end
 
 function setBackend(b::Symbol)
@@ -37,9 +34,41 @@ function setBackend(b::Symbol)
     println(string("Backend is set to ", backend))
 end
 
+function getBackend()
+    println(string("Backend is set to ", backend))
+    backend
+end
+
+function checkNumGrad(lambda; hidden_layers = [5, 5], costFunc = "absErr")
+    func = eval(Symbol("checkNumGrad", backend))
+    if backend == :CPU
+        func(lambda; hidden_layers = hidden_layers, costFunc = costFunc)
+    else
+        func(lambda; hidden_layers = hidden_layers)
+    end
+end
+
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, 
 maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, 
 testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, initializeParams, checkNumGrad, predict, requestCostFunctions,
-availableBackends, setBackend
+availableBackends, setBackend, getBackend
+
+function __init__()
+    function f()
+        if in(:GPU, backendList)
+            if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+                println("Removing cuda cost function .ptx files")
+                rm("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+            end
+            if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
+                println("Removing cuda adamax .ptx files")
+                rm("ADAMAX_INTRINSIC_KERNELS.ptx")
+            end
+            println("Destroying GPU context")
+            destroy!(ctx)
+        end
+    end    
+    atexit(f)
+end
 
 end # module

@@ -275,6 +275,12 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		error("Your batchsize is larger than the total number of examples.")
 	end
 
+	println()
+	print_with_color(:green, STDOUT, "Beginning training with the following parameters:", bold=true)
+	println()
+	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+	println("-------------------------------------------------------------------")
+
 	numBatches = round(Int, ceil(m/batchSize))
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
     total_ops = fops + bops + pops
@@ -324,7 +330,9 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 	end
 	currentOut = currentOut/numBatches
 
-	println(string("Initial cost is ", currentOut))
+	print_with_color(:red, STDOUT, string("Initial cost is ", currentOut), bold=true)
+	println()
+	#println(string("Initial cost is ", currentOut))
 
 	#step rate and decay term for rms prop
 	beta1 = 0.9f0
@@ -457,15 +465,20 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
 	if dropout == 0.0f0
-		println(string("Completed training with the following parameters: input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+		println("-------------------------------------------------------------------")
+		print_with_color(:green, STDOUT, "Completed training with the following parameters: ", bold = true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	else
 		println(string("Completed training with dropout factor of ", dropout))
 		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	end
-	println(string("Cost reduced from ", costRecord[1], "to ", bestCost, " after ", timeRecord[N], " seconds"))		
+	print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds"), bold=true)
+	println()	
 	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
     println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
     println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+    println("-------------------------------------------------------------------")
 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end	
 

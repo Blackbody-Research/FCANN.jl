@@ -401,7 +401,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				c2 = out2[3]
 			end
 			println("Current Values Are:")
-			println("x      |y      ")
+			println("x       |y      ")
 			println(string(round(x1, 6), "|", round(c1, 6)))
 			println(string(round(x2, 6), "|", round(c2, 6)))
 			println(string(round(x4, 6), "|", round(c4, 6)))
@@ -1641,7 +1641,7 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 		T0, B0 = initializeParams(M, hidden[2], O)
 		println("beginning training")
 		srand(1234)
-		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(X, Y, batchSize, T0, B0, N, hidden[2]; tau = tau, lambda = 0.0f0, c = Inf, dropout = dropout)
+		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(X, Y, batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout)
 
 		outTrain = predict(T, B, X)
 		outTest = predict(T, B, Xtest)

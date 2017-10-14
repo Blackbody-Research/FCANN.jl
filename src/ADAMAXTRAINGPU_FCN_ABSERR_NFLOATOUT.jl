@@ -242,6 +242,12 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	if m2 != m 
 		error("input and output data do not match")
 	end
+
+	println()
+	print_with_color(:green, STDOUT, "Beginning training on GPU with the following parameters:", bold=true)
+	println()
+	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+	println("-------------------------------------------------------------------")
 	
 	function scaleThetas!(d_Thetas, d_Theta_grads, d_onesVecParams, d_normVecParams, c)
 		for i = 1:length(d_Thetas)
@@ -388,8 +394,9 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	end
 	currentOut = currentOut/numBatches
 	
-
-	println(string("Initial cost is ", currentOut))
+	print_with_color(:red, STDOUT, string("Initial cost is ", currentOut), bold=true)
+	println()
+	#println(string("Initial cost is ", currentOut))
 
 	#step rate and decay term for rms prop
 	beta1 = 0.9f0
@@ -490,12 +497,18 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
     timePerBatch = train_time/numEpochs/numBatches
     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
-	println(string("Completed training on GPU with the following parameters:"))
+    println("-------------------------------------------------------------------")
+	print_with_color(:green, STDOUT, "Completed training on GPU with the following parameters: ", bold = true)
+	println()
+	#println(string("Completed training on GPU with the following parameters:"))
 	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize))
 	println(string("L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, " decay rate = ", R))
-	println(string("Cost reduced from ", costRecord[1], " to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds and ", numEpochs, " epochs"))		
+	print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds"), bold=true)
+	println()	
+	#println(string("Cost reduced from ", costRecord[1], " to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds and ", numEpochs, " epochs"))		
 	println(string("Median time of ", round(Int64, 1e9*median(time_per_epoch)/m), " ns per example"))
     println(string("Total operations per example = ", round(Int64, fops/batchSize), " foward prop ops + ", round(Int64, bops/batchSize), " backprop ops + ", round(Int64, pops/batchSize), " update ops = ", round(Int64, total_ops/batchSize)))
     println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+   	println("-------------------------------------------------------------------")
     return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end	

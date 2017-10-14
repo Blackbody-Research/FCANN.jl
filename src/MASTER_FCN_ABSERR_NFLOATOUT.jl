@@ -230,10 +230,19 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 	c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, 1, M, hidden, lambda, c, alpha = 0.0f0)[3]
 	println(string("Baseline cost = ", c1))
 	phi = 0.5f0*(1.0f0+sqrt(5.0f0))
- 
+ 	
+ 	numParams = getNumParams(M, hidden, O)
+
 	function findAlphaInterval(f, c1)
 		phi = 0.5f0*(1.0f0+sqrt(5.0f0))
-		x = 0.002f0
+		x = if numParams > 100000
+			0.001f0
+		elseif numParams > 1000000
+			0.0005f0
+		else
+			0.002f0
+		end
+		
 		x1 = 0.0f0
 		x2 = x
 		srand(1234)

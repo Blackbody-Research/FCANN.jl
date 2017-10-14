@@ -4,7 +4,16 @@ devlist = collect(devices())
 
 #assign each worker a device ensuring it is a value in devlist
 #allows parallel workers to operate on multiple devices if they exist
-dev = myid()%length(devlist)
+dev = if isdefined(:workerToDev)
+	#for working on a cluster in which workers are distributed among nodes with a specified number of
+	#devices
+	d = workerToDev[myid()]
+	println(string("Assigning device ", d, " to worker ", myid(), " based on cluster worker dictionary"))
+	d
+else
+	myid()%length(devlist) 
+end
+
 
 ctx = CuContext(CuDevice(dev))
 

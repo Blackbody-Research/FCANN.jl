@@ -368,7 +368,13 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 		srand(1234)
 		out4 = f(x4)
 		c4 = out4[3]
-		println(string("Current x values are ", [x1, x2, x4, x3]))
+		println("Current Values Are:")
+		println("x       |y      ")
+		println(string(round(x1, 6), "|", round(c1, 6)))
+		println(string(round(x2, 6), "|", round(c2, 6)))
+		println(string(round(x4, 6), "|", round(c4, 6)))
+		println(string(round(x3, 6), "|", round(c3, 6)))
+		#println(string("Current x values are ", [x1, x2, x4, x3]))
 
 		while (abs.(c4-c2)/(0.5f0*(c4+c2)) > tau) & ((2.0f0*(x4-x2)/(x4+x2)) > tau)
 			if c4 < c2
@@ -394,7 +400,13 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				out2 = f(x2)
 				c2 = out2[3]
 			end
-			println(string("Current x values are ", [x1, x2, x4, x3]))
+			println("Current Values Are:")
+			println("x      |y      ")
+			println(string(round(x1, 6), "|", round(c1, 6)))
+			println(string(round(x2, 6), "|", round(c2, 6)))
+			println(string(round(x4, 6), "|", round(c4, 6)))
+			println(string(round(x3, 6), "|", round(c3, 6)))
+			#println(string("Current x values are ", [x1, x2, x4, x3]))
 		end
 
 		costs = (c1, c2, c3, c4)

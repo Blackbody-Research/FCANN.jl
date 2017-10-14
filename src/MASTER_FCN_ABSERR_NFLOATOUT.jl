@@ -235,7 +235,9 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 
 	function findAlphaInterval(f, c1)
 		phi = 0.5f0*(1.0f0+sqrt(5.0f0))
-		x = if numParams > 1000000
+		x = if numParams > 10000000
+			0.0001f0
+		elseif numParams > 1000000
 			0.0005f0
 		elseif numParams > 100000
 			0.001f0

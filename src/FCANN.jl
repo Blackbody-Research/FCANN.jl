@@ -40,7 +40,7 @@ function getBackend()
     backend
 end
 
-function checkNumGrad(lambda; hidden_layers = [5, 5], costFunc = "absErr")
+function checkNumGrad(lambda = 0.0f0; hidden_layers = [5, 5], costFunc = "absErr")
     func = eval(Symbol("checkNumGrad", backend))
     if backend == :CPU
         func(lambda; hidden_layers = hidden_layers, costFunc = costFunc)

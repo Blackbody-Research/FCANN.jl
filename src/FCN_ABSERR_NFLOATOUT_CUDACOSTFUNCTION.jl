@@ -6,7 +6,7 @@ devlist = collect(devices())
 #allows parallel workers to operate on multiple devices if they exist
 
 dev = myid()%length(devlist) 
-println(string("Assigning device ", d, " to worker ", myid(), " based on this node having ", length(devlist), " devices"))
+println(string("Assigning device ", dev, " to worker ", myid(), " based on this node having ", length(devlist), " devices"))
 	
 ctx = CuContext(CuDevice(dev))
 

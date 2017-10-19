@@ -1,7 +1,7 @@
 # FCANN
 [![Build Status](https://travis-ci.org/Blackbody-Research/FCANN.jl.svg)](https://travis-ci.org/Blackbody-Research/FCANN.jl)
 
-Simple module for fully (F) connected (C) artificial (A) neural (N) networks (N).  Minimum functionality for changing error functions.  Current output task is fixed at regression (floating point value output) but in the future the option to define a network for classification will be added.
+Simple module for **F**ully **C**onnected **A**rtificial **N**eural **N**etworks.  Minimum functionality for changing error functions.  Current output task is fixed at regression (floating point value output) but in the future the option to define a network for classification will be added.
 
 ## Installation
 
@@ -151,12 +151,16 @@ archEval("ex", N, batchSize, hiddenList)
 A single file will be generated named ```archEval_ex_10_input_2_output_ADAMAX.csv``` that contains a table of errors for each architecture.  Note that one of the networks was simply an empty array.  In this case the model will contain no hidden layers and will simply be a linear model.
 
 ### Working with backends
-If you have both CUDAdrv.jl and CUBLAS.jl packages installed properly, then the module will automatically load the GPU backend on start.  By default the CPU backend will be enabled unless otherwise changed.  The two possible backends are defined as symbols: ```:CPU``` or ```:GPU```  
+By default the CPU backend will be enabled (unless otherwise changed.) If you have both CUDAdrv.jl and CUBLAS.jl packages successfully installed, then this module will automatically load the GPU backend on start but it will not be enabled until you enable it with setBackend(:GPU). 
+
+The two possible backends are defined as symbols: ```:CPU``` or ```:GPU```  
 - Check available backends with ```availableBackends()``` which will return an array
 - Check current active backend with ```getBackend()```
 - Set a new backend with ```setBackend(b)``` where b is one of the two symbols listed above.  Note that if you enter an unavailable backend nothing will change.
 
-Once you set either backend, all of the training functions will use that backend for computation.  Initialization functions such as creating parameters and reading/writing test data or parameters will always occur on the CPU.
+Once you set either backend, all of the training functions will use that backend for computation. 
+
+Initialization functions such as creating parameters and reading/writing test data or parameters will always occur on the CPU.
 
 ----
 
@@ -175,6 +179,9 @@ The final output layer does not apply any transformation function in line with a
 - Add additional error functions
 - Add switching between regression and classification
 
+## License
+FCANN.jl is released under the [GPLv3 license](./LICENSE.md).
+
 ## Credits
 
-Written by Jason Eckstein for use by Blackbody Research
+Developed by Jason Eckstein at Blackbody Research

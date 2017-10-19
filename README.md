@@ -151,7 +151,9 @@ archEval("ex", N, batchSize, hiddenList)
 A single file will be generated named ```archEval_ex_10_input_2_output_ADAMAX.csv``` that contains a table of errors for each architecture.  Note that one of the networks was simply an empty array.  In this case the model will contain no hidden layers and will simply be a linear model.
 
 ### Working with backends
-By default the CPU backend will be enabled (unless otherwise changed.) However, if you have both CUDAdrv.jl and CUBLAS.jl packages successfully installed, then this module will automatically load the GPU backend on start. The two possible backends are defined as symbols: ```:CPU``` or ```:GPU```  
+By default the CPU backend will be enabled (unless otherwise changed.) If you have both CUDAdrv.jl and CUBLAS.jl packages successfully installed, then this module will automatically load the GPU backend on start but it will not be enabled until you enable it with setBackend(:GPU). 
+
+The two possible backends are defined as symbols: ```:CPU``` or ```:GPU```  
 - Check available backends with ```availableBackends()``` which will return an array
 - Check current active backend with ```getBackend()```
 - Set a new backend with ```setBackend(b)``` where b is one of the two symbols listed above.  Note that if you enter an unavailable backend nothing will change.
@@ -176,6 +178,9 @@ The final output layer does not apply any transformation function in line with a
 
 - Add additional error functions
 - Add switching between regression and classification
+
+## License
+FCANN.jl is released under the [GPLv3 license](./LICENSE.md).
 
 ## Credits
 

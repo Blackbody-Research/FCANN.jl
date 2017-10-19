@@ -98,7 +98,7 @@ lambda = 0.0f0 # L2 regularization constant
 c = 2.0f0 # max norm regularization constant (Inf means it doesn't apply)
 
 #run training saving output variables containing trained parameters (T, B), the lowest cost achieved on the training set, a record of costs per epoch, and a record of timestamps each epoch
-T, B, bestCost, record, timeRecord = FCANN.ADAMAXTrainNN(Xtrain, ytrain, batchSize, T0, B0, N, M, H, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, dropout = 0.0f0, costFunc = "absErr")
+T, B, bestCost, record, timeRecord = FCANN.ADAMAXTrainNNCPU(Xtrain, ytrain, batchSize, T0, B0, N, M, H, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, dropout = 0.0f0, costFunc = "absErr")
 ```
 
 They keyword arguments can be omitted but here show the default values.  The costFunc keyword can be used to change the cost function in the final output layer that calculates the error between the model output and the training data output.  Whenever a model is trained, it is done with a particular cost function in mind.  This is specified in the training process, not in the model construction.
@@ -148,19 +148,19 @@ hiddenList = [[], [1], [2, 2], [10, 5, 2]]
 archEval("ex", N, batchSize, hiddenList)
 ```
 
-A single file will be generated named ```archEval_ex_10_input_2_output_ADAMAX.csv``` that contains a table of errors for each architecture.  Note that one of the networks was simply an empty array.  In this case the model will contain no hidden layers and will simply be a linear model.
+A single file will be generated named ```archEval_ex_10_input_2_output_ADAMAXCPU.csv``` that contains a table of errors for each architecture.  Note that one of the networks was simply an empty array.  In this case the model will contain no hidden layers and will simply be a linear model.
 
 ### Working with backends
-By default the CPU backend will be enabled (unless otherwise changed.) If you have both CUDAdrv.jl and CUBLAS.jl packages successfully installed, then this module will automatically load the GPU backend on start but it will not be enabled until you enable it with setBackend(:GPU). 
+After running ```using FCANN```, the package will be ready to use with the CPU backend active.  If you have both CUDAdrv.jl and CUBLAS.jl packages successfully installed, then the GPU backend will also be available.  To activate the GPU backend, run ```setBackend(:GPU)``` and to switch back to the CPU backend run ```setBackend(:CPU)```.
 
 The two possible backends are defined as symbols: ```:CPU``` or ```:GPU```  
-- Check available backends with ```availableBackends()``` which will return an array
-- Check current active backend with ```getBackend()```
-- Set a new backend with ```setBackend(b)``` where b is one of the two symbols listed above.  Note that if you enter an unavailable backend nothing will change.
+- Check available backends with ```availableBackends()```, which will return an array of either one element ```[:CPU]``` or two elements ```[:CPU, :GPU]``` if the optional cuda packages listed above are installed.
+- Check current active backend with ```getBackend()```.
+- Set a new active backend with ```setBackend(b)``` where b is one of the two symbols listed above.  Note that if you enter an unavailable backend then a message will verify the previously active backend is still active.
 
-Once you set either backend, all of the training functions will use that backend for computation. 
+All of the exported training functions will use the active backend for computation.
 
-Initialization functions such as creating parameters and reading/writing test data or parameters will always occur on the CPU.
+Initialization functions such as creating parameters and reading/writing test data or parameters will always run on the CPU.
 
 ----
 

@@ -60,11 +60,18 @@ end
 
 function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	srand(1234)
-	m = 100
+	m = 1000
 	input_layer_size = 3
-	output_layer_size = 2
+	n = 2
+	#if using log likelihood cost function then need to double output layer size
+	#relative to output example size
+	output_layer_size = if contains(costFunc, "Log")
+		2*n
+	else
+		n
+	end
 	X = map(Float32, randn(m, input_layer_size))
-	y = map(Float32, randn(m, output_layer_size))
+	y = map(Float32, randn(m, n))
 
 	hidden_layers = [5, 5]
 	num_hidden = length(hidden_layers)
@@ -265,9 +272,29 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 #Note that all floating point input variables must be float32 or single precision   
 	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
 	(m, n) = size(input_data)
-	(m2, n2) = size(output_data)
+	(m2, output_layer_size) = size(output_data)
+	
+	n2 = if contains(costFunc, "Log")
+		2*output_layer_size
+	else
+		output_layer_size
+	end
+
 	if m2 != m 
 		error("input and output data do not match")
+	end
+
+	#check that parameters are appropriate for input and output data given selected cost function
+	if size(T0[1], 2) != n 
+		error("parameters incompatible with input data")
+	end
+	
+	if contains(costFunc, "Log") 
+		if length(B0[end]) != 2*output_layer_size
+			error("parameters incompatible with output data for log likelihood cost function")
+		end
+	elseif length(B0[end]) != output_layer_size
+		error("parameters incompatible with output data for sq/absErr cost function")
 	end
 
 	#total number of examples in dataset
@@ -401,17 +428,8 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 			costRecord[iter + 1] = currentOut
 			
 			if currentOut < bestCost
-				updateBest!(bestThetas, bestBiases, Thetas, Biases)
+				updateBest!(bestThetas, bestBiases, T_est, B_est)
 				bestCost = currentOut
-			end
-			
-			if epoch/period > 1
-				if costRecord[iter+1] > costRecord[iter]
-					updateBest!(Thetas, Biases, T_est, B_est)
-					#alpha = max(1.0f-6, alpha*0.9f0)
-				else
-					#alpha = min(1.0f-1, alpha/0.99f0)
-				end
 			end
 
 			if epoch > 100

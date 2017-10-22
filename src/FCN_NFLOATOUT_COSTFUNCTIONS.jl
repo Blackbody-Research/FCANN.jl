@@ -18,10 +18,30 @@ function sqErrDeriv(a, y)
 	2*(a - y)
 end
 
+#the exponential of a2 is the sigma parameter, this ensures it is always positive
+function normLogLikelihoodErr(a1, a2, y)
+	0.5f0*exp(2*a2)*a1^2 - exp(2*a2)*a1*y + 0.5f0*exp(2*a2)*y*y - a2 + 0.9189385332
+	#0.5f0*(a2^2)*(a1-y)^2 - log(abs.(a2)) + 0.9189385332f0
+end
+
+function normLogLikelihoodDeriv(a1, a2, y)
+	((a1 - y)*exp(2*a2), exp(2*a2)*(y-a1)^2 - 1)
+end 
+
+#the exponential of a2 is the scale parameter, this ensures it is always positive
+function cauchyLogLikelihoodErr(a1, a2, y)
+	exp(a2)*abs(a1-y) - log(0.5f0*exp(a2))
+end
+
+function cauchyLogLikelihoodDeriv(a1, a2, y)
+	(exp(a2)*ifelse(a1 > y, 1.0f0, ifelse(a1 < y, -1.0f0, 0.0f0)), exp(a2)*abs(a1-y) - 1)
+end
+
+
 #names, functions, and function derivatives must all be in order here
-costFuncList = [absErr, sqErr]
-costFuncDerivsList = [absErrDeriv, sqErrDeriv]
-costFuncNames = ["absErr", "sqErr"]
+costFuncList = [absErr, sqErr, normLogLikelihoodErr, cauchyLogLikelihoodErr]
+costFuncDerivsList = [absErrDeriv, sqErrDeriv, normLogLikelihoodDeriv, cauchyLogLikelihoodDeriv]
+costFuncNames = ["absErr", "sqErr", "normLog", "cauchyLog"]
 #--------------------------------------------------------------------------
 
 function calcJ(m, n, delta, lambda, Thetas)
@@ -47,19 +67,40 @@ end
 costFuncs = Dict(zip(costFuncNames, costFuncList))
 costFuncDerivs = Dict(zip(costFuncNames, costFuncDerivsList))
 
+#in case output layer predicts a value and a range, check relative size
+#between the two to dispatch to the proper error function
 function calcDeltaOut!(costFuncDeriv, deltas, a, y, m, n)
 #calculates derivative of the cost function
-	@simd for i = 1:m*n
-		@inbounds deltas[i] = costFuncDeriv(a[i], y[i])
-		#@inbounds deltas[i] = absErrDeriv(a[i], y[i])
+	if length(a) == 2*length(y)
+		@simd for i = 1:m*n
+			@inbounds (d1, d2) = costFuncDeriv(a[i], a[i+(m*n)], y[i])
+			@inbounds deltas[i] = d1
+			@inbounds deltas[i+(m*n)] = d2
+			#@inbounds deltas[i] = absErrDeriv(a[i], y[i])
+		end
+	elseif length(a) == length(y)
+		@simd for i = 1:m*n
+			@inbounds deltas[i] = costFuncDeriv(a[i], y[i])
+			#@inbounds deltas[i] = absErrDeriv(a[i], y[i])
+		end
+	else
+		error("output layer does not match data")
 	end
 end
 
 function calcFinalOut!(costFunc, a, y, m, n)
-	#mean abs error cost function
-	@simd for i = 1:m*n
-		@inbounds a[i] = costFunc(a[i], y[i])
-		#@inbounds a[i] = absErr(a[i], y[i])
+	if length(a) == 2*length(y)
+		@simd for i = 1:m*n
+			@inbounds a[i] = costFunc(a[i], a[i+(m*n)], y[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	elseif length(a) == length(y)
+		@simd for i = 1:m*n
+			@inbounds a[i] = costFunc(a[i], y[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	else
+		error("output layer does not match data")
 	end
 end
 
@@ -145,12 +186,10 @@ n = size(Thetas[end], 1)
 F = (1.0f0 - D)
 
 a = Array{Matrix{Float32}}(l)
-if l > 1
-	for i = 1:l
-		a[i] = Array{Float32}(m, size(Thetas[i], 1))
-	end
+
+for i = 1:l
+	a[i] = Array{Float32}(m, size(Thetas[i], 1))
 end
-a[end] = Array{Float32}(m, n)
 
 #a[1] = X * Thetas[1]' .+ biases[1]'
 #applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))

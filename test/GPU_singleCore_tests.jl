@@ -58,20 +58,20 @@ else
 
     M = 10
 
-    filename = string(name, "_10_input_", [], "_hidden_2_output_0.0_L2_Inf_maxNorm_0.001_alpha_ADAMAX", backend, ".csv")
-    rm(string("1_costRecord_", filename))
-    rm(string("1_timeRecord_", filename))
-    rm(string("1_performance_", filename))
-    rm(string("1_params_", filename[1:end-4]))
+    filename = string(name, "_10_input_", [], "_hidden_2_output_0.0_L2_Inf_maxNorm_0.001_alpha_ADAMAX", backend, "_absErr")
+    rm(string("1_costRecord_", filename, ".csv"))
+    rm(string("1_timeRecord_", filename, ".csv"))
+    rm(string("1_performance_", filename, ".csv"))
+    rm(string("1_params_", filename, ".bin"))
 
-    filename = string(name, "_10_input_", hidden, "_hidden_2_output_0.0_L2_Inf_maxNorm_0.0001_alpha_ADAMAX", backend, ".csv")
-    rm(string("1_costRecord_", filename))
-    rm(string("1_timeRecord_", filename))
-    rm(string("1_performance_", filename))
-    rm(string("1_params_", filename[1:end-4]))
+    filename = string(name, "_10_input_", hidden, "_hidden_2_output_0.0_L2_Inf_maxNorm_0.0001_alpha_ADAMAX", backend, "_absErr")
+    rm(string("1_costRecord_", filename, ".csv"))
+    rm(string("1_timeRecord_", filename, ".csv"))
+    rm(string("1_performance_", filename, ".csv"))
+    rm(string("1_params_", filename, ".bin"))
 
-    rm(string("2_costRecord_", filename))
-    rm(string("2_timeRecord_", filename))
-    rm(string("2_performance_", filename))
-    rm(string("2_params_", filename[1:end-4]))
+    rm(string("2_costRecord_", filename, ".csv"))
+    rm(string("2_timeRecord_", filename, ".csv"))
+    rm(string("2_performance_", filename, ".csv"))
+    rm(string("2_params_", filename, ".bin"))
 end

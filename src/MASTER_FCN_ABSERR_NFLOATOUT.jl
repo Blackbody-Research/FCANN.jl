@@ -1065,76 +1065,105 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], printProg = true)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], printProg = true, costFunction = "absErr")
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = readInput(name)
 
 	M = size(X, 2)
 	O = size(Y, 2)
 
-	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend)
+	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend, "_", costFunction)
 	
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
 	(T0, B0) = if isempty(startID)
 		println("initializing network parameters")
 		srand(1234)
-		initializeParams(M, hidden, O)	
+		if contains(costFunction, "Log")
+			initializeParams(M, hidden, 2*O)
+		else
+			initializeParams(M, hidden, O)
+		end	
 	else
 		println("reading previous session parameters")
-		readBinParams(string(startID, "_params_", filename))[1]
+		readBinParams(string(startID, "_params_", filename, ".bin"))[1]
 	end
+
 	
 	#BLAS.set_num_threads(Sys.CPU_CORES)	
 	#BLAS.set_num_threads(5)	
 	srand(1234)
-	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg)
+	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, costFunc = costFunction)
 
 	outTrain = predict(T, B, X)
 	outTest = predict(T, B, Xtest)
-	Jtrain = mean(abs.(outTrain - Y))
-	Jtest = mean(abs.(outTest - Ytest))
-	
+	Jtrain = if contains(costFunction, "Log")
+		mean(abs.(outTrain[:, 1:O] .- Y))
+	else
+		mean(abs.(outTrain .- Y))
+	end
+	Jtest = if contains(costFunction, "Log")
+		mean(abs.(outTest[:, 1:O] .- Ytest))
+	else
+		mean(abs.(outTest .- Ytest))
+	end
+
 	if O == 1
-		writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [["Test Set Prediction" "Test Set Output"]; [outTest Ytest]])
+		if contains(costFunction, "Log")
+			writecsv(string(ID, "_predictionScatter_", filename), [["Test Set Prediction Value" "Test Set Prediction Range" "Test Set Output"]; [outTest Ytest]])
+		else
+			writecsv(string(ID, "_predictionScatter_", filename), [["Test Set Prediction Value" "Test Set Output"]; [outTest Ytest]])
+		end
 	end
 
 	writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
 	writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
 	writecsv(string(ID, "_performance_", filename, ".csv"), [["Train Cost", "Test Cost"] [Jtrain, Jtest]])
 	
-	writeParams([(T, B)], string(ID, "_params_", filename))
+	writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	(record, T, B, Jtrain, outTrain, bestCost)
 end
 
-function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], printProg = true, writeFiles = true)
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], printProg = true, costFunction = "absErr", writeFiles = true)
 
 	M = size(X, 2)
 	O = size(Y, 2)
 
-	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend)
+	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend, "_", costFunction)
 	
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
 	(T0, B0) = if isempty(startID)
 		println(string("initializing network parameters for ", M, " input ", O, " output ", hidden, " hidden network"))
 		srand(1234)
-		initializeParams(M, hidden, O)	
+		if contains(costFunction, "Log")
+			initializeParams(M, hidden, 2*O)
+		else
+			initializeParams(M, hidden, O)
+		end	
 	else
 		println("reading previous session parameters")
-		readBinParams(string(startID, "_params_", filename))[1]
+		readBinParams(string(startID, "_params_", filename, ".bin"))[1]
 	end
 	
 	#BLAS.set_num_threads(Sys.CPU_CORES)	
 	#BLAS.set_num_threads(5)	
 	srand(1234)
-	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg)
+	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, costFunc = costFunction)
 
 	outTrain = predict(T, B, X)
-	Jtrain = mean(abs.(outTrain - Y))
+	Jtrain = if contains(costFunction, "Log")
+		mean(abs.(outTrain[:, 1:O] .- Y))
+	else
+		mean(abs.(outTrain.-Y))
+	end
 	
 	if (O == 1) & writeFiles
-		writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [["Prediction" "Output"]; [outTrain Y]])
+		if contains(costFunction, "Log")
+			writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [["Test Set Prediction Value" "Test Set Prediction Range" "Test Set Output"]; [outTrain Y]])
+		else
+			writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [["Test Set Prediction Value" "Test Set Output"]; [outTrain Y]])
+		end
 	end
 
 	if writeFiles
@@ -1142,7 +1171,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 		writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
 		writecsv(string(ID, "_performance_", filename, ".csv"), ["Cost", Jtrain,])
 		
-		writeParams([(T, B)], string(ID, "_params_", filename))
+		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
 	
 	(record, T, B, Jtrain, outTrain, bestCost)

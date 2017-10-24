@@ -93,7 +93,9 @@ end
 #H = (-(M+L+O) +- sqrt((M+L+O)^2 - 4x(L-1)(O-P)))/(2x(L-1))
 #If L = 1, P = MxH + H + HxO + O -> H = (P - O)/(M+1+O)
 function getHiddenSize(M, O, L, P)
-	if L == 1
+	if L == 0
+		0
+	elseif L == 1
 		(P-O)/(M+O+1)
 	else
 		a = (L - 1)

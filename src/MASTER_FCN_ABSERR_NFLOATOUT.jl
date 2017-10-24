@@ -40,8 +40,8 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0)
 	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backend, ".csv")
 
 	header = ["Layers" "Num Params" "Train Error" "Test Error"]
-	body = @parallel (vcat) for hidden = hiddenList
-		if nprocs() > 1
+	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden = hiddenList
+		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_CORES / min(nprocs(), length(hiddenList)))))
 		end
 		println(string("training network with ", hidden, " hidden layers"))
@@ -60,7 +60,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0)
 
 		numParams = length(theta2Params(B, T))
 		[length(hidden) numParams Jtrain Jtest]
-	end
+	end)
 	
 	Xtrain_lin = [ones(size(Y, 1)) X]
 	Xtest_lin = [ones(size(Ytest, 1)) Xtest]
@@ -86,8 +86,8 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0)
 	filename = string(name, "_", M, "_input_", O, "_output__ADAMAX", backend, ".csv")
 
 	header = ["Layers" "Num Params" "Train Error" "Test Error"]
-	body = @parallel (vcat) for hidden = hiddenList
-		if nprocs() > 1
+	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden = hiddenList
+		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_CORES / min(nprocs(), length(hiddenList)))))
 		end
 		println(string("training network with ", hidden, " hidden layers"))
@@ -106,7 +106,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0)
 
 		numParams = length(theta2Params(B, T))
 		[length(hidden) numParams Jtrain Jtest]
-	end
+	end)
 	
 	Xtrain_lin = [ones(size(Y, 1)) X[:, cols]]
 	Xtest_lin = [ones(size(Ytest, 1)) Xtest[:, cols]]
@@ -141,8 +141,8 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 	end
 	
 	header = ["Layers" "Num Params" "Target Num Params" "H" "Train Error" "Test Error" "Median GFLOPS"]
-	body = @parallel (vcat) for hidden in hiddenList
-		if nprocs() > 1
+	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden in hiddenList
+		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_CORES / min(nprocs(), length(hiddenList)))))
 		end
 		println(string("training network with ", hidden[2], " hidden layers"))
@@ -161,7 +161,7 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 
 		numParams = length(theta2Params(B, T))
 		[length(hidden[2]) numParams hidden[1] hidden[2][1] Jtrain Jtest median(GFLOPS)]	
-	end
+	end)
 	if isfile(string("evalLayers_", filename))
 		f = open(string("evalLayers_", filename), "a")
 		writecsv(f, body)
@@ -207,9 +207,9 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 	T0, B0 = initializeParams(M, hidden, O)
 	
 	header = map(a -> string("alpha ",  a), alphaList')
-	body = @parallel (hcat) for alpha = alphaList
+	body = reduce(hcat, pmap(alphaList) do alpha # @parallel (hcat) for alpha = alphaList
 		#BLAS.set_num_threads(Sys.CPU_CORES)
-		if nprocs() > 1
+		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(alphaList))))))
 		end
 		
@@ -217,7 +217,7 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 		println("beginning training with ", alpha, " alpha")
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true)
 		record
-	end
+	end)
 	writecsv(string("alphaCostRecords_", filename), [header; body])
 end
 
@@ -376,7 +376,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 		println(string(round(x3, 6), "|", round(c3, 6)))
 		#println(string("Current x values are ", [x1, x2, x4, x3]))
 
-		while (abs.(c4-c2)/(0.5f0*(c4+c2)) > tau) & ((2.0f0*(x4-x2)/(x4+x2)) > tau)
+		while (abs(c4-c2)/(0.5f0*abs(c4+c2)) > tau) & ((2.0f0*abs(x4-x2)/abs(x4+x2)) > tau)
 			if c4 < c2
 				x1 = x2
 				x2 = x4
@@ -599,7 +599,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 	end
 end
 
-@everywhere function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.01f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0)
+function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.01f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0)
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -684,7 +684,7 @@ end
 			c4 = out4[3]
 			println(string("Current x values are ", [x1, x2, x4, x3]))
 
-			while (abs.(c4-c2)/(0.5f0*(c4+c2)) > tau) & ((2.0f0*(x4-x2)/(x4+x2)) > tau)
+			while (abs(c4-c2)/(0.5f0*abs(c4+c2)) > tau) & ((2.0f0*abs(x4-x2)/abs(x4+x2)) > tau)
 				
 				if c4 < c2
 					x1 = x2
@@ -804,8 +804,8 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 	
 	header = ["Alpha" "Optimal Decay Rate" "Training Error" "Test Error" "Extrapolated Final Training Error" string("Additional Epochs to Reach Final Error with Tolerance ", tau) "GFLOPS" "Time Per Epoch" "Status"]
 	
-	body = @parallel (vcat) for alpha in alphaList
-		if nprocs() > 1
+	body = reduce(vcat, pmap(alphaList) do alpha # @parallel (vcat) for alpha in alphaList
+		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(alphaList))))))
 		end
 		srand(1234)
@@ -838,7 +838,7 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 		#conv = mean((record[max(2, l-9):l]./record[max(1, l-10):l-1])-1)
 		
 		[alpha R Jtrain Jtest cc t median(GFLOPS) median(timeRecord[2:end]-timeRecord[1:end-1]) status]
-	end
+	end)
 
 	if isfile(string("smartDecayRates_", filename))
 		f = open(string("smartDecayRates_", filename), "a")
@@ -878,9 +878,9 @@ function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f
 	T0, B0 = initializeParams(M, hidden, O)
 	
 	header = map(a -> string("R ",  a), RList')
-	body = @parallel (hcat) for R in RList
+	body = reduce(hcat, pmap(RList) do R # @parallel (hcat) for R in RList
 		#BLAS.set_num_threads(Sys.CPU_CORES)
-		if nprocs() > 1
+		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(RList))))))
 		end
 		
@@ -888,7 +888,7 @@ function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f
 		println("beginning training with ", alpha, " alpha")
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true)
 		record
-	end
+	end)
 	writecsv(string("decayRateCostRecords_", filename), [header; body])
 end
 
@@ -924,9 +924,11 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0)
 	T0, B0 = initializeParams(M, hidden, O)
 	
 	header = ["Lambda" "Train Error" "Test Error"]
-	body = @parallel (vcat) for lambda = lambdaList
+	body = reduce(vcat, pmap(lambdaList) do lambda # @parallel (vcat) for lambda = lambdaList
 		#BLAS.set_num_threads(1)#Sys.CPU_CORES)
-		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(lambdaList))))))
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(lambdaList))))))
+		end
 		srand(1234)
 		println("beginning training with ", lambda, " lambda")
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha, printProgress = true)
@@ -935,7 +937,7 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0)
 		Jtrain = mean(abs.(outTrain - Y))
 		Jtest = mean(abs.(outTest - Ytest))
 		[lambda Jtrain Jtest]
-	end
+	end)
 	writecsv(string("L2Reg_", filename), [header; body])
 end
 
@@ -976,9 +978,12 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 	T0, B0 = initializeParams(M, hidden, O)
 	
 	header = ["Max Norm" "Train Error" "Test Error" "Median GFLOPS" "Median Time Per Epoch"]
-	body = @parallel (vcat) for c = cList
+	body = reduce(vcat, pmap(cList) do c # @parallel (vcat) for c = cList
 		#BLAS.set_num_threads(Sys.CPU_CORES)
-		BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(cList))))))
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(cList))))))
+		end
+		#BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(cList))))))
 		
 		srand(1234)
 		println("beginning training with ", c, " max norm")
@@ -988,7 +993,7 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 		Jtrain = mean(abs.(outTrain - Y))
 		Jtest = mean(abs.(outTest - Ytest))
 		[c Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
-	end
+	end)
 	if isfile(string("maxNormReg_", filename))
 		f = open(string("maxNormReg_", filename), "a")
 		writecsv(f, body)
@@ -1021,10 +1026,12 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R)
 	T0, B0 = initializeParams(M, hidden, O)
 	
 	header = ["Dropout Rate" "Train Error" "Test Error" "Median GFLOPS" "Median Time Per Epoch"]
-	body = @parallel (vcat) for dropout in dropouts
+	body = reduce(vcat, pmap(dropouts) do dropout # @parallel (vcat) for dropout in dropouts
 		#BLAS.set_num_threads(Sys.CPU_CORES)
-		BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(dropouts))))))
-		
+		#BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(dropouts))))))
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(dropouts))))))
+		end
 		srand(1234)
 		println("beginning training with ", dropout, " dropout rate")
 		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true)
@@ -1033,7 +1040,7 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R)
 		Jtrain = mean(abs.(outTrain - Y))
 		Jtest = mean(abs.(outTest - Ytest))
 		[dropout Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
-	end
+	end)
 	if isfile(string("dropoutReg_", filename))
 		f = open(string("dropoutReg_", filename), "a")
 		writecsv(f, body)
@@ -1042,49 +1049,6 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R)
 		writecsv(string("dropoutReg_", filename), [header; body])
 	end
 end
-
-#advReg is a function that trains the same network architecture with the same training and test sets using the
-#fast gradient sign method of generating adversarial noise.  Different noise hyperparameters (eta) can be specified
-#as well as the option to select a max norm regularizer. It saves the mean abs error over the training and test set 
-#in a table where each row corresponds to each value of c. The name provided informs which training and test set data to read.  
-#Call this function with: advReg(name, N, batchSize, hidden, etaList, a), where N is the 
-#number of epochs over which to train, batchSize is the number of examples in each minibatch, hidden 
-#is a vector of integers to specify the structure of the network network to train.  For example 
-#[4, 4] would indicate a network with two hidden layers each with 4 neurons.  etaList is an array of 32 bit
-#floats which list the adversarial noise hyperparameter to use.  alpha is the alpha hyper parameter for the ADAMAX 
-#training algorithm. 
-function advReg(name, N, batchSize, hidden, etaList, alpha, c = Inf)
-	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
-	M = size(X, 2)
-	O = size(Y, 2)
-
-	lambda = 0.0f0
-	
-	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "alpha_AdvADAMAX", backend, ".csv")
-	
-	println(string("training network with ", hidden, " hidden layers "))
-	println("initializing network parameters")
-	T0, B0 = initializeParams(M, hidden, O)
-	
-	header = ["Eta Noise" "Train Error" "Test Error"]
-	body = @parallel (vcat) for eta = etaList
-		#BLAS.set_num_threads(Sys.CPU_CORES)
-		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(etaList))))))
-		
-		srand(1234)
-		println("beginning training with ", eta, " adversarial noise")
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))Adv(X, Y, batchSize, T0, B0, N, M, hidden, eta, c, alpha, printProgress = true)
-		outTrain = predict(T, B, X)
-		outTest = predict(T, B, Xtest)
-		Jtrain = mean(abs.(outTrain - Y))
-		Jtest = mean(abs.(outTest - Ytest))
-		[eta Jtrain Jtest]
-	end
-	writecsv(string("advReg_", filename), [header; body])
-end
-
 
 #fullTrain is a function that trains a single network with a specified architecture over the training and test sets
 #determined by the name provided in the input.  Training uses the ADAMAX minibatch algorithm and has options for 
@@ -1251,7 +1215,10 @@ function bootstrapTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R,
 
 	bootstrapOut = pmap(1:num) do foo
 		#BLAS.set_num_threads(Sys.CPU_CORES)
-		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), num)))))
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), num)))))
+		end
+		# BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), num)))))
 		T0, B0 = initializeParams(M, hidden, O)	
 		bootstrapInd = ceil(Int64, N*rand(N))		
 		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X[bootstrapInd, :], Y[bootstrapInd, :], batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg)
@@ -1296,7 +1263,10 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	bootstrapOut = pmap(1:num) do foo
 
 		#BLAS.set_num_threads(Sys.CPU_CORES)
-		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), num)))))
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), num)))))
+		end
+		# BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), num)))))
 		srand(1234 + foo + ID - 2)
 		T0, B0 = initializeParams(M, hidden, O)		
 		srand(1234 + foo + ID - 2)	
@@ -1435,44 +1405,6 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	println("saving results to file")	
 	writecsv(string("fullMultiPerformance_", filename, ".csv"), [header; fullMultiPerformance])		
 end
-
-
-function bootstrapTrainAdv(name, numEpochs, batchSize, hidden, eta, c, alpha, num, ID, printProg = true)
-	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
-	(N, M) = size(X)
-	O = size(Y, 2)
-	
-	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", c, "_maxNorm_", eta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backend, ".csv")
-		
-	bootstrapOut = pmap(1:num) do foo
-		#BLAS.set_num_threads(Sys.CPU_CORES)
-		if nprocs() > 1
-			BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_CORES / min(nprocs(), num))))
-		end
-		T0, B0 = initializeParams(M, hidden, O)	
-		bootstrapInd = ceil(Int64, N*rand(N))			
-		(T, B, bestCost, costRecord, timeRecord) = eval(Symbol("ADAMAXTrainNN", backend))Adv(X[bootstrapInd, :], Y[bootstrapInd, :], batchSize, T0, B0, numEpochs, M, hidden, eta, c, alpha, printProgress = printProg)
-		(theta2Params(B, T), T, B)
-	end
-	filedata = mapreduce(a -> a[1], hcat, bootstrapOut)
-	writecsv(string(ID, "_bootstrapParams_", filename), filedata)
-	
-	#calculate average network output
-	bootstrapOutTrain = map(a -> predict(a[2], a[3], X), bootstrapOut)	
-	combinedOutputTrain = reduce(+, bootstrapOutTrain)/length(bootstrapOutTrain)
-	errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
-	Jtrain = mean(abs.(combinedOutputTrain - Y))
-		
-	bootstrapOutTest = map(a -> predict(a[2], a[3], Xtest), bootstrapOut)	
-	combinedOutputTest = reduce(+, bootstrapOutTest)/length(bootstrapOutTest)
-	errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
-	Jtest = mean(abs.(combinedOutputTest - Ytest))	
-		
-	writecsv(string(ID, "_bootstrapPerformance_", filename), [["Training Error", "Training Error Est", "Test Error", "Test Error Est "] [Jtrain, errorEstTrain, Jtest, errorEstTest]])		
-end
-
 
 function evalBootstrap(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = false, dropout=0.0f0)
 	println("reading and converting training data")
@@ -1655,15 +1587,22 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	hiddenList = mapreduce(vcat, Plist) do P 
 		map(layers) do L
 			H = ceil(Int64, getHiddenSize(M, O, L, P))
-			(P, H*ones(Int64, L))
+			if H == 0
+				(P, Int64.([]))
+			else
+				(P, H*ones(Int64, L))
+			end
 		end
 	end
 	
 	header = ["Layers" "Num Params" "Target Num Params" "H" "Train Error" "Test Error" "Alpha" "Decay Rate" "Time Per Epoch" "Median GFLOPS" "Opt Success"]
-	body = @parallel (vcat) for hidden in hiddenList
-		if nprocs() > 1
-			BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_CORES / min(nprocs(), length(hiddenList)))))
+	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden in hiddenList
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(hiddenList))))))
 		end
+		# if (nprocs() > 1) & (backend == :CPU)
+		# 	BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_CORES / min(nprocs(), length(hiddenList)))))
+		# end
 		println(string("training network with ", hidden[2], " hidden layers"))
 		println("initializing network parameters")
 		srand(1234)
@@ -1679,8 +1618,15 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 		Jtest = mean(abs.(outTest .- Ytest))
 
 		numParams = length(theta2Params(B, T))
-		[length(hidden[2]) numParams hidden[1] hidden[2][1] Jtrain Jtest alpha R median(timeRecord[2:end] - timeRecord[1:end-1]) median(GFLOPS) success]	
-	end
+
+		Hsize = if isempty(hidden[2])
+			0
+		else
+			hidden[2][1]
+		end
+
+		[length(hidden[2]) numParams hidden[1] Hsize Jtrain Jtest alpha R median(timeRecord[2:end] - timeRecord[1:end-1]) median(GFLOPS) success]	
+	end)
 	if isfile(string("evalLayers_", filename))
 		f = open(string("evalLayers_", filename), "a")
 		writecsv(f, body)
@@ -1841,7 +1787,7 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 		y3 = p3[2]
 		y4 = p4[2]
 
-		if (2.0f0*abs.(y4-y2)/(y4+y2) < tau) | (2.0f0*(x4-x2)/(x4+x2) < tau)
+		if (2.0f0*abs(y4-y2)/abs(y4+y2) < tau) | (2.0f0*abs(x4-x2)/abs(x4+x2) < tau)
 			return body
 		elseif y2 < y4
 			p3 = p4
@@ -1960,6 +1906,49 @@ function archEval(name, batchSize, numEpochs, hidden_layers, useGPU = false, err
 		writecsv(filename, [header; line1; out])
 	#end
 end
+
+#advReg is a function that trains the same network architecture with the same training and test sets using the
+#fast gradient sign method of generating adversarial noise.  Different noise hyperparameters (eta) can be specified
+#as well as the option to select a max norm regularizer. It saves the mean abs error over the training and test set 
+#in a table where each row corresponds to each value of c. The name provided informs which training and test set data to read.  
+#Call this function with: advReg(name, N, batchSize, hidden, etaList, a), where N is the 
+#number of epochs over which to train, batchSize is the number of examples in each minibatch, hidden 
+#is a vector of integers to specify the structure of the network network to train.  For example 
+#[4, 4] would indicate a network with two hidden layers each with 4 neurons.  etaList is an array of 32 bit
+#floats which list the adversarial noise hyperparameter to use.  alpha is the alpha hyper parameter for the ADAMAX 
+#training algorithm. 
+function advReg(name, N, batchSize, hidden, etaList, alpha, c = Inf)
+	println("reading and converting training data")
+	X, Xtest, Y, Ytest = readInput(name)
+
+	M = size(X, 2)
+	O = size(Y, 2)
+
+	lambda = 0.0f0
+	
+	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "alpha_AdvADAMAX", backend, ".csv")
+	
+	println(string("training network with ", hidden, " hidden layers "))
+	println("initializing network parameters")
+	T0, B0 = initializeParams(M, hidden, O)
+	
+	header = ["Eta Noise" "Train Error" "Test Error"]
+	body = @parallel (vcat) for eta = etaList
+		#BLAS.set_num_threads(Sys.CPU_CORES)
+		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(etaList))))))
+		
+		srand(1234)
+		println("beginning training with ", eta, " adversarial noise")
+		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))Adv(X, Y, batchSize, T0, B0, N, M, hidden, eta, c, alpha, printProgress = true)
+		outTrain = predict(T, B, X)
+		outTest = predict(T, B, Xtest)
+		Jtrain = mean(abs.(outTrain - Y))
+		Jtest = mean(abs.(outTest - Ytest))
+		[eta Jtrain Jtest]
+	end
+	writecsv(string("advReg_", filename), [header; body])
+end
+
 
 function evalBootstrapFull(name, hidden_layer_size, c, suffixes, useGPU = false, errFunc = (a, b) -> mean(abs.(a-b)))
 	Xtrain_values = float32(readcsv(string("Xtrain_values_", name, ".csv")))
@@ -2927,6 +2916,42 @@ function checkNumGrad(lambda, md)
 	println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
 end
 =#
+
+function bootstrapTrainAdv(name, numEpochs, batchSize, hidden, eta, c, alpha, num, ID, printProg = true)
+	println("reading and converting training data")
+	X, Xtest, Y, Ytest = readInput(name)
+
+	(N, M) = size(X)
+	O = size(Y, 2)
+	
+	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", c, "_maxNorm_", eta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backend, ".csv")
+		
+	bootstrapOut = pmap(1:num) do foo
+		#BLAS.set_num_threads(Sys.CPU_CORES)
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_CORES / min(nprocs(), num))))
+		end
+		T0, B0 = initializeParams(M, hidden, O)	
+		bootstrapInd = ceil(Int64, N*rand(N))			
+		(T, B, bestCost, costRecord, timeRecord) = eval(Symbol("ADAMAXTrainNN", backend))Adv(X[bootstrapInd, :], Y[bootstrapInd, :], batchSize, T0, B0, numEpochs, M, hidden, eta, c, alpha, printProgress = printProg)
+		(theta2Params(B, T), T, B)
+	end
+	filedata = mapreduce(a -> a[1], hcat, bootstrapOut)
+	writecsv(string(ID, "_bootstrapParams_", filename), filedata)
+	
+	#calculate average network output
+	bootstrapOutTrain = map(a -> predict(a[2], a[3], X), bootstrapOut)	
+	combinedOutputTrain = reduce(+, bootstrapOutTrain)/length(bootstrapOutTrain)
+	errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/length(bootstrapOutTrain))	
+	Jtrain = mean(abs.(combinedOutputTrain - Y))
+		
+	bootstrapOutTest = map(a -> predict(a[2], a[3], Xtest), bootstrapOut)	
+	combinedOutputTest = reduce(+, bootstrapOutTest)/length(bootstrapOutTest)
+	errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/length(bootstrapOutTest))	
+	Jtest = mean(abs.(combinedOutputTest - Ytest))	
+		
+	writecsv(string(ID, "_bootstrapPerformance_", filename), [["Training Error", "Training Error Est", "Test Error", "Test Error Est "] [Jtrain, errorEstTrain, Jtest, errorEstTest]])		
+end
 
 function restoreValid!(bestThetas, bestBiases, best_GT, best_GB, Thetas, Biases, GT, GB)
 	#restore training parameters to the last best known configuration

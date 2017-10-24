@@ -40,13 +40,8 @@ function getBackend()
     backend
 end
 
-function checkNumGrad(lambda = 0.0f0; hidden_layers = [5, 5], costFunc = "absErr")
-    func = eval(Symbol("checkNumGrad", backend))
-    if backend == :CPU
-        func(lambda; hidden_layers = hidden_layers, costFunc = costFunc)
-    else
-        func(lambda; hidden_layers = hidden_layers)
-    end
+function checkNumGrad(lambda = 0.0f0; hidden_layers = [5, 5], costFunc = "absErr") 
+    eval(Symbol("checkNumGrad", backend))(lambda; hidden_layers = hidden_layers, costFunc = costFunc)
 end
 
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, 

@@ -138,6 +138,61 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	return err
 end
 
+function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+
+	out = predict(T, B, input_data, dropout)
+
+	#array to store error values per example
+	delt = similar(output_data)
+
+	if (contains(costFunc, "Log")) & (length(out) == 2*length(output_data))
+		@simd for i = 1:m*n
+			@inbounds delt[i] = costFuncs[costFunc](out[i], out[i+(m*n)], output_data[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	elseif !(contains(costFunc, "Log")) & (length(out) == length(output_data))
+		@simd for i = 1:m*n
+			@inbounds delt[i] = costFuncs[costFunc](out[i], output_data[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	else
+		error("output layer does not match data")
+	end
+
+	err = sum(delt)/m
+
+	return (out, err)
+end
+
+function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; costFunc = "absErr")
+	#Setup some useful variables
+	(m, n) = size(dataOut)
+
+	#array to store error values per example
+	delt = similar(dataOut)
+
+	if (contains(costFunc, "Log")) & (length(modelOut) == 2*length(dataOut))
+		@simd for i = 1:m*n
+			@inbounds delt[i] = costFuncs[costFunc](modelOut[i], modelOut[i+(m*n)], dataOut[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	elseif !(contains(costFunc, "Log")) & (length(modelOut) == length(dataOut))
+		@simd for i = 1:m*n
+			@inbounds delt[i] = costFuncs[costFunc](modelOut[i], dataOut[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	else
+		error("output layer does not match data")
+	end
+
+	err = sum(delt)/m
+end
+
 function readInput(name)
 	X = map(Float32, readcsv(string("Xtrain_", name, ".csv")))
 	Xtest = map(Float32, readcsv(string("Xtest_", name, ".csv")))

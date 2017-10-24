@@ -177,45 +177,45 @@ function predict(Thetas, biases, X, D = 0.0f0)
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D)
 
-# Useful values
-m = size(X, 1)
-l = length(Thetas)
-n = size(Thetas[end], 1)
+	# Useful values
+	m = size(X, 1)
+	l = length(Thetas)
+	n = size(Thetas[end], 1)
 
-#dropout scale factor
-F = (1.0f0 - D)
+	#dropout scale factor
+	F = (1.0f0 - D)
 
-a = Array{Matrix{Float32}}(l)
+	a = Array{Matrix{Float32}}(l)
 
-for i = 1:l
-	a[i] = Array{Float32}(m, size(Thetas[i], 1))
-end
-
-#a[1] = X * Thetas[1]' .+ biases[1]'
-#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
-
-for ii = 1:l
-	for i = 1:length(biases[ii])
-		a[ii][:, i] = fill(biases[ii][i], m)
+	for i = 1:l
+		a[i] = Array{Float32}(m, size(Thetas[i], 1))
 	end
-end
 
-gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
 
-if l > 1
-	tanhActivation!(a[1])
-
-	if (l-1) > 1
-		for i = 2:l-1
-			gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
-			tanhActivation!(a[i])
+	for ii = 1:l
+		for i = 1:length(biases[ii])
+			a[ii][:, i] = fill(biases[ii][i], m)
 		end
 	end
 
-	gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
-end
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
 
-return a[end]
+	if l > 1
+		tanhActivation!(a[1])
+
+		if (l-1) > 1
+			for i = 2:l-1
+				gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
+				tanhActivation!(a[i])
+			end
+		end
+
+		gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+
+	return a[end]
 
 end
 
@@ -223,166 +223,166 @@ end
 
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr")
 
-num_hidden = length(hidden_layers)
+	num_hidden = length(hidden_layers)
 
 
-#Setup some useful variables
-m = size(X, 1)
-n = size(y, 2)
-         
-if lambda > 0.0f0
-	fillThetaGrads!(Theta_grads, Thetas)
+	#Setup some useful variables
+	m = size(X, 1)
+	n = size(y, 2)
+	         
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+
+	fillAs!(a, biases, m)
+
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	if length(Thetas) > 1
+		if D == 0.0f0
+			tanhGradient!(a[1], tanh_grad_z[1])
+		else
+			tanhGradient!(a[1], tanh_grad_z[1], D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if D == 0.0f0
+					tanhGradient!(a[i], tanh_grad_z[i])
+				else
+					tanhGradient!(a[i], tanh_grad_z[i], D)
+				end
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+
+	#mean abs error cost function
+	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], y, m, n)
+
+
+	i = num_hidden
+	if num_hidden > 0
+		while i >= 1
+			#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
+			finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
+			i = i - 1
+		end
+	end
+
+	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+
+	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
+	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+
+	if num_hidden > 0
+		for i = 2:num_hidden+1
+			gemm!('T', 'N', 1.0f0/m, deltas[i], a[i-1], lambda/m, Theta_grads[i])
+			gemv!('T', 1.0f0/m, deltas[i], onesVec, 0.0f0, Bias_grads[i]) #calculate below line in place
+			#Bias_grads[i] = (ones(Float32, 1, m)*deltas[i]/m)[:]
+		end
+	end
+
 end
 
+function nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, y, lambda, a, D = 0.0f0; costFunc = "absErr")
 
-fillAs!(a, biases, m)
+	num_hidden = length(hidden_layers)
 
-gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
 
-if length(Thetas) > 1
-	if D == 0.0f0
-		tanhGradient!(a[1], tanh_grad_z[1])
-	else
-		tanhGradient!(a[1], tanh_grad_z[1], D)
+	#Setup some useful variables
+	m = size(X, 1)
+	n = size(y, 2)
+	F = 1.0f0 - D
+
+	fillAs!(a, biases, m)
+
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	if length(Thetas) > 1
+	#case for a network with at least 1 hidden layer
+		tanhActivation!(a[1])
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
+				tanhActivation!(a[i])
+			end
+		end
+
+		gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
 	end
+
+	#mean abs error cost function
+	calcFinalOut!(costFuncs[costFunc], a[end], y, m, n)
+
+	J = calcJ(m, n, a[end], lambda, Thetas)
+
+end
+
+function nnCostFunctionAdv(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector{Int}, advX::Matrix{Float32}, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32})
+
+	num_hidden = length(hidden_layers)
+
+
+	#Setup some useful variables
+	m = size(X, 1)
+	n = size(y, 2)
+	         
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+
+	fillAs!(a, biases, m)
+
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	tanhGradient!(a[1], tanh_grad_z[1])
 
 	if num_hidden > 1
 		for i = 2:num_hidden
 			gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
-			if D == 0.0f0
-				tanhGradient!(a[i], tanh_grad_z[i])
-			else
-				tanhGradient!(a[i], tanh_grad_z[i], D)
-			end
+			tanhGradient!(a[i], tanh_grad_z[i])
 		end
 	end
 
 	gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
-end
 
-#mean abs error cost function
-calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], y, m, n)
+	#mean abs error cost function
+	@simd for i = 1:m*n
+		@inbounds deltas[end][i] = ifelse(a[end][i] > y[i], 1.0f0, ifelse(a[end][i] < y[i], -1.0f0, 0.0f0))
+	end
 
 
-i = num_hidden
-if num_hidden > 0
+	i = num_hidden
 	while i >= 1
 		#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
 		gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
 		finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
 		i = i - 1
 	end
-end
 
-gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemm!('N', 'N', 1.0f0/m, deltas[1], Thetas[1], 0.0f0, advX)
 
-gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
-#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+	@simd for i = 1:m*input_layer_size
+		@inbounds advX[i] = (X[i] + (1.0f-8)*sign(advX[i]))
+	end
 
-if num_hidden > 0
+
+	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+
+	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
+	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+
 	for i = 2:num_hidden+1
 		gemm!('T', 'N', 1.0f0/m, deltas[i], a[i-1], lambda/m, Theta_grads[i])
 		gemv!('T', 1.0f0/m, deltas[i], onesVec, 0.0f0, Bias_grads[i]) #calculate below line in place
 		#Bias_grads[i] = (ones(Float32, 1, m)*deltas[i]/m)[:]
 	end
-end
-
-end
-
-function nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, y, lambda, a, D = 0.0f0; costFunc = "absErr")
-
-num_hidden = length(hidden_layers)
-
-
-#Setup some useful variables
-m = size(X, 1)
-n = size(y, 2)
-F = 1.0f0 - D
-
-fillAs!(a, biases, m)
-
-gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
-
-if length(Thetas) > 1
-#case for a network with at least 1 hidden layer
-	tanhActivation!(a[1])
-
-	if num_hidden > 1
-		for i = 2:num_hidden
-			gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
-			tanhActivation!(a[i])
-		end
-	end
-
-	gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
-end
-
-#mean abs error cost function
-calcFinalOut!(costFuncs[costFunc], a[end], y, m, n)
-
-J = calcJ(m, n, a[end], lambda, Thetas)
-
-end
-
-function nnCostFunctionAdv(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector{Int}, advX::Matrix{Float32}, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32})
-
-num_hidden = length(hidden_layers)
-
-
-#Setup some useful variables
-m = size(X, 1)
-n = size(y, 2)
-         
-if lambda > 0.0f0
-	fillThetaGrads!(Theta_grads, Thetas)
-end
-
-
-fillAs!(a, biases, m)
-
-gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
-
-tanhGradient!(a[1], tanh_grad_z[1])
-
-if num_hidden > 1
-	for i = 2:num_hidden
-		gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
-		tanhGradient!(a[i], tanh_grad_z[i])
-	end
-end
-
-gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
-
-#mean abs error cost function
-@simd for i = 1:m*n
-	@inbounds deltas[end][i] = ifelse(a[end][i] > y[i], 1.0f0, ifelse(a[end][i] < y[i], -1.0f0, 0.0f0))
-end
-
-
-i = num_hidden
-while i >= 1
-	#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
-	gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
-	finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
-	i = i - 1
-end
-
-gemm!('N', 'N', 1.0f0/m, deltas[1], Thetas[1], 0.0f0, advX)
-
-@simd for i = 1:m*input_layer_size
-	@inbounds advX[i] = (X[i] + (1.0f-8)*sign(advX[i]))
-end
-
-
-gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
-
-gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
-#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
-
-for i = 2:num_hidden+1
-	gemm!('T', 'N', 1.0f0/m, deltas[i], a[i-1], lambda/m, Theta_grads[i])
-	gemv!('T', 1.0f0/m, deltas[i], onesVec, 0.0f0, Bias_grads[i]) #calculate below line in place
-	#Bias_grads[i] = (ones(Float32, 1, m)*deltas[i]/m)[:]
-end
 
 end

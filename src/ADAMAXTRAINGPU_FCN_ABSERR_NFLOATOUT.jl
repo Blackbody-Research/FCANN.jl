@@ -52,7 +52,12 @@ function GPU2Host(hostvars, GPUvars)
 	end
 end
 
-function checkNumGradGPU(lambda; hidden_layers=[5, 5])
+function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
+	
+	if costFunc != "absErr"
+		error("Only the absErr cost function exists for the GPU backend")
+	end
+
 	srand(1234)
 	m = 100
 	input_layer_size = 3
@@ -167,9 +172,13 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5])
 	return GPUErr
 end
 
-function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0)
+function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
+	if costFunc != "absErr"
+		error("Only the absErr cost function exists for the GPU backend")
+	end
+	
 	num_hidden = length(T) - 1
 	hidden_layers = if num_hidden > 0
 		map(p -> length(p), B[1:num_hidden])
@@ -195,7 +204,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0)
 
 	out = Array(d_out)
 
-	err = mean(abs(out .- output_data))
+	err = sum(abs.(out .- output_data))/m
 
 	return (out, err)
 end
@@ -241,6 +250,10 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	(m2, n2) = size(output_data)
 	if m2 != m 
 		error("input and output data do not match")
+	end
+
+	if costFunc != "absErr"
+		error("Only the absErr cost function exists for the GPU backend")
 	end
 
 	println()
@@ -386,11 +399,11 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	
 	numLayers = length(T0)
 
-	nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], batchOutputs[end],lambda)
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], batchOutputs[end],lambda, dropout)
 	
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda)
+		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout)
 	end
 	currentOut = currentOut/numBatches
 	

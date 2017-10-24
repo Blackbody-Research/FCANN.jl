@@ -11,28 +11,28 @@ println()
 
 
 
-rm(string("archEval_", name, "_", M, "_input_", O, "_output_ADAMAX", backend, ".csv"))
+rm(string("archEval_", name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_absErr.csv"))
 
 println("Testing evalLayers")
 evalLayers(name, 100, 1024, [100, 200, 400, 800], layers=[2, 4, 6])
 println("TEST PASSED")
 println()
 
-rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_0.002_alpha_ADAMAX", backend, ".csv"))
+rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_0.002_alpha_ADAMAX", backend, "_absErr.csv"))
 
 println("Testing smartEvalLayers")
 smartEvalLayers(name, 100, 1024, [100, 200], layers=[1, 2], tau=0.05f0)
 println("TEST PASSED")
 println()
 
-rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_100_epochs_smartParams_ADAMAX", backend, ".csv"))
+rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_100_epochs_smartParams_ADAMAX", backend, "_absErr.csv"))
 
 println("Testing multiTrain")
 multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 4, 1)
 println("TEST PASSED")
 println()
 
-filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.0_L2_1.0_maxNorm_0.002_alpha_0.1_decayRate_ADAMAX", backend)
+filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.0_L2_1.0_maxNorm_0.002_alpha_0.1_decayRate_ADAMAX", backend, "_absErr")
 
 rm(string("1_multiParams_", filename, ".bin"))
 rm(string("1_multiPerformance_", filename, ".csv"))

@@ -1296,7 +1296,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	
 	#calculate average network output
 	bootstrapOutTrain = map(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-	combinedOutputTrain = reduce(+, bootStrapOutTrain)/num
+	combinedOutputTrain = reduce(+, bootstrapOutTrain)/num
 	errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/num)	
 	Jtrain = calcError(combinedOutputTrain, Y, costFunc = costFunc)
 		
@@ -1395,12 +1395,12 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	println(string("calculating combined outputs for ", length(multiOut), " networks"))
 
 	#calculate average network output
-	bootstrapOutTrain = map(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-	combinedOutputTrain = reduce(+, bootStrapOutTrain)/num
+	bootstrapOutTrain = map(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], multiOut)
+	combinedOutputTrain = reduce(+, bootstrapOutTrain)/num
 	errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/num)	
 	Jtrain = calcError(combinedOutputTrain, Y, costFunc = costFunc)
 		
-	bootstrapOutTest = map(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+	bootstrapOutTest = map(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], multiOut)
 	combinedOutputTest = reduce(+, bootstrapOutTest)/num
 	errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/num)	
 	Jtest = calcError(combinedOutputTest, Ytest, costFunc = costFunc)
@@ -1711,7 +1711,7 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 		
 		#calculate average network output
 		bootstrapOutTrain = map(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-		combinedOutputTrain = reduce(+, bootStrapOutTrain)/num
+		combinedOutputTrain = reduce(+, bootstrapOutTrain)/num
 		errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/num)	
 		Jtrain = calcError(combinedOutputTrain, Y, costFunc = costFunc)
 			

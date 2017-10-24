@@ -150,12 +150,12 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	#array to store error values per example
 	delt = similar(output_data)
 
-	if length(out) == 2*length(output_data)
+	if (contains(costFunc, "Log")) & (length(out) == 2*length(output_data))
 		@simd for i = 1:m*n
 			@inbounds delt[i] = costFuncs[costFunc](out[i], out[i+(m*n)], output_data[i])
 			#@inbounds a[i] = absErr(a[i], y[i])
 		end
-	elseif length(out) == length(output_data)
+	elseif !(contains(costFunc, "Log")) & (length(out) == length(output_data))
 		@simd for i = 1:m*n
 			@inbounds delt[i] = costFuncs[costFunc](out[i], output_data[i])
 			#@inbounds a[i] = absErr(a[i], y[i])
@@ -176,12 +176,12 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 	#array to store error values per example
 	delt = similar(dataOut)
 
-	if (contains(costFunction, "Log")) & (length(out) == 2*length(output_data))
+	if (contains(costFunc, "Log")) & (length(modelOut) == 2*length(dataOut))
 		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](modelOut[i], out[i+(m*n)], dataOut[i])
+			@inbounds delt[i] = costFuncs[costFunc](modelOut[i], modelOut[i+(m*n)], dataOut[i])
 			#@inbounds a[i] = absErr(a[i], y[i])
 		end
-	elseif !(contains(costFunction, "Log")) & (length(modelOut) == length(dataOut))
+	elseif !(contains(costFunc, "Log")) & (length(modelOut) == length(dataOut))
 		@simd for i = 1:m*n
 			@inbounds delt[i] = costFuncs[costFunc](modelOut[i], dataOut[i])
 			#@inbounds a[i] = absErr(a[i], y[i])

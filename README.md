@@ -109,7 +109,7 @@ A helper function wraps some of the above code in a manner that allows easier lo
 
 ``` julia
 #write data to disk with the name "ex"
-writecsv("Xtrain_ex.csv", X)
+writecsv("Xtrain_ex.csv", Xtrain)
 writecsv("Xtest_ex.csv", Xtest)
 writecsv("ytrain_ex.csv", ytrain)
 writecsv("ytest_ex.csv", ytest)

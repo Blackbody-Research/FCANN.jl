@@ -54,16 +54,25 @@ end
 
 function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	
-	if costFunc != "absErr"
-		error("Only the absErr cost function exists for the GPU backend")
-	end
+	# if costFunc != "absErr"
+	# 	error("Only the absErr cost function exists for the GPU backend")
+	# end
 
 	srand(1234)
 	m = 100
 	input_layer_size = 3
-	output_layer_size = 2
+	n = 2
+	#output_layer_size = 2
+	#if using log likelihood cost function then need to double output layer size
+	#relative to output example size
+	output_layer_size = if contains(costFunc, "Log")
+		2*n
+	else
+		n
+	end
+
 	X = randn(Float32, m, input_layer_size)
-	y = randn(Float32, m, output_layer_size)
+	y = randn(Float32, m, n)
 	d_X = CuArray(X)
 	d_y = CuArray(y)
 
@@ -137,9 +146,9 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(l)
 
-	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_y,lambda)
-	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_y,lambda)
-	costCPU = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, y, lambda, a)
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_y,lambda, costFunc = costFunc)
+	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_y,lambda, costFunc = costFunc)
+	costCPU = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
 	
 	GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
 
@@ -150,8 +159,8 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
@@ -175,9 +184,13 @@ end
 function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
-	if costFunc != "absErr"
-		error("Only the absErr cost function exists for the GPU backend")
-	end
+	# if costFunc != "absErr"
+	# 	error("Only the absErr cost function exists for the GPU backend")
+	# end
+
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
 	
 	num_hidden = length(T) - 1
 	hidden_layers = if num_hidden > 0
@@ -187,7 +200,11 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 
 	(m, input_layer_size) = size(input_data)
-	output_layer_size = size(output_data, 2)
+	output_layer_size = if contains(costFunc, "Log")
+		2*n
+	else
+		n
+	end
 
 	#transfer parameters to GPU
 	d_Thetas = Array{CuArray{Float32, 2}}(length(T))
@@ -204,7 +221,24 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 
 	out = Array(d_out)
 
-	err = sum(abs.(out .- output_data))/m
+	#array to store error values per example
+	delt = similar(output_data)
+
+	if (contains(costFunc, "Log")) & (length(out) == 2*length(output_data))
+		@simd for i = 1:m*n
+			@inbounds delt[i] = costFuncs[costFunc](out[i], out[i+(m*n)], output_data[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	elseif !(contains(costFunc, "Log")) & (length(out) == length(output_data))
+		@simd for i = 1:m*n
+			@inbounds delt[i] = costFuncs[costFunc](out[i], output_data[i])
+			#@inbounds a[i] = absErr(a[i], y[i])
+		end
+	else
+		error("output layer does not match data")
+	end
+
+	err = sum(delt)/m
 
 	return (out, err)
 end
@@ -247,13 +281,28 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	
 	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")	(m, n) = size(input_data)
 	(m, n) = size(input_data)
-	(m2, n2) = size(output_data)
+	(m2, output_layer_size) = size(output_data)
 	if m2 != m 
 		error("input and output data do not match")
 	end
 
-	if costFunc != "absErr"
-		error("Only the absErr cost function exists for the GPU backend")
+	n2 = if contains(costFunc, "Log")
+		2*output_layer_size
+	else
+		output_layer_size
+	end
+
+	#check that parameters are appropriate for input and output data given selected cost function
+	if size(T0[1], 2) != n 
+		error("parameters incompatible with input data")
+	end
+	
+	if contains(costFunc, "Log") 
+		if length(B0[end]) != 2*output_layer_size
+			error("parameters incompatible with output data for log likelihood cost function")
+		end
+	elseif length(B0[end]) != output_layer_size
+		error("parameters incompatible with output data for sq/absErr cost function")
 	end
 
 	println()
@@ -399,11 +448,11 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	
 	numLayers = length(T0)
 
-	nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], batchOutputs[end],lambda, dropout)
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], batchOutputs[end],lambda, dropout, costFunc = costFunc)
 	
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout)
+		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
 	end
 	currentOut = currentOut/numBatches
 	
@@ -438,7 +487,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	while epoch <= numEpochs
 		#run through an epoch in batches with randomized order
 		for batch in randperm(numBatches)
-			nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], batchOutputs[batch],lambda,dropout)
+			nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], batchOutputs[batch],lambda,dropout, costFunc = costFunc)
 			updateParams!(eta, beta1, beta2, t, d_Thetas, d_Theta_grads, d_Biases, d_Bias_grads, d_mT, d_mB, d_vT, d_vB)
 			if c < Inf 
 				scaleThetas!(d_Thetas[1:end-1], d_Theta_grads[1:end-1], d_onesVecParams, d_normVecParams, c)
@@ -451,7 +500,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 		if epoch%period == 0
 			currentOut = 0.0f0
 			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout)
+				currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
 			end
 			currentOut = currentOut/numBatches
 			
@@ -496,7 +545,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout)
+		currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
 	end
 	currentOut = currentOut/numBatches
 

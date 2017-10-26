@@ -25,6 +25,25 @@ else
     println("TEST PASSED")
     println()
 
+    println("Squared Error Cost Function")
+    err = checkNumGrad(costFunc = "sqErr")
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+    println("Norm Log Likelihood Cost Function")
+    err = checkNumGrad(costFunc = "normLog")
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+    println("Cauchy Log Likelihood Cost Function")
+    err = checkNumGrad(costFunc = "cauchyLog")
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+
     #basic test train with 1 input, 1 output, 1 neuron
     println("Testing simple ANN training version 1")
     println("-------------------------------------")

@@ -30,6 +30,23 @@ cudaTanhGrad = CuFunction(cost_md, "tanhGradient")
 cudaTanhGradDropout = CuFunction(cost_md, "tanhGradientDropout")
 cudaTanh = CuFunction(cost_md, "tanhActivation")
 
+#note K suffix stands for kernel to distinguish from names in non cuda cost functions
+sqErrK = CuFunction(cost_md, "sqErr")
+absErrK = CuFunction(cost_md, "absErr")
+normLogErrK = CuFunction(cost_md, "normLogErr")
+sqErrDerivK = CuFunction(cost_md, "sqErrDeriv")
+absErrDerivK = CuFunction(cost_md, "absErrDeriv")
+normLogDerivK = CuFunction(cost_md, "normLogDeriv")
+cauchyLogErrK = CuFunction(cost_md, "cauchyLogErr")
+cauchyLogDerivK = CuFunction(cost_md, "cauchyLogDeriv")
+
+#names, functions, and function derivatives must all be in order here
+costKernelList = [absErrK, sqErrK, normLogErrK, cauchyLogErrK]
+costKernelDerivsList = [absErrDerivK, sqErrDerivK, normLogDerivK, cauchyLogDerivK]
+
+costFuncKs = Dict(zip(costFuncNames, costKernelList))
+costFuncDerivKs = Dict(zip(costFuncNames, costKernelDerivsList))
+
 kernels = (fill_cols, finish_delt, elMul, cudaTanhGrad, cudaTanhGradDropout)
 kernelsNOGRAD = (fill_cols, finish_delt, elMul, cudaTanh)
 
@@ -62,8 +79,6 @@ function run_kernel(kernel::CuFunction, N::Int64, M::Int64, inputs...)
 	blocks = CuDim((ceil(Int, N/K), ceil(Int, M/K)))
     cudacall(kernel, blocks, threads, (Int64, Int64, getTypes.(inputs)...), N, M, inputs...)
 end
-
-
 
 function predict(d_Thetas, d_biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
 #PREDICT Predict the value of an input given a trained neural network
@@ -115,9 +130,19 @@ function predict(d_Thetas, d_biases, d_X, m, input_layer_size, output_layer_size
 	return d_a[end]
 end
 
-function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CuArray{Float32, 1}, d_a::Array{CuArray{Float32, 2}, 1}, d_tanh_grad_z::Array{CuArray{Float32, 2}, 1}, d_deltas::Array{CuArray{Float32, 2}, 1}, d_Theta_grads::Array{CuArray{Float32, 2}, 1}, d_bias_grads::Array{CuArray{Float32, 1}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0)
+function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CuArray{Float32, 1}, d_a::Array{CuArray{Float32, 2}, 1}, d_tanh_grad_z::Array{CuArray{Float32, 2}, 1}, d_deltas::Array{CuArray{Float32, 2}, 1}, d_Theta_grads::Array{CuArray{Float32, 2}, 1}, d_bias_grads::Array{CuArray{Float32, 1}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0; costFunc = "absErr")
 
 	num_hidden = length(hidden_layers)
+
+	if contains(costFunc, "Log")
+		assert(length(d_a[end]) == 2*length(d_y))
+	else
+		assert(length(d_a[end]) == length(d_y))
+	end
+
+	#define size of output data separately from output layer
+	n = size(d_y, 2)
+
 
 	if num_hidden > 0
 		if lambda > 0.0f0
@@ -171,7 +196,10 @@ function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array
 		CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
 
-	run_kernel(kernels[2], m, output_layer_size, d_a[end], d_y, d_deltas[end])
+	#launch across output data size rather than output layer size
+	run_kernel(costFuncDerivKs[costFunc], m, n, d_a[end], d_y, d_deltas[end])
+
+	#run_kernel(kernels[2], m, output_layer_size, d_a[end], d_y, d_deltas[end])
 	#CUDArt.launch(kernels[2], blocks(m, 1), threads, (m, output_layer_size, d_a[end], d_y, d_deltas[end]))
 
 
@@ -201,7 +229,16 @@ function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array
 end
 
 
-function nnCostFunctionNOGRAD(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CuArray{Float32, 2}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0)
+function nnCostFunctionNOGRAD(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CuArray{Float32, 2}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0; costFunc = "absErr")
+
+	if contains(costFunc, "Log")
+		assert(length(d_a[end]) == 2*length(d_y))
+	else
+		assert(length(d_a[end]) == length(d_y))
+	end
+
+	#define size of output data separately from output layer
+	n = size(d_y, 2)
 
 	#dropout scale factor
 	F = (1.0f0 - D)
@@ -240,7 +277,10 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases:
 		CUBLAS.gemm!('N', 'T', F, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
 
-	CUBLAS.axpy!(output_layer_size*m, -1.0f0, d_y, 1, d_a[end], 1)
+	#launch across output data size rather than output layer size
+	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_y)
+
+	#CUBLAS.axpy!(output_layer_size*m, -1.0f0, d_y, 1, d_a[end], 1)
 
 	CUBLAS.asum(d_a[end])/m
 end

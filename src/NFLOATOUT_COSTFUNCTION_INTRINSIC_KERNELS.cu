@@ -158,6 +158,151 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		
 		}
 	}
+
+	__global__ void sqErr(int N, int M, float *A, float *Y)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			float tmp = __fsub_rn(A[index], Y[index]);
+			A[index] = __fmul_rn(tmp, tmp);
+			// A[index] = (A[index]-Y[index])^2
+		}
+	}
+
+	__global__ void absErr(int N, int M, float *A, float *Y)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			A[index] = fabsf(__fsub_rn(A[index], Y[index]));
+			// A[index] = abs(A[index]-Y[index])
+		}
+	}
+
+	__global__ void sqErrDeriv(int N, int M, float *A, float *Y, float *out)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			out[index] = __fmul_rn(2.0, __fsub_rn(A[index], Y[index]));
+			// Out[index] = 2*(A[index] - Y[index])
+		}
+	}
+
+	__global__ void absErrDeriv(int N, int M, float *A, float *Y, float *out)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			out[index] = copysignf(1.0, __fsub_rn(A[index], Y[index]));
+		}
+	}
+
+	__global__ void normLogErr(int N, int M, float *A, float *Y)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		int L = N*M;
+		
+		if (i < N && j < M)
+		{
+			// A2 in this case is stored in the doubled rows of A, the length of A is 
+			// doublt that of Y 
+			float a = __expf(__fmul_rn(2.0, A[index+L]));
+			A[index] = __fmul_rn(a, __fmaf_rn(0.5, __fmul_rn(Y[index], Y[index]), __fsub_rn(__fmul_rn(0.5, __fmul_rn(A[index], A[index])),  __fmul_rn(A[index], Y[index]))));
+			A[index+L] = __fsub_rn(0.9189385332, A[index+L]); // stick final sum factor in 2nd part of A so when it sums to total the cost will be correct
+			// A[index] = a*(A[index]*(0.5*A[index] - Y[index]) + 0.5*Y[index]*Y[index]);
+			// A[index+L] = __fsub_rn(0.9189385332, A[index+L]);
+		}
+	}
+
+	__global__ void normLogDeriv(int N, int M, float *A, float *Y, float *out)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		int L = N*M;
+		
+		if (i < N && j < M)
+		{
+			// A2 in this case is stored in the doubled rows of A, the length of A is 
+			// doublt that of Y, out is the same length as A and will store both parts of the derivative 
+			float a = __expf(__fmul_rn(2.0, A[index+L]));
+			float b = __fsub_rn(A[index], Y[index]);
+			out[index] = __fmul_rn(b, a);
+			out[index+L] = __fsub_rn(__fmul_rn(out[index], b), 1.0);
+		}
+	}
+
+
+	__global__ void cauchyLogErr(int N, int M, float *A, float *Y)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		int L = N*M;
+		
+		if (i < N && j < M)
+		{
+			// A2 in this case is stored in the doubled rows of A, the length of A is 
+			// doublt that of Y 
+			float a = __expf(A[index+L]);
+			A[index] = __fmul_rn(fabsf(__fsub_rn(A[index], Y[index])), a);
+			A[index +L] = -__logf(__fmul_rn(0.5, a)); // stick final sum factor in 2nd part of A so when it sums to total the cost will be correct
+		}
+	}
+
+	__global__ void cauchyLogDeriv(int N, int M, float *A, float *Y, float *out)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		int L = N*M;
+		
+		if (i < N && j < M)
+		{
+			float a = __expf(A[index+L]);
+			if (A[index] > Y[index])
+			{
+				out[index] = a;
+			}
+			else if (A[index] < Y[index])
+			{
+				out[index] = -a;
+			}
+			else
+			{
+				out[index] = 0.0;
+			}
+
+			out[index+L] = __fmaf_rn(a, fabsf(__fsub_rn(A[index],  Y[index])), -1.0);
+			// A2 in this case is stored in the doubled rows of A, the length of A is 
+			// doublt that of Y, out is the same length as A and will store both parts of the derivative 
+		}
+	}
+
 	
 		__global__ void finishAdvX(int N, int M, float *X, float *advX)
     {	

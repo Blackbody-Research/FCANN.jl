@@ -1091,7 +1091,7 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr")
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = readInput(name)
 
@@ -1124,19 +1124,22 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
 	(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc)
 
-	if O == 1
+	if (O == 1) & writeFiles
 		if contains(costFunc, "Log")
-			writecsv(string(ID, "_predictionScatter_", filename), [["Test Set Prediction Value" "Test Set Prediction Range" "Test Set Output"]; [outTest Ytest]])
+			writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [["Test Set Prediction Value" "Test Set Prediction Range" "Test Set Output"]; [outTest Ytest]])
 		else
-			writecsv(string(ID, "_predictionScatter_", filename), [["Test Set Prediction Value" "Test Set Output"]; [outTest Ytest]])
+			writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [["Test Set Prediction Value" "Test Set Output"]; [outTest Ytest]])
 		end
 	end
 
-	writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
-	writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
-	writecsv(string(ID, "_performance_", filename, ".csv"), [["Train Cost", "Test Cost"] [Jtrain, Jtest]])
-	
-	writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
+	if writeFiles
+		writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
+		writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
+		writecsv(string(ID, "_performance_", filename, ".csv"), [["Train Cost", "Test Cost"] [Jtrain, Jtest]])
+		
+		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
+	end
+
 	(record, T, B, Jtrain, outTrain, bestCost)
 end
 
@@ -1180,7 +1183,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	if writeFiles
 		writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
 		writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
-		writecsv(string(ID, "_performance_", filename, ".csv"), ["Cost", Jtrain,])
+		writecsv(string(ID, "_performance_", filename, ".csv"), ["Cost", Jtrain])
 		
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end

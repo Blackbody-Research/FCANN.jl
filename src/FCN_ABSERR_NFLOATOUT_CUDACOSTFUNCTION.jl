@@ -282,7 +282,9 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases:
 
 	#CUBLAS.axpy!(output_layer_size*m, -1.0f0, d_y, 1, d_a[end], 1)
 
-	CUBLAS.asum(d_a[end])/m
+	#changed from absolute sum to regular sum because the actual error values are stored in d_a[end]
+	@fastmath sum(Array{Float32, 2}(d_a[end]))/m
+	#CUBLAS.asum(d_a[end])/m
 end
 
 # function nnCostFunctionAdv(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Array{Int64, 1}, m::Int64, d_ones::CuArray{Float32, 1}, d_a::Array{CuArray{Float32, 2}, 1}, d_tanh_grad_z::Array{CuArray{Float32, 2}, 1}, d_deltas::Array{CuArray{Float32, 2}, 1}, d_Theta_grads::Array{CuArray{Float32, 2}, 1}, d_bias_grads::Array{CuArray{Float32, 1}, 1}, d_advX::CuArray{Float32, 2}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, blocks::Function, threads::Tuple{Int64, Int64}, kernels)

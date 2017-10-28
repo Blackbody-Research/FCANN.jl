@@ -36,6 +36,8 @@ filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.0_L2_1.0_max
 
 rm(string("1_multiParams_", filename, ".bin"))
 rm(string("1_multiPerformance_", filename, ".csv"))
+rm(string("1_predictionScatterTrain_", filename, ".csv"))
+rm(string("1_predictionScatterTest_", filename, ".csv"))
 
 
 # Remove generated files
@@ -44,22 +46,24 @@ rm("Xtest_test.csv")
 rm("ytrain_test.csv")
 rm("ytest_test.csv")
 
-filename = string(name, "_10_input_", [], "_hidden_2_output_0.0_L2_Inf_maxNorm_0.002_alpha_ADAMAX", backend, "_absErr")
-rm(string("1_costRecord_", filename, ".csv"))
-rm(string("1_timeRecord_", filename, ".csv"))
-rm(string("1_performance_", filename, ".csv"))
-rm(string("1_params_", filename, ".bin"))
+# filename = string(name, "_10_input_", [], "_hidden_2_output_0.0_L2_Inf_maxNorm_0.002_alpha_ADAMAX", backend, "_absErr")
+# rm(string("1_costRecord_", filename, ".csv"))
+# rm(string("1_timeRecord_", filename, ".csv"))
+# rm(string("1_performance_", filename, ".csv"))
+# rm(string("1_params_", filename, ".bin"))
 
 filename = string(name, "_10_input_", [2, 2], "_hidden_2_output_0.0_L2_Inf_maxNorm_0.002_alpha_ADAMAX", backend, "_absErr")
 rm(string("1_costRecord_", filename, ".csv"))
 rm(string("1_timeRecord_", filename, ".csv"))
 rm(string("1_performance_", filename, ".csv"))
+rm(string("1_predictionScatterTest_", filename, ".csv"))
+rm(string("1_predictionScatterTrain_", filename, ".csv"))
 rm(string("1_params_", filename, ".bin"))
 
-rm(string("2_costRecord_", filename, ".csv"))
-rm(string("2_timeRecord_", filename, ".csv"))
-rm(string("2_performance_", filename, ".csv"))
-rm(string("2_params_", filename, ".bin"))
+# rm(string("2_costRecord_", filename, ".csv"))
+# rm(string("2_timeRecord_", filename, ".csv"))
+# rm(string("2_performance_", filename, ".csv"))
+# rm(string("2_params_", filename, ".bin"))
 
 rm("testParams1")
 rm("testParams2")

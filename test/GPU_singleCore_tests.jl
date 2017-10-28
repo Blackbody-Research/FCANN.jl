@@ -64,7 +64,7 @@ else
 
     hidden = [10, 10]
     println("Training with ", hidden, " hidden layers")
-    record, T, B = fullTrain(name, 10, 1024, hidden, 0.0f0, Inf, 0.0001f0, 0.1f0, 1,writeFiles=false)
+    record, T, B = fullTrain(name, 10, 1024, hidden, 0.0f0, Inf, 0.0001f0, 0.1f0, 1)
     @test(record[end] < record[1])
     println("TEST PASSED")
     println()
@@ -83,11 +83,13 @@ else
     # rm(string("1_performance_", filename, ".csv"))
     # rm(string("1_params_", filename, ".bin"))
 
-    # filename = string(name, "_10_input_", hidden, "_hidden_2_output_0.0_L2_Inf_maxNorm_0.0001_alpha_ADAMAX", backend, "_absErr")
-    # rm(string("1_costRecord_", filename, ".csv"))
-    # rm(string("1_timeRecord_", filename, ".csv"))
-    # rm(string("1_performance_", filename, ".csv"))
-    # rm(string("1_params_", filename, ".bin"))
+    filename = string(name, "_10_input_", hidden, "_hidden_2_output_0.0_L2_Inf_maxNorm_0.0001_alpha_ADAMAX", backend, "_absErr")
+    rm(string("1_costRecord_", filename, ".csv"))
+    rm(string("1_timeRecord_", filename, ".csv"))
+    rm(string("1_performance_", filename, ".csv"))
+    rm(string("1_predictionScatterTrain_", filename, ".csv"))
+    rm(string("1_predictionScatterTest_", filename, ".csv"))
+    rm(string("1_params_", filename, ".bin"))
 
     # rm(string("2_costRecord_", filename, ".csv"))
     # rm(string("2_timeRecord_", filename, ".csv"))

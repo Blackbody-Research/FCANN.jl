@@ -40,9 +40,9 @@ end
 function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = if binInput
-		readInput(name)
-	else
 		readBinInput(name)
+	else
+		readInput(name)
 	end
 
 	M = size(X, 2)

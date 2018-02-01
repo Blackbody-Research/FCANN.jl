@@ -60,6 +60,17 @@ function writeTestData(name, M, O)
     writecsv(string("ytrain_", name, ".csv"), Y)
     writecsv(string("ytest_", name, ".csv"), Ytest)
 end
+
+function writeBinData(name, M, O)
+    X = randn(Float32, 100000, M)
+    Y = randn(Float32, 100000, O)
+    Xtest = randn(Float32, 10000, M)
+    Ytest = randn(Float32, 10000, O)
+    writeArray(X, string("Xtrain_", name, ".bin"))
+    writeArray(Xtest, string("Xtest_", name, ".bin"))
+    writeArray(Y, string("ytrain_", name, ".bin"))
+    writeArray(Ytest, string("ytest_", name, ".bin"))
+end
 println("Testing full ANN train with test data")
 println("--------------------------------------")
 name = "test"
@@ -67,9 +78,16 @@ M = 10
 O = 2
 srand(1234)
 writeTestData(name, M, O)
+writeBinData(name, M, O)
 
 println("Training with 0 hidden layers")
 record, T, B = fullTrain(name, 150, 1024, [], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false)
+@test(record[end] < record[1])
+println("TEST PASSED")
+println()
+
+println("Training with 0 hidden layers and binary input read")
+record, T, B = fullTrain(name, 150, 1024, [], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, binInput = true)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()

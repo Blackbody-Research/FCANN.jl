@@ -141,6 +141,21 @@ function writeParams(params::Array{Tuple{Array{Array{Float32,2},1},Array{Array{F
 	close(f)
 end
 
+function writeArray(input::Array{Float32,2}, filename::String)
+#write a Float32 array in binary representation to file.  There is a leading set of integers which will help
+#the read function determine how to reconstruct the array.  The encoding is as follows: first value N indicates
+#how many rows are in the array.  The second value M indicates how many columns are in the array.  All of the
+#following lines are the data.
+	f = open(filename, "a")
+	(N, M) = size(input)
+	write(f, N)
+	write(f, M)
+	if N*M != 0
+		write(f, input)
+	end
+	close(f)
+end
+
 function readBinParams(filename::String)
 #read parameters in binary form from a file.  File may contain more than one
 #set of parameters in general. 
@@ -176,3 +191,30 @@ function readBinParams(filename::String)
 	end
 	return out
 end
+
+function readBinArray(filename::String)
+#read array in binary form from a file.  
+	f = open(filename)
+	#get length of params array
+	N = read(f, Int64)
+	M = read(f, Int64)
+	println(string("Got the following array dimensions: ", N, " rows ", M, " columns"))
+	out = read(f, Float32, N, M)
+end
+
+function readInput(name)
+	X = Float32.(readcsv(string("Xtrain_", name, ".csv")))
+	Xtest = Float32.(readcsv(string("Xtest_", name, ".csv")))
+	Y = Float32.(readcsv(string("ytrain_", name, ".csv")))
+	Ytest = Float32.(readcsv(string("ytest_", name, ".csv")))
+	(X, Xtest, Y, Ytest)
+end
+
+function readBinInput(name)
+	X = readBinArray(string("Xtrain_", name, ".bin"))
+	Xtest = readBinArray(string("Xtest_", name, ".bin"))
+	Y = readBinArray(string("ytrain_", name, ".bin"))
+	Ytest = readBinArray(string("ytest_", name, ".bin"))
+	(X, Xtest, Y, Ytest)
+end
+

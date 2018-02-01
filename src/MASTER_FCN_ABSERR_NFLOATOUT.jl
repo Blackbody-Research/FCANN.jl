@@ -37,9 +37,13 @@ function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "
 	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc)
 end
 
-function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "absErr")
+function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
+	X, Xtest, Y, Ytest = if binInput
+		readInput(name)
+	else
+		readBinInput(name)
+	end
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -88,11 +92,14 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 	end
 end
 
-function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0)
+function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0; binInput = false)
 #run arch eval but with a sampling of columns cols from the training set and test set
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = length(cols)
 	O = size(Y, 2)
 
@@ -139,10 +146,13 @@ end
 
 #train a network with a variable number of layers for a given target number
 #of parameters.
-function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha = .002f0, R = 0.1f0, printProg = false, costFunc = "absErr")
+function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha = .002f0, R = 0.1f0, printProg = false, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -205,10 +215,13 @@ end
 #floats which list the training hyperparameters to use.  Optionally lambda and c can be set as keyword values 
 #and are the L2 and max norm regularization constants respectively which by default are set to 0 and Inf which 
 #results in no regularization.
-function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0, costFunc = "absErr")
+function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -815,10 +828,13 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 end
 
 
-function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout = 0.0f0, lambda = 0.0f0, c = Inf, costFunc = "absErr")
+function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout = 0.0f0, lambda = 0.0f0, c = Inf, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -891,10 +907,13 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 	end
 end
 
-function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0, costFunc = "absErr")
+function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -945,10 +964,13 @@ end
 #[4, 4] would indicate a network with two hidden layers each with 4 neurons.  lambdaList is an array of 32 bit
 #floats which list the training L2 Reg hyperparameters to use.  alpha is the alpha hyper parameter for the ADAMAX 
 #training algorithm. 
-function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFunc = "absErr")
+function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -998,10 +1020,13 @@ end
 #[4, 4] would indicate a network with two hidden layers each with 4 neurons.  cList is an array of 32 bit
 #floats which list the training max norm hyperparameters to use.  alpha is the alpha hyper parameter for the ADAMAX 
 #training algorithm. 
-function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0, costFunc = "absErr")
+function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -1055,10 +1080,13 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 	end
 end
 
-function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc = "absErr")
+function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	M = size(X, 2)
 	O = size(Y, 2)
 
@@ -1122,9 +1150,13 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -1227,9 +1259,13 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	(record, T, B, Jtrain, outTrain, bestCost)
 end
 
-function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; dropout = 0.0f0, printProg = false, costFunc = "absErr")
+function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 
 	(N, M) = size(X)
 	O = size(Y, 2)
@@ -1358,9 +1394,13 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	writecsv(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
 end
 
-function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr")
+function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 
 	# meanY = Float32.(readcsv(string("invY_values_", name, ".csv"))[2:end, 1])
 	# varY = Float32.(readcsv(string("invY_values_", name, ".csv"))[2:end, 2])
@@ -1604,9 +1644,13 @@ end
 
 #train a network with a variable number of layers for a given target number
 #of parameters.
-function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4, 6, 8, 10, 12, 14, 16], dropout = 0.0f0, costFunc = "absErr")
+function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4, 6, 8, 10, 12, 14, 16], dropout = 0.0f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -1680,10 +1724,13 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	end
 end
 
-function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0.01f0, c0 = 1.0f0, num = 16, dropout = 0.0f0, printProg = false, costFunc="absErr")
+function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0.01f0, c0 = 1.0f0, num = 16, dropout = 0.0f0, printProg = false, costFunc="absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = readInput(name)
-
+	X, Xtest, Y, Ytest = if binInput
+		readBinInput(name)
+	else
+		readInput(name)
+	end
 	(N, M) = size(X)
 	O = size(Y, 2)
 	

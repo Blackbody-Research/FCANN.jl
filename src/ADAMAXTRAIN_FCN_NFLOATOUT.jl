@@ -193,14 +193,6 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 	err = sum(delt)/m
 end
 
-function readInput(name)
-	X = map(Float32, readcsv(string("Xtrain_", name, ".csv")))
-	Xtest = map(Float32, readcsv(string("Xtest_", name, ".csv")))
-	Y = map(Float32, readcsv(string("ytrain_", name, ".csv")))
-	Ytest = map(Float32, readcsv(string("ytest_", name, ".csv")))
-	(X, Xtest, Y, Ytest)
-end
-
 function updateM!(beta1, mT, mB, TG, BG)
 	b2 = 1.0f0 - beta1
 	for i = 1:length(TG)

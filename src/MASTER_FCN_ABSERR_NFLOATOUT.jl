@@ -48,10 +48,16 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 	M = size(X, 2)
 	O = size(Y, 2)
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "Log")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_", costFunc, ".csv")
 	# BLAS.set_num_threads(0)
 
-	header = ["Layers" "Num Params" "Train Error" "Test Error"]
+	header = ["Layers" "Num Params" "Train Error" "Test Error" "Train Error 2" "Test Error 2"]
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden = hiddenList
 		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(hiddenList))))))
@@ -75,8 +81,19 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, costFunc = costFunc)
 
+		Jtrain2 = if costFunc2 != costFunc
+			calcError(outTrain[:, 1:O], Y, costFunc = costFunc2)
+		else
+			Jtrain
+		end
+		Jtest2 = if costFunc2 != costFunc
+			calcError(outTest[:, 1:O], Ytest, costFunc = costFunc2)
+		else
+			Jtrain
+		end
+
 		numParams = length(theta2Params(B, T))
-		[length(hidden) numParams Jtrain Jtest]
+		[length(hidden) numParams Jtrain Jtest Jtrain2 Jtest2]
 	end)
 	
 	
@@ -85,10 +102,16 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		writecsv(f, body)
 		close(f)
 	else
-		Xtrain_lin = [ones(size(Y, 1)) X]
-		Xtest_lin = [ones(size(Ytest, 1)) Xtest]
+		Xtrain_lin = [ones(Float32, size(Y, 1)) X]
+		Xtest_lin = [ones(Float32, size(Ytest, 1)) Xtest]
 		betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
-		line1 = [0 M+1 mean(abs.(Xtrain_lin*betas .- Y)) mean(abs.(Xtest_lin*betas .- Ytest))]
+		linRegTrainErr = calcError(Xtrain_lin*betas, Y, costFunc = costFunc2)
+		linRegTestErr = calcError(Xtest_lin*betas, Ytest, costFunc = costFunc2)
+		line1 = if costFunc2 == costFunc
+			[0 M+1 linRegTrainErr linRegTestErr linRegTrainErr linRegTestErr]
+		else
+			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
+		end
 		writecsv(string("archEval_", filename), [header; line1; body])
 	end
 end

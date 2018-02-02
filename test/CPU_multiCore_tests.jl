@@ -9,9 +9,13 @@ archEval(name, 100, 1024, [[1], [2], [3], [2, 2]])
 println("TEST PASSED")
 println()
 
-
+println("Testing archEval with normLog cost function")
+archEval(name, 100, 1024, [[1], [2], [3], [2, 2]], costFunc = "normLog")
+println("TEST PASSED")
+println()
 
 rm(string("archEval_", name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_absErr.csv"))
+rm(string("archEval_", name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_normLog.csv"))
 
 println("Testing evalLayers")
 evalLayers(name, 100, 1024, [100, 200, 400, 800], layers=[2, 4, 6])

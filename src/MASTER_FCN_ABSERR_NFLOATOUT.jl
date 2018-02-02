@@ -79,15 +79,16 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		[length(hidden) numParams Jtrain Jtest]
 	end)
 	
-	Xtrain_lin = [ones(size(Y, 1)) X]
-	Xtest_lin = [ones(size(Ytest, 1)) Xtest]
-	betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
-	line1 = [0 M+1 mean(abs.(Xtrain_lin*betas .- Y)) mean(abs.(Xtest_lin*betas .- Ytest))]
+	
 	if isfile(string("archEval_", filename))
 		f = open(string("archEval_", filename), "a")
 		writecsv(f, body)
 		close(f)
 	else
+		Xtrain_lin = [ones(size(Y, 1)) X]
+		Xtest_lin = [ones(size(Ytest, 1)) Xtest]
+		betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
+		line1 = [0 M+1 mean(abs.(Xtrain_lin*betas .- Y)) mean(abs.(Xtest_lin*betas .- Ytest))]
 		writecsv(string("archEval_", filename), [header; line1; body])
 	end
 end

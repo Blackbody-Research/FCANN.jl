@@ -107,12 +107,51 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
 		linRegTrainErr = calcError(Xtrain_lin*betas, Y, costFunc = costFunc2)
 		linRegTestErr = calcError(Xtest_lin*betas, Ytest, costFunc = costFunc2)
+		(naiveTrainErr1, naiveTrainErr2) = if contains(costFunc2, "sq")
+			err2 = calcError(fill(mean(Y), length(Y), 1), Y, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)
+			else
+				err2
+			end
+			(err1, err2)
+		else
+			u = median(Y)
+			b = mean(abs.(Y .- u))
+			err2 = calcError(fill(u, length(Y), 1), Y, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([u -0.5*log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)
+			else
+				err2
+			end
+			(err1, err2)
+		end
+		(naiveTestErr1, naiveTestErr2) = if contains(costFunc2, "sq")
+			err2 = calcError(fill(mean(Y), length(Ytest), 1), Ytest, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+			else
+				err2
+			end
+			(err1, err2)
+		else
+			u = median(Y)
+			b = mean(abs.(Y .- u))
+			err2 = calcError(fill(u, length(Ytest), 1), Ytest, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([u -0.5*log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+			else
+				err2
+			end
+			(err1, err2)
+		end
+		line0 = [0 0 naiveTrainErr1 naiveTestErr1 naiveTrainErr2 naiveTestErr2]
 		line1 = if costFunc2 == costFunc
 			[0 M+1 linRegTrainErr linRegTestErr linRegTrainErr linRegTestErr]
 		else
 			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
 		end
-		writecsv(string("archEval_", filename), [header; line1; body])
+		writecsv(string("archEval_", filename), [header; line0; line1; body])
 	end
 end
 

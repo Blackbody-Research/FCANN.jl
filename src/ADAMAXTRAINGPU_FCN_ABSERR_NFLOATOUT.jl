@@ -52,6 +52,147 @@ function GPU2Host(hostvars, GPUvars)
 	end
 end
 
+function calcError(modelOut::CuArray{Float32, 2}, dataOut::CuArray{Float32, 2}; costFunc = "absErr")
+	(m, n) = size(dataOut)
+	
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	#array to store error values per example
+	if costFunc2 == costFunc
+		delt = deepcopy(modelOut)
+
+		if (length(modelOut) == length(dataOut))
+			run_kernel(costFuncKs[costFunc], m, n, delt, dataOut)
+		else
+			error("output layer does not match data")
+		end
+
+		err = sum(delt)/m
+	else
+		delt1 = deepcopy(dataOut)
+		delt2 = deepcopy(dataOut)
+		if (length(modelOut) == 2*length(dataOut))
+			run_kernel(costFuncKs[costFunc], m, n, delt1, dataOut)
+			run_kernel(costFuncKs[costFunc2], m, n, delt2, dataOut)
+		else
+			error("output layer does not match data")
+		end
+		err1 = sum(Array{Float32, 2}(delt1))/m
+		err2 = sum(Array{Float32, 2}(delt2[:, 1:n]))/m #needed b/c only the first n columns of delt2 contain valid errors
+		(err1, err2)
+	end
+
+end
+
+function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	# if costFunc != "absErr"
+	# 	error("Only the absErr cost function exists for the GPU backend")
+	# end
+
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+	
+	num_hidden = length(T) - 1
+	hidden_layers = if num_hidden > 0
+		map(p -> length(p), B[1:num_hidden])
+	else
+		Int64.([])
+	end
+
+	(m, input_layer_size) = size(input_data)
+	output_layer_size = if contains(costFunc, "Log")
+		2*n
+	else
+		n
+	end
+
+	#transfer parameters to GPU
+	d_Thetas = Array{CuArray{Float32, 2}}(length(T))
+	d_Biases = Array{CuArray{Float32, 1}}(length(T))
+
+	for i = 1:length(T)
+		d_Thetas[i] = CuArray(T[i])
+		d_Biases[i] = CuArray(B[i])
+	end
+
+	d_X = CuArray(input_data)
+	d_y - CuArray(output_data)
+
+	d_out = predict(d_Thetas, d_Biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
+
+	errs = calcError(d_out, d_y, costFunc = costFunc)
+
+	return (Array{Float32, 2}(d_out), errs)
+end
+
+function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	#Setup some useful variables
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+	
+	num_hidden = length(multiParams[1][1]) - 1
+	hidden_layers = if num_hidden > 0
+		map(p -> length(p), multiParams[1][2][1:num_hidden])
+	else
+		Int64.([])
+	end
+
+	(m, input_layer_size) = size(input_data)
+	output_layer_size = if contains(costFunc, "Log")
+		2*n
+	else
+		n
+	end
+
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	d_X = CuArray(input_data)
+	d_y = CuArray(output_data)
+
+	multiOutGPU = if nprocs() < 3 
+		predictMulti(multiParams, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
+	elseif length(multiParams) > nprocs() - 1
+		partitionInds = rem.(1:length(multiParams), nprocs()-1)+1
+		multiParamsPartition = [multiParams[find(i -> i == n, partitionInds)] for n in 1:nprocs()-1]
+		reduce(vcat, pmap(a -> predictMulti(a, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout), multiParamsPartition))
+	else
+		pmap(a -> predict(a[1], a[2], d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout), multiParams) 
+	end
+
+	multiOut = Array{Float32, 2}.(multiOutGPU)
+	out = if contains(costFunc, "Log")
+		out1 = mapreduce(a -> Array{Float32, 2}(a)[:, 1:n], +, multiOut)/length(multiOut)
+		out2 = log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, n+1:2*n]), +, multiOut)/length(multiOut)))
+		[out1 out2]
+	else
+		mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+	end
+
+	outErrEst = if contains(costFunc, "Log")
+		mapreduce(a -> abs.([a[:, 1:n] exp.(-a[:, n+1:2*n])] .- [out[:, 1:n] exp.(-out[:, n+1:2*n])]), +, multiOut)/length(multiOut)
+	else
+		mapreduce(a -> abs.(a .- out), +, multiOut)/length(multiOut)
+	end
+
+	errs = calcError(out, output_data, costFunc = costFunc)
+	
+	return (multiOut, out, errs, outErrEst)
+end
+
 function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	
 	# if costFunc != "absErr"
@@ -179,98 +320,6 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	GPUErr = norm(numGrad-funcGrad)/norm(numGrad + funcGrad)
 	println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
 	return GPUErr
-end
-
-function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
-#calculate network output given input data and a set of network parameters.
-#calculation is performed on the GPU and then returned to system memory
-	# if costFunc != "absErr"
-	# 	error("Only the absErr cost function exists for the GPU backend")
-	# end
-
-	#Setup some useful variables
-	m = size(input_data, 1)
-	n = size(output_data, 2)
-	
-	num_hidden = length(T) - 1
-	hidden_layers = if num_hidden > 0
-		map(p -> length(p), B[1:num_hidden])
-	else
-		Int64.([])
-	end
-
-	(m, input_layer_size) = size(input_data)
-	output_layer_size = if contains(costFunc, "Log")
-		2*n
-	else
-		n
-	end
-
-	#transfer parameters to GPU
-	d_Thetas = Array{CuArray{Float32, 2}}(length(T))
-	d_Biases = Array{CuArray{Float32, 1}}(length(T))
-
-	for i = 1:length(T)
-		d_Thetas[i] = CuArray(T[i])
-		d_Biases[i] = CuArray(B[i])
-	end
-
-	d_X = CuArray(input_data)
-
-	d_out = predict(d_Thetas, d_Biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
-
-	out = Array(d_out)
-
-	#array to store error values per example
-	delt = similar(output_data)
-
-	if (contains(costFunc, "Log")) & (length(out) == 2*length(output_data))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](out[i], out[i+(m*n)], output_data[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	elseif !(contains(costFunc, "Log")) & (length(out) == length(output_data))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](out[i], output_data[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	else
-		error("output layer does not match data")
-	end
-
-	err = sum(delt)/m
-
-	return (out, err)
-end
-
-function calcOutputGPU(input_data, T, B; dropout = 0.0f0)
-#calculate network output given input data and a set of network parameters.
-#calculation is performed on the GPU and then returned to system memory
-	num_hidden = length(T) - 1
-	hidden_layers = if num_hidden > 0
-		map(p -> length(p), B[1:num_hidden])
-	else
-		Int64.([])
-	end
-	(m, input_layer_size) = size(input_data)
-	output_layer_size = size(T[end], 1)
-
-	#transfer parameters to GPU
-	d_Thetas = Array{CuArray{Float32, 2}}(length(T))
-	d_Biases = Array{CuArray{Float32, 1}}(length(T))
-
-	for i = 1:length(T)
-		d_Thetas[i] = CuArray(T[i])
-		d_Biases[i] = CuArray(B[i])
-	end
-
-	d_X = CuArray(input_data)
-
-	d_out = predict(d_Thetas, d_Biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
-
-	out = Array(d_out)
-
-	return out
 end
 
 function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, dropout = 0.0f0, costFunc="absErr")
@@ -452,7 +501,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
+		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, 0.0f0, costFunc = costFunc)
 	end
 	currentOut = currentOut/numBatches
 	
@@ -500,7 +549,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 		if epoch%period == 0
 			currentOut = 0.0f0
 			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
+				currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, 0.0f0, costFunc = costFunc)
 			end
 			currentOut = currentOut/numBatches
 			
@@ -545,7 +594,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
+		currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, 0.0f0, costFunc = costFunc)
 	end
 	currentOut = currentOut/numBatches
 

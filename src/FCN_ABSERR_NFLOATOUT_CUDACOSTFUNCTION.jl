@@ -88,7 +88,7 @@ function predict(d_Thetas, d_biases, d_X, m, input_layer_size, output_layer_size
 	num_hidden = l - 1
 
 	#dropout scale factor
-	F = 1.0f0 - D
+	# F = 1.0f0 - D
 
 	d_a = Array{CuArray{Float32, 2}}(l)
 	if num_hidden > 0
@@ -118,16 +118,71 @@ function predict(d_Thetas, d_biases, d_X, m, input_layer_size, output_layer_size
 
 		if num_hidden > 1
 			for i = 2:num_hidden
-				CUBLAS.gemm!('N', 'T', F, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				CUBLAS.gemm!('N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
 				run_kernel(kernelsNOGRAD[4], m, hidden_layers[i], d_a[i])
 				#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i])) 
 			end
 		end
 
-		CUBLAS.gemm!('N', 'T', F, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
 	synchronize()
 	return d_a[end]
+end
+
+function predictMulti(multiParams, d_X, m, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network
+#m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
+#hidden_layers = hidden layer vector
+	l = length(multiParams[1][1])
+	num_hidden = l - 1
+
+	#dropout scale factor
+	# F = 1.0f0 - D
+
+	d_a = Array{CuArray{Float32, 2}}(l)
+	if num_hidden > 0
+		for i = 1:l-1
+			d_a[i] = CuArray{Float32}(m, hidden_layers[i])
+		end
+	end
+	d_a[l] = CuArray{Float32}(m, output_layer_size)
+
+	[begin
+		d_Thetas = params[1]
+		d_biases = params[2]
+		if num_hidden > 0
+			for i = 1:num_hidden
+				run_kernel(kernelsNOGRAD[1], m, hidden_layers[i], d_a[i], d_biases[i])
+				#CUDArt.launch(kernelsNOGRAD[1], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_biases[i]))
+			end
+		end
+
+		#println(string("biases 3", round(float64(to_host(d_biases[3])), 6)))
+		run_kernel(kernelsNOGRAD[1], m, output_layer_size, d_a[end], d_biases[end])
+		#CUDArt.launch(kernelsNOGRAD[1], blocks(m, output_layer_size), threads, (m, output_layer_size, d_a[end], d_biases[end]))
+
+		CUBLAS.gemm!('N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+
+		if num_hidden > 0
+			run_kernel(kernelsNOGRAD[4], m, hidden_layers[1], d_a[1])
+			#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1])) 
+
+
+			if num_hidden > 1
+				for i = 2:num_hidden
+					CUBLAS.gemm!('N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+					run_kernel(kernelsNOGRAD[4], m, hidden_layers[i], d_a[i])
+					#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i])) 
+				end
+			end
+
+			CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		end
+		synchronize()
+		return copy(d_a[end])
+	end
+	for params in multiParams]
 end
 
 function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CuArray{Float32, 1}, d_a::Array{CuArray{Float32, 2}, 1}, d_tanh_grad_z::Array{CuArray{Float32, 2}, 1}, d_deltas::Array{CuArray{Float32, 2}, 1}, d_Theta_grads::Array{CuArray{Float32, 2}, 1}, d_bias_grads::Array{CuArray{Float32, 1}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0; costFunc = "absErr")
@@ -241,7 +296,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases:
 	n = size(d_y, 2)
 
 	#dropout scale factor
-	F = (1.0f0 - D)
+	# F = (1.0f0 - D)
 
 	num_hidden = length(hidden_layers)
 
@@ -268,13 +323,13 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases:
 
 		if num_hidden > 1
 			for i = 2:num_hidden
-				CUBLAS.gemm!('N', 'T', F, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				CUBLAS.gemm!('N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
 				run_kernel(kernelsNOGRAD[4], m, hidden_layers[i], d_a[i])
 				#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i])) 
 			end
 		end
 
-		CUBLAS.gemm!('N', 'T', F, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
 
 	#launch across output data size rather than output layer size

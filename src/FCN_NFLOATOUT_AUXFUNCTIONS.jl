@@ -48,20 +48,20 @@ function initializeParams(input_layer_size, hidden_layers, output_layer_size)
 	Thetas = Array{Matrix{Float32}}(num_hidden+1)
 	Biases = Array{Vector{Float32}}(num_hidden+1)
 	if num_hidden > 0
-		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) * input_layer_size^(-.5))
-		Biases[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5))
+		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) * input_layer_size^(-.5f0))
+		Biases[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5f0))
 		
 		if num_hidden > 1
 			for i = 2:num_hidden
-				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) * hidden_layers[i-1]^(-.5))
-				Biases[i] = map(Float32, randn(hidden_layers[i]) * hidden_layers[i-1]^(-.5))
+				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) * hidden_layers[i-1]^(-.5f0))
+				Biases[i] = map(Float32, randn(hidden_layers[i]) * hidden_layers[i-1]^(-.5f0))
 			end
 		end
-		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) * hidden_layers[num_hidden]^(-.5))
-		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) * hidden_layers[num_hidden]^(-.5))
+		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) * hidden_layers[num_hidden]^(-.5f0))
+		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) * hidden_layers[num_hidden]^(-.5f0))
 	else
-		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^-.5f0
-		Biases[1] = randn(Float32, output_layer_size)*input_layer_size^-0.5f0
+		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^(-.5f0)
+		Biases[1] = randn(Float32, output_layer_size)*input_layer_size^(-0.5f0)
 	end
 	return Thetas, Biases
 end

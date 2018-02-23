@@ -71,7 +71,7 @@ function calcError(modelOut::CuArray{Float32, 2}, dataOut::CuArray{Float32, 2}; 
 			error("output layer does not match data")
 		end
 
-		err = sum(delt)/m
+		err = sum(Array{Float32, 2}(delt))/m
 	else
 		delt1 = copy(modelOut)
 		delt2 = copy(modelOut)

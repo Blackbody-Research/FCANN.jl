@@ -63,7 +63,7 @@ function calcError(modelOut::CuArray{Float32, 2}, dataOut::CuArray{Float32, 2}; 
 
 	#array to store error values per example
 	if costFunc2 == costFunc
-		delt = deepcopy(modelOut)
+		delt = copy(modelOut)
 
 		if (length(modelOut) == length(dataOut))
 			run_kernel(costFuncKs[costFunc], m, n, delt, dataOut)
@@ -73,8 +73,8 @@ function calcError(modelOut::CuArray{Float32, 2}, dataOut::CuArray{Float32, 2}; 
 
 		err = sum(delt)/m
 	else
-		delt1 = deepcopy(dataOut)
-		delt2 = deepcopy(dataOut)
+		delt1 = copy(modelOut)
+		delt2 = copy(modelOut)
 		if (length(modelOut) == 2*length(dataOut))
 			run_kernel(costFuncKs[costFunc], m, n, delt1, dataOut)
 			run_kernel(costFuncKs[costFunc2], m, n, delt2, dataOut)

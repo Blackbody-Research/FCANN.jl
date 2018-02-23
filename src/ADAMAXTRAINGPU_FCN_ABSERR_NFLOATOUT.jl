@@ -160,14 +160,24 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		"absErr"
 	end
 
+	#transfer multiParams to GPU
+	multiParamsGPU = [begin
+		T = params[1]
+		B = params[2]
+		d_T = [CuArray(M) for M in T]
+		d_B = [CuArray(V) for V in B] 
+		(d_T, d_B)
+	end
+	for params in multiParams]	
+
 	d_X = CuArray(input_data)
 	d_y = CuArray(output_data)
 
 	multiOutGPU = if nprocs() < 3 
-		predictMulti(multiParams, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
+		predictMulti(multiParamsGPU, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
 	elseif length(multiParams) > nprocs() - 1
 		partitionInds = rem.(1:length(multiParams), nprocs()-1)+1
-		multiParamsPartition = [multiParams[find(i -> i == n, partitionInds)] for n in 1:nprocs()-1]
+		multiParamsPartition = [multiParamsGPU[find(i -> i == n, partitionInds)] for n in 1:nprocs()-1]
 		reduce(vcat, pmap(a -> predictMulti(a, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout), multiParamsPartition))
 	else
 		pmap(a -> predict(a[1], a[2], d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout), multiParams) 

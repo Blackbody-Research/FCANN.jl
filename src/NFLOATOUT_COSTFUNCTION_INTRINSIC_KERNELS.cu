@@ -46,8 +46,8 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		int index = j*N + i;
 
 		float c1 = __fdividef(2.0, 3.0);
-		float scaleFactor1 = __fdividef(1.7159, __fsub_rn(1.0, D))
-		float scaleFactor2 = __fdividef(-1.7159, __fsub_rn(1.0, D))
+		float scaleFactor1 = __fdividef(1.7159, __fsub_rn(1.0, D));
+		float scaleFactor2 = __fdividef(-1.7159, __fsub_rn(1.0, D));
 		
 		if (i < N && j < M) {
 			curandState_t state;	

@@ -123,7 +123,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 
 	d_X = CuArray(input_data)
-	d_y - CuArray(output_data)
+	d_y = CuArray(output_data)
 
 	d_out = predict(d_Thetas, d_Biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
 

@@ -104,8 +104,13 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	m = size(input_data, 1)
 	n = size(output_data, 2)
 
-	#leave 2 GB of memory left over
-	newMem = Int64(Sys.free_memory()) - (2*1024^3)
+	#leave 1 GB of memory left over except on apple systems where free memory is underreported
+	newMem = if is_apple()
+		Int64(Sys.free_memory())
+	else
+		Int64(Sys.free_memory()) - (1024^3)
+	end
+
 	maxB = getMaxBatchSize(T, B, newMem)
 	BLAS.set_num_threads(0)
 	
@@ -143,8 +148,16 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 
 	#if copying the input data will result in needing to break up the data into smaller batches to preserve system memory, then it isn't worth it
-	#account for copying input data memory into other workers while leaving 2 GB left over
-	availMem(w) = Int64(Sys.free_memory()) - (w * sizeof(input_data)) - (2*1024^3)
+	#account for copying input data memory into other workers while leaving 1 GB left over 
+	#except on apple systems where free memory is underreported
+	function availMem(w)
+		if is_apple()
+			Int64(Sys.free_memory()) - (w * sizeof(input_data))
+		else
+			Int64(Sys.free_memory()) - (w * sizeof(input_data)) - (1024^3)
+		end
+	end
+
 	calcMaxB(w) = getMaxBatchSize(multiParams[1][1], multiParams[1][2], availMem(w))
 	#create a vector of added workers that will still allow for large batch sizes
 	validProcCount = if nprocs() < 3
@@ -161,7 +174,11 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			println("Performing multi prediction on a single thread")
 		end
 		BLAS.set_num_threads(0)
-		newMem = Int64(Sys.free_memory()) - 2^9
+		newMem = if is_apple()
+			Int64(Sys.free_memory())
+		else
+			Int64(Sys.free_memory()) - (1024^3)
+		end
 		maxB = getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem)
 		if maxB == 0
 			println("Not enough memory for calculation, returning nothing")

@@ -104,16 +104,34 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	m = size(input_data, 1)
 	n = size(output_data, 2)
 
-	out = predict(T, B, input_data, dropout)
+	#leave 2 GB of memory left over
+	newMem = Int64(Sys.free_memory()) - (2*1024^3)
+	maxB = getMaxBatchSize(T, B, newMem)
+	BLAS.set_num_threads(0)
+	
+	if maxB == 0
+		println("Not enough memory for calculation, returning nothing")
+		return nothing
+	else
+		out = if maxB > m
+			predict(T, B, input_data, dropout)
+		else
+			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+			numBatches = ceil(Int64, m/maxB)
+			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+			out1 = predictBatches(T, B, batchInputs, dropout)
+			out2 = predict(T, B, view(input_data, (numBatches-1)*maxB+1:m, :), dropout)
+			[out1; out2]
+		end
 
-	errs = calcError(out, output_data, costFunc = costFunc)
-
-	return (out, errs)
+		errs = calcError(out, output_data, costFunc = costFunc)
+		gc()
+		return (out, errs)
+	end
 end
 
 function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
 #calculate network output given input data and a set of network parameters.
-#calculation is performed on the GPU and then returned to system memory
 	#Setup some useful variables
 	m = size(input_data, 1)
 	n = size(output_data, 2)
@@ -124,15 +142,56 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		"absErr"
 	end
 
-	multiOut = if nprocs() < 3 
-		predictMulti(multiParams, input_data, dropout)
-	elseif length(multiParams) > nprocs() - 1
-		partitionInds = rem.(1:length(multiParams), nprocs()-1)+1
-		multiParamsPartition = [multiParams[find(i -> i == n, partitionInds)] for n in 1:nprocs()-1]
-		reduce(vcat, pmap(a -> predictMulti(a, input_data, dropout), multiParamsPartition))
+	#if copying the input data will result in needing to break up the data into smaller batches to preserve system memory, then it isn't worth it
+	#account for copying input data memory into other workers while leaving 2 GB left over
+	availMem(w) = Int64(Sys.free_memory()) - (w * sizeof(input_data)) - (2*1024^3)
+	calcMaxB(w) = getMaxBatchSize(multiParams[1][1], multiParams[1][2], availMem(w))
+	#create a vector of added workers that will still allow for large batch sizes
+	validProcCount = if nprocs() < 3
+		[]
 	else
-		pmap(a -> predict(a[1], a[2], input_data, dropout), multiParams) 
+		find(a -> a > m, calcMaxB.(2:nprocs()-1)) 
 	end
+
+
+	multiOut = if isempty(validProcCount) 
+		if nprocs() > 2
+			println(string("Performing single threaded prediction because the limited available memory would require breaking input data into batches when copied to workers"))
+		else
+			println("Performing multi prediction on a single thread")
+		end
+		BLAS.set_num_threads(0)
+		newMem = Int64(Sys.free_memory()) - 2^9
+		maxB = getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem)
+		if maxB == 0
+			println("Not enough memory for calculation, returning nothing")
+			return nothing
+		else
+			if maxB > m	
+				predictMulti(multiParams, input_data, dropout)
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1e9), " gigabytes of memory"))
+				numBatches = ceil(Int64, m/maxB)
+				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				out1 = predictMultiBatches(multiParams, batchInputs, dropout)
+				out2 = predictMulti(multiParams, view(input_data, (numBatches-1)*maxB+1:m, :), dropout)
+				map((a, b) -> [a; b], out1, out2)
+			end
+		end
+	else
+		#value is the total number of parallel tasks that should be created to maximize batch size
+		numTasks = min(nprocs()-1, validProcCount[end] + 1)
+		println(string("Running multi prediction using ", numTasks, " parallel tasks"))
+		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs()-1, numTasks)))))
+		if length(multiParams) > numTasks
+			partitionInds = rem.(1:length(multiParams), numTasks)+1
+			multiParamsPartition = [multiParams[find(i -> i == n, partitionInds)] for n in 1:numTasks]
+			reduce(vcat, pmap(a -> predictMulti(a, input_data, dropout), multiParamsPartition))
+		else
+			pmap(a -> predict(a[1], a[2], input_data, dropout), multiParams) 
+		end
+	end
+
 
 	out = if contains(costFunc, "Log")
 		out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
@@ -149,7 +208,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 
 	errs = calcError(out, output_data, costFunc = costFunc)
-	
+	gc()
 	return (multiOut, out, errs, outErrEst)
 end
 
@@ -393,7 +452,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		println()
 		print_with_color(:green, STDOUT, "Beginning training with the following parameters:", bold=true)
 		println()
-		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
 		println("-------------------------------------------------------------------")
 	end
 
@@ -535,7 +594,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		currentTime = time()
 		#print status every 5 seconds
 		
-		if ((currentTime - lastReport) >= 5) & printProgress
+		if ((currentTime - lastReport) >= 5) & printProgress & printAnything
 			startEpoch = max(0, epoch-10)
 			#find average time per epoch over the last 10 epochs
 			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
@@ -574,16 +633,12 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
     if printAnything
-		if dropout == 0.0f0
-			println("-------------------------------------------------------------------")
-			print_with_color(:green, STDOUT, "Completed training with the following parameters: ", bold = true)
-			println()
-			println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
-		else
-			println(string("Completed training with dropout factor of ", dropout))
-			println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
-		end
-		print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds"), bold=true)
+		println("-------------------------------------------------------------------")
+		print_with_color(:green, STDOUT, "Completed training on CPU with the following parameters: ", bold = true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+	
+		print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds and ", N, " epochs"), bold=true)
 		println()	
 		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
 	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))

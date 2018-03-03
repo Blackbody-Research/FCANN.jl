@@ -82,7 +82,7 @@ function calcError(modelOut::CuArray{Float32, 2}, dataOut::CuArray{Float32, 2}; 
 			error("output layer does not match data")
 		end
 		err1 = sum(Array{Float32, 2}(delt1))/m
-		err2 = sum(Array{Float32, 2}(delt2[:, 1:n]))/m #needed b/c only the first n columns of delt2 contain valid errors
+		err2 = sum(Array{Float32, 2}(delt2)[:, 1:n])/m #needed b/c only the first n columns of delt2 contain valid errors
 		(err1, err2)
 	end
 
@@ -121,15 +121,32 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		d_Thetas[i] = CuArray(T[i])
 		d_Biases[i] = CuArray(B[i])
 	end
-
-	d_X = CuArray(input_data)
 	d_y = CuArray(output_data)
 
-	d_out = predict(d_Thetas, d_Biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
+	newMem = CUDAdrv.Mem.free() - (2*1024^3)
+	maxB = getMaxGPUBatchSize(T, B, newMem)
 
-	errs = calcError(d_out, d_y, costFunc = costFunc)
-
-	return (Array{Float32, 2}(d_out), errs)
+	if maxB == 0
+		println("Not enough GPU memory for calculation, returning nothing")
+		return nothing
+	else
+		(d_out, out) = if maxB > m 
+			d_X = CuArray(input_data)
+			
+			predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
+		else
+			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			numBatches = ceil(Int64, m/maxB)
+			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+			(d_out1, out1) = predictBatches(d_Thetas, d_Biases, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
+			(d_out2, out2) = predict(d_Thetas, d_Biases, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+			out3 = [out1; out2]
+			(CuArray(out3), out3)
+		end
+		errs = calcError(d_out, d_y, costFunc = costFunc)
+		gc()
+		return (out, errs)
+	end
 end
 
 function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
@@ -170,37 +187,46 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 	for params in multiParams]	
 
-	d_X = CuArray(input_data)
+	
 	d_y = CuArray(output_data)
 
-	multiOutGPU = if nprocs() < 3 
-		predictMulti(multiParamsGPU, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
-	elseif length(multiParams) > nprocs() - 1
-		partitionInds = rem.(1:length(multiParams), nprocs()-1)+1
-		multiParamsPartition = [multiParamsGPU[find(i -> i == n, partitionInds)] for n in 1:nprocs()-1]
-		reduce(vcat, pmap(a -> predictMulti(a, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout), multiParamsPartition))
-	else
-		pmap(a -> predict(a[1], a[2], d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout), multiParams) 
-	end
+	newMem = CUDAdrv.Mem.free() - (2*1024^3)
+	maxB = getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem)
 
-	multiOut = Array{Float32, 2}.(multiOutGPU)
-	out = if contains(costFunc, "Log")
-		out1 = mapreduce(a -> Array{Float32, 2}(a)[:, 1:n], +, multiOut)/length(multiOut)
-		out2 = log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, n+1:2*n]), +, multiOut)/length(multiOut)))
-		[out1 out2]
-	else
-		mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
-	end
-
-	outErrEst = if contains(costFunc, "Log")
-		mapreduce(a -> abs.([a[:, 1:n] exp.(-a[:, n+1:2*n])] .- [out[:, 1:n] exp.(-out[:, n+1:2*n])]), +, multiOut)/length(multiOut)
-	else
-		mapreduce(a -> abs.(a .- out), +, multiOut)/length(multiOut)
-	end
-
-	errs = calcError(out, output_data, costFunc = costFunc)
+	if maxB == 0
+		println("Not enough GPU memory for calculation, returning nothing")
+		return nothing
+	else 
+		multiOut = if maxB > m
+			d_X = CuArray(input_data)
+			predictMulti(multiParamsGPU, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
+		else
+			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			numBatches = ceil(Int64, m/maxB)
+			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+			out1 = predictMultiBatches(multiParamsGPU, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
+			out2 = predictMulti(multiParamsGPU, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+			map((a, b) -> [a; b], out1, out2)
+		end
 	
-	return (multiOut, out, errs, outErrEst)
+		out = if contains(costFunc, "Log")
+			out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+			out2 = log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, n+1:2*n]), +, multiOut)/length(multiOut)))
+			[out1 out2]
+		else
+			mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+		end
+
+		outErrEst = if contains(costFunc, "Log")
+			mapreduce(a -> abs.([a[:, 1:n] exp.(-a[:, n+1:2*n])] .- [out[:, 1:n] exp.(-out[:, n+1:2*n])]), +, multiOut)/length(multiOut)
+		else
+			mapreduce(a -> abs.(a .- out), +, multiOut)/length(multiOut)
+		end
+
+		errs = calcError(out, output_data, costFunc = costFunc)
+		
+		return (multiOut, out, errs, outErrEst)
+	end
 end
 
 function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
@@ -332,7 +358,7 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	return GPUErr
 end
 
-function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, dropout = 0.0f0, costFunc="absErr")
+function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr")
 #train on a GPU fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
@@ -363,12 +389,6 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	elseif length(B0[end]) != output_layer_size
 		error("parameters incompatible with output data for sq/absErr cost function")
 	end
-
-	println()
-	print_with_color(:green, STDOUT, "Beginning training on GPU with the following parameters:", bold=true)
-	println()
-	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
-	println("-------------------------------------------------------------------")
 	
 	function scaleThetas!(d_Thetas, d_Theta_grads, d_onesVecParams, d_normVecParams, c)
 		for i = 1:length(d_Thetas)
@@ -430,6 +450,14 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	#total number of examples in dataset
 	if batchSize > m
 		error("Your batchsize is larger than the total number of examples.")
+	end
+
+	if printAnything
+		println()
+		print_with_color(:green, STDOUT, "Beginning training with the following parameters:", bold=true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", numEpochs, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+		println("-------------------------------------------------------------------")
 	end
 
 	numBatches = round(Int, ceil(m/batchSize))
@@ -618,18 +646,18 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
     timePerBatch = train_time/numEpochs/numBatches
     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
-    println("-------------------------------------------------------------------")
-	print_with_color(:green, STDOUT, "Completed training on GPU with the following parameters: ", bold = true)
-	println()
-	#println(string("Completed training on GPU with the following parameters:"))
-	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize))
-	println(string("L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, " decay rate = ", R))
-	print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds"), bold=true)
-	println()	
-	#println(string("Cost reduced from ", costRecord[1], " to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds and ", numEpochs, " epochs"))		
-	println(string("Median time of ", round(Int64, 1e9*median(time_per_epoch)/m), " ns per example"))
-    println(string("Total operations per example = ", round(Int64, fops/batchSize), " foward prop ops + ", round(Int64, bops/batchSize), " backprop ops + ", round(Int64, pops/batchSize), " update ops = ", round(Int64, total_ops/batchSize)))
-    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
-   	println("-------------------------------------------------------------------")
+   if printAnything
+		println("-------------------------------------------------------------------")
+		print_with_color(:green, STDOUT, "Completed training on GPU with the following parameters: ", bold = true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", numEpochs, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+	
+		print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds and ", numEpochs, " epochs"), bold=true)
+		println()	
+		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
+	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
+	    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+	    println("-------------------------------------------------------------------")
+	end
     return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end	

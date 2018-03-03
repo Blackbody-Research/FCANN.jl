@@ -80,13 +80,13 @@ function run_kernel(kernel::CuFunction, N::Int64, M::Int64, inputs...)
     cudacall(kernel, blocks, threads, (Int64, Int64, getTypes.(inputs)...), N, M, inputs...)
 end
 
-function predict(d_Thetas, d_biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
 	l = length(d_Thetas)
 	num_hidden = l - 1
-
+	m = size(d_X, 1)
 	#dropout scale factor
 	# F = 1.0f0 - D
 
@@ -127,10 +127,64 @@ function predict(d_Thetas, d_biases, d_X, m, input_layer_size, output_layer_size
 		CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
 	synchronize()
-	return d_a[end]
+	return (d_a[end], Array(d_a[end]))
 end
 
-function predictMulti(multiParams, d_X, m, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network
+#m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
+#hidden_layers = hidden layer vector
+	l = length(d_Thetas)
+	num_hidden = l - 1
+	m = size(batches[1], 1)
+	#dropout scale factor
+	# F = 1.0f0 - D
+
+	d_a = Array{CuArray{Float32, 2}}(l)
+	if num_hidden > 0
+		for i = 1:l-1
+			d_a[i] = CuArray{Float32}(m, hidden_layers[i])
+		end
+	end
+	d_a[l] = CuArray{Float32}(m, output_layer_size)
+
+	out = mapreduce(vcat, batches) do X
+		d_X = CuArray(collect(X))
+		if num_hidden > 0
+			for i = 1:num_hidden
+				run_kernel(kernelsNOGRAD[1], m, hidden_layers[i], d_a[i], d_biases[i])
+				#CUDArt.launch(kernelsNOGRAD[1], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_biases[i]))
+			end
+		end
+
+		#println(string("biases 3", round(float64(to_host(d_biases[3])), 6)))
+		run_kernel(kernelsNOGRAD[1], m, output_layer_size, d_a[end], d_biases[end])
+		#CUDArt.launch(kernelsNOGRAD[1], blocks(m, output_layer_size), threads, (m, output_layer_size, d_a[end], d_biases[end]))
+
+		CUBLAS.gemm!('N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+
+		if num_hidden > 0
+			run_kernel(kernelsNOGRAD[4], m, hidden_layers[1], d_a[1])
+			#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1])) 
+
+
+			if num_hidden > 1
+				for i = 2:num_hidden
+					CUBLAS.gemm!('N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+					run_kernel(kernelsNOGRAD[4], m, hidden_layers[i], d_a[i])
+					#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i])) 
+				end
+			end
+
+			CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		end
+		synchronize()
+		return Array(d_a[end])
+	end
+	(CuArray(out), out)
+end
+
+function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -139,6 +193,7 @@ function predictMulti(multiParams, d_X, m, input_layer_size, output_layer_size, 
 
 	#dropout scale factor
 	# F = 1.0f0 - D
+	m = size(d_X, 1)
 
 	d_a = Array{CuArray{Float32, 2}}(l)
 	if num_hidden > 0
@@ -180,9 +235,70 @@ function predictMulti(multiParams, d_X, m, input_layer_size, output_layer_size, 
 			CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 		end
 		synchronize()
-		return copy(d_a[end])
+		return Array{Float32, 2}(d_a[end])
 	end
 	for params in multiParams]
+end
+
+function predictMultiBatches(multiParams, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network
+#m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
+#hidden_layers = hidden layer vector
+	l = length(multiParams[1][1])
+	num_hidden = l - 1
+
+	#dropout scale factor
+	# F = 1.0f0 - D
+
+	m = size(batches[1], 1)
+
+	d_a = Array{CuArray{Float32, 2}}(l)
+	if num_hidden > 0
+		for i = 1:l-1
+			d_a[i] = CuArray{Float32}(m, hidden_layers[i])
+		end
+	end
+	d_a[l] = CuArray{Float32}(m, output_layer_size)
+
+	outputs = map(batches) do X
+		d_X = CuArray(collect(X))
+		[begin
+			d_Thetas = params[1]
+			d_biases = params[2]
+			if num_hidden > 0
+				for i = 1:num_hidden
+					run_kernel(kernelsNOGRAD[1], m, hidden_layers[i], d_a[i], d_biases[i])
+					#CUDArt.launch(kernelsNOGRAD[1], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_biases[i]))
+				end
+			end
+
+			#println(string("biases 3", round(float64(to_host(d_biases[3])), 6)))
+			run_kernel(kernelsNOGRAD[1], m, output_layer_size, d_a[end], d_biases[end])
+			#CUDArt.launch(kernelsNOGRAD[1], blocks(m, output_layer_size), threads, (m, output_layer_size, d_a[end], d_biases[end]))
+
+			CUBLAS.gemm!('N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+
+			if num_hidden > 0
+				run_kernel(kernelsNOGRAD[4], m, hidden_layers[1], d_a[1])
+				#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1])) 
+
+
+				if num_hidden > 1
+					for i = 2:num_hidden
+						CUBLAS.gemm!('N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+						run_kernel(kernelsNOGRAD[4], m, hidden_layers[i], d_a[i])
+						#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i])) 
+					end
+				end
+
+				CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+			end
+			synchronize()
+			return Array{Float32, 2}(d_a[end])
+		end
+		for params in multiParams]
+	end
+	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
 end
 
 function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CuArray{Float32, 1}, d_a::Array{CuArray{Float32, 2}, 1}, d_tanh_grad_z::Array{CuArray{Float32, 2}, 1}, d_deltas::Array{CuArray{Float32, 2}, 1}, d_Theta_grads::Array{CuArray{Float32, 2}, 1}, d_bias_grads::Array{CuArray{Float32, 1}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0; costFunc = "absErr")

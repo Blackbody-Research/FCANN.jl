@@ -220,6 +220,53 @@ function predict(Thetas, biases, X, D = 0.0f0)
 	return a[end]
 end
 
+function predictBatches(Thetas, biases, batches, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(batches[1], 1)
+	l = length(Thetas)
+	n = size(Thetas[end], 1)
+
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	a = Array{Matrix{Float32}}(l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(m, size(Thetas[i], 1))
+	end
+
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
+
+	mapreduce(vcat, batches) do X
+		for ii = 1:l
+			for i = 1:length(biases[ii])
+				a[ii][:, i] = fill(biases[ii][i], m)
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+		if l > 1
+			tanhActivation!(a[1])
+
+			if (l-1) > 1
+				for i = 2:l-1
+					gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+					tanhActivation!(a[i])
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+		end
+		return copy(a[end])
+	end
+end
+
 function predictMulti(multiParams, X, D = 0.0f0)
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
@@ -265,6 +312,57 @@ function predictMulti(multiParams, X, D = 0.0f0)
 			gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
 		end
 		return copy(a[end])
+	end
+	for params in multiParams]
+end
+
+function predictMultiBatches(multiParams, batches, D = 0.0f0)
+#PREDICT Predict the value of an input in batches given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(batches[1], 1)
+	l = length(multiParams[1][1])
+	n = size(multiParams[1][1][end], 1)
+
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	a = Array{Matrix{Float32}}(l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(m, size(multiParams[1][1][i], 1))
+	end
+
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
+	[begin
+		mapreduce(vcat, batches) do X
+			Thetas = params[1]
+			biases = params[2]
+			for ii = 1:l
+				for i = 1:length(biases[ii])
+					a[ii][:, i] = fill(biases[ii][i], m)
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+			if l > 1
+				tanhActivation!(a[1])
+
+				if (l-1) > 1
+					for i = 2:l-1
+						gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+						tanhActivation!(a[i])
+					end
+				end
+
+				gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+			end
+			return copy(a[end])
+		end
 	end
 	for params in multiParams]
 end

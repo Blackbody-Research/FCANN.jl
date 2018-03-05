@@ -143,7 +143,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 		(naiveTrainErr1, naiveTrainErr2) = if contains(costFunc2, "sq")
 			err2 = calcError(fill(mean(Y), length(Y), 1), Y, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -153,7 +153,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 			b = mean(abs.(Y .- u))
 			err2 = calcError(fill(u, length(Y), 1), Y, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([u -log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)
+				calcError(repeat([u -log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -162,7 +162,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 		(naiveTestErr1, naiveTestErr2) = if contains(costFunc2, "sq")
 			err2 = calcError(fill(mean(Y), length(Ytest), 1), Ytest, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -172,7 +172,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 			b = mean(abs.(Y .- u))
 			err2 = calcError(fill(u, length(Ytest), 1), Ytest, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([u -log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+				calcError(repeat([u -log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -266,7 +266,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		(naiveTrainErr1, naiveTrainErr2) = if contains(costFunc2, "sq")
 			err2 = calcError(fill(mean(Y), length(Y), 1), Y, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -276,7 +276,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 			b = mean(abs.(Y .- u))
 			err2 = calcError(fill(u, length(Y), 1), Y, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([u -0.5*log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)
+				calcError(repeat([u -0.5*log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -285,7 +285,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		(naiveTestErr1, naiveTestErr2) = if contains(costFunc2, "sq")
 			err2 = calcError(fill(mean(Y), length(Ytest), 1), Ytest, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -295,7 +295,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 			b = mean(abs.(Y .- u))
 			err2 = calcError(fill(u, length(Ytest), 1), Ytest, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([u -0.5*log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+				calcError(repeat([u -0.5*log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
 			else
 				err2
 			end

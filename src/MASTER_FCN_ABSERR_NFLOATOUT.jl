@@ -252,9 +252,14 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		end	
 	end)
 	
+	colNames = if length(cols) > 10
+		string(cols[1:3], "_", cols[end-2:end])
+	else
+		string(cols)
+	end
 	
-	if isfile(string("archEval_", cols, "_colums_", filename))
-		f = open(string("archEval_", cols, "_colums_", filename), "a")
+	if isfile(string("archEval_", colNames, "_colums_", filename))
+		f = open(string("archEval_", colNames, "_colums_", filename), "a")
 		writecsv(f, body)
 		close(f)
 	else
@@ -312,7 +317,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		else
 			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
 		end
-		writecsv(string("archEval_", cols, "_colums_", filename), [header; line0; line1; body])
+		writecsv(string("archEval_", colNames, "_colums_", filename), [header; line0; line1; body])
 	end
 end
 

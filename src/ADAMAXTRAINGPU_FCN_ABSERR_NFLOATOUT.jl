@@ -125,7 +125,6 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 
 	newMem = CUDAdrv.Mem.free() - (2*1024^3)
 	maxB = getMaxGPUBatchSize(T, B, newMem)
-
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")
 		return nothing

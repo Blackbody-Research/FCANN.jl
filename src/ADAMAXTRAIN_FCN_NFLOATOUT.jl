@@ -187,7 +187,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			if maxB > m	
 				predictMulti(multiParams, input_data, dropout)
 			else
-				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1e9), " gigabytes of memory"))
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
 				numBatches = ceil(Int64, m/maxB)
 				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
 				out1 = predictMultiBatches(multiParams, batchInputs, dropout)

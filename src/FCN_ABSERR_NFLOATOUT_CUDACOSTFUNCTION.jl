@@ -64,7 +64,7 @@ kernelsNOGRAD = (fill_cols, finish_delt, elMul, cudaTanh)
 #kernel 4 = cudaTanh
 
 #2D thread block size for GPU
-K = 32
+K = 16
 threads = CuDim((K, K))
 
 function getTypes(x)

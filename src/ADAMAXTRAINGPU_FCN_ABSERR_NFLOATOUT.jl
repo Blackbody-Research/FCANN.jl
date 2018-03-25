@@ -124,7 +124,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	d_y = CuArray(output_data)
 	gc()
 	newMem = CUDAdrv.Mem.free() - (2*1024^3)
-	maxB = getMaxGPUBatchSize(T, B, newMem)
+	maxB = min(2^14, getMaxGPUBatchSize(T, B, newMem))
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")
 		return nothing
@@ -201,7 +201,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	d_y = CuArray(output_data)
 	gc()
 	newMem = CUDAdrv.Mem.free() - (2*1024^3)
-	maxB = getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem)
+	maxB = min(2^14, getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem))
 
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")

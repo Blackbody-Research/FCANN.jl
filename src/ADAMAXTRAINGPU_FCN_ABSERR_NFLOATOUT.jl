@@ -123,8 +123,8 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 	d_y = CuArray(output_data)
 	gc()
-	newMem = CUDAdrv.Mem.free() - (2*1024^3)
-	maxB = min(2^14, getMaxGPUBatchSize(T, B, newMem))
+	newMem = CUDAdrv.Mem.free() - (100*2^20)
+	maxB = min(2^17, getMaxGPUBatchSize(T, B, newMem))
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")
 		return nothing
@@ -134,7 +134,11 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			
 			predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
 		else
-			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			end
 			numBatches = ceil(Int64, m/maxB)
 			if numBatches == 2
 				(d_out1, out1) = predict(d_Thetas, d_Biases, CuArray(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
@@ -200,8 +204,8 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	
 	d_y = CuArray(output_data)
 	gc()
-	newMem = CUDAdrv.Mem.free() - (2*1024^3)
-	maxB = min(2^14, getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem))
+	newMem = CUDAdrv.Mem.free() - (100*2^20)
+	maxB = min(2^17, getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem))
 
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")
@@ -211,7 +215,11 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			d_X = CuArray(input_data)
 			predictMulti(multiParamsGPU, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
 		else
-			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			end
 			numBatches = ceil(Int64, m/maxB)
 			(out1, out2) = if numBatches == 2
 				out1 = predictMulti(multiParamsGPU, CuArray(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, dropout)

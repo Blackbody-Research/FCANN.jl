@@ -1423,15 +1423,29 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = if binInput
+	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
 	else
 		readInput(name)
 	end
 
-	M = size(X, 2)
+	X, Xtest = if isempty(sampleCols)
+		(Xraw, Xtestraw)
+	else
+		(Xraw[:, sampleCols], Xtestraw[:, sampleCols])
+	end
+
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		string(sampleCols[1:3], "_", sampleCols[end-2:end], "_")
+	else
+		string(sampleCols, "_")
+	end
+
+	(numRows, M) = size(X)
 	O = size(Y, 2)
 
 	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
@@ -1439,7 +1453,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	else
 		"absErr"
 	end
-
+	
 	h_name = if isempty(hidden)
 		0
 	elseif hidden == hidden[1]*ones(Int64, length(hidden))
@@ -1448,7 +1462,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 		string(hidden)
 	end
 
-	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
 	
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
@@ -1572,12 +1586,26 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	(record, T, B, Jtrain, outTrain, bestCost)
 end
 
-function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false)
+function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = if binInput
+	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
 	else
 		readInput(name)
+	end
+
+	X, Xtest = if isempty(sampleCols)
+		(Xraw, Xtestraw)
+	else
+		(Xraw[:, sampleCols], Xtestraw[:, sampleCols])
+	end
+
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		string(sampleCols[1:3], "_", sampleCols[end-2:end], "_")
+	else
+		string(sampleCols, "_")
 	end
 
 	(N, M) = size(X)
@@ -1597,7 +1625,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 		string(hidden)
 	end
 
-	filename = 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
 
 	bootstrapOut = pmap(1:num) do foo
 		#BLAS.set_num_threads(Sys.CPU_CORES)

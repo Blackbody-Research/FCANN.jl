@@ -122,9 +122,9 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		d_Biases[i] = CuArray(B[i])
 	end
 	d_y = CuArray(output_data)
-
-	newMem = CUDAdrv.Mem.free() - (2*1024^3)
-	maxB = getMaxGPUBatchSize(T, B, newMem)
+	gc()
+	newMem = CUDAdrv.Mem.free() - (100*2^20)
+	maxB = min(2^17, getMaxGPUBatchSize(T, B, newMem))
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")
 		return nothing
@@ -134,13 +134,28 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			
 			predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
 		else
-			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			end
 			numBatches = ceil(Int64, m/maxB)
-			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
-			(d_out1, out1) = predictBatches(d_Thetas, d_Biases, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
-			(d_out2, out2) = predict(d_Thetas, d_Biases, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
-			out3 = [out1; out2]
-			(CuArray(out3), out3)
+			if numBatches == 2
+				(d_out1, out1) = predict(d_Thetas, d_Biases, CuArray(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(d_out2, out2) = predict(d_Thetas, d_Biases, CuArray(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out3 = [out1; out2]
+				(CuArray(out3), out3)
+			else
+				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				(d_out1, out1) = predictBatches(d_Thetas, d_Biases, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(d_out2, out2) = predict(d_Thetas, d_Biases, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out3 = [out1; out2]
+				(CuArray(out3), out3)
+			end
 		end
 		errs = calcError(d_out, d_y, costFunc = costFunc)
 		gc()
@@ -188,9 +203,9 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 
 	
 	d_y = CuArray(output_data)
-
-	newMem = CUDAdrv.Mem.free() - (2*1024^3)
-	maxB = getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem)
+	gc()
+	newMem = CUDAdrv.Mem.free() - (100*2^20)
+	maxB = min(2^17, getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem))
 
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")
@@ -200,13 +215,29 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			d_X = CuArray(input_data)
 			predictMulti(multiParamsGPU, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
 		else
-			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			end
 			numBatches = ceil(Int64, m/maxB)
-			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
-			out1 = predictMultiBatches(multiParamsGPU, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
-			out2 = predictMulti(multiParamsGPU, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+			(out1, out2) = if numBatches == 2
+				out1 = predictMulti(multiParamsGPU, CuArray(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out2 = predictMulti(multiParamsGPU, CuArray(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(out1, out2)
+			else
+				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				out1 = predictMultiBatches(multiParamsGPU, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out2 = predictMulti(multiParamsGPU, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(out1, out2)
+			end
 			map((a, b) -> [a; b], out1, out2)
 		end
+		gc()
 	
 		out = if contains(costFunc, "Log")
 			out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)

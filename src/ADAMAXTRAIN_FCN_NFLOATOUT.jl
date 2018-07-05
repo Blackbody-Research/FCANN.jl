@@ -108,10 +108,10 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	newMem = if is_apple()
 		Int64(Sys.free_memory())
 	else
-		Int64(Sys.free_memory()) - (1024^3)
+		Int64(Sys.free_memory()) - (100*2^20)
 	end
 
-	maxB = getMaxBatchSize(T, B, newMem)
+	maxB = min(2^17, getMaxBatchSize(T, B, newMem))
 	BLAS.set_num_threads(0)
 	
 	if maxB == 0
@@ -121,7 +121,11 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		out = if maxB > m
 			predict(T, B, input_data, dropout)
 		else
-			println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+			end
 			numBatches = ceil(Int64, m/maxB)
 			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
 			out1 = predictBatches(T, B, batchInputs, dropout)
@@ -154,7 +158,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		if is_apple()
 			Int64(Sys.free_memory()) - (w * sizeof(input_data))
 		else
-			Int64(Sys.free_memory()) - (w * sizeof(input_data)) - (1024^3)
+			Int64(Sys.free_memory()) - (w * sizeof(input_data)) - (100*2^20)
 		end
 	end
 
@@ -179,7 +183,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		else
 			Int64(Sys.free_memory()) - (1024^3)
 		end
-		maxB = getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem)
+		maxB = min(2^17, getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem))
 		if maxB == 0
 			println("Not enough memory for calculation, returning nothing")
 			return nothing
@@ -187,7 +191,11 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			if maxB > m	
 				predictMulti(multiParams, input_data, dropout)
 			else
-				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1e9), " gigabytes of memory"))
+				if maxB == 2^17
+					println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+				else
+					println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+				end
 				numBatches = ceil(Int64, m/maxB)
 				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
 				out1 = predictMultiBatches(multiParams, batchInputs, dropout)

@@ -134,6 +134,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 		f = open(string("archEval_", filename), "a")
 		writecsv(f, body)
 		close(f)
+		string("archEval_", filename)[1:end-4]
 	else
 		Xtrain_lin = [ones(Float32, size(Y, 1)) X]
 		Xtest_lin = [ones(Float32, size(Ytest, 1)) Xtest]
@@ -190,6 +191,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
 		end
 		writecsv(string("archEval_", filename), [header; line0; line1; body])
+		string("archEval_", filename)[1:end-4]
 	end
 end
 
@@ -258,10 +260,11 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		string(cols)
 	end
 	
-	if isfile(string("archEval_", colNames, "_colums_", filename))
-		f = open(string("archEval_", colNames, "_colums_", filename), "a")
+	if isfile(string("archEval_", colNames, "_cols_", filename))
+		f = open(string("archEval_", colNames, "_cols_", filename), "a")
 		writecsv(f, body)
 		close(f)
+		string("archEval_", colNames, "_cols_", filename)[1:end-4]
 	else
 		Xtrain_lin = [ones(Float32, size(Y, 1)) X[:, cols]]
 		Xtest_lin = [ones(Float32, size(Ytest, 1)) Xtest[:, cols]]
@@ -317,7 +320,8 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		else
 			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
 		end
-		writecsv(string("archEval_", colNames, "_colums_", filename), [header; line0; line1; body])
+		writecsv(string("archEval_", colNames, "_cols_", filename), [header; line0; line1; body])
+		string("archEval_", colNames, "_cols_", filename)[1:end-4]
 	end
 end
 

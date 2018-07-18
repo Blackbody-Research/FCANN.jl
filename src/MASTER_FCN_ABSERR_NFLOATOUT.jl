@@ -53,19 +53,19 @@ function formIndicString(R, L2, c, D)
 	s2 = if c == Inf
 		""
 	else
-		string(c, "_maxNorm_")
+		string(round(c, 3), "_maxNorm_")
 	end
 
 	s3 = if R == 0.0
 		""
 	else
-		string(R, "_decay_")
+		string(round(R, 3), "_decay_")
 	end
 
 	s4 = if D == 0.0
 		""
 	else
-		string(D, "_dropout_")
+		string(round(D, 3), "_dropout_")
 	end
 	string(s3, s1, s2, s4)
 end
@@ -254,11 +254,11 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		end	
 	end)
 	
-	colNames = if length(cols) > 10
+	colNames = replace(if length(cols) > 10
 		string(cols[1:3], "_", cols[end-2:end])
 	else
 		string(cols)
-	end
+	end, " ", "")
 	
 	if isfile(string("archEval_", colNames, "_cols_", filename))
 		f = open(string("archEval_", colNames, "_cols_", filename), "a")
@@ -1444,9 +1444,9 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	colNames = if isempty(sampleCols)
 		""
 	elseif length(sampleCols) > 10
-		string(sampleCols[1:3], "_", sampleCols[end-2:end], "_")
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " ", "")
 	else
-		string(sampleCols, "_")
+		replace(string(sampleCols, "_"), " ", "")
 	end
 
 	(numRows, M) = size(X)
@@ -1607,9 +1607,9 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	colNames = if isempty(sampleCols)
 		""
 	elseif length(sampleCols) > 10
-		string(sampleCols[1:3], "_", sampleCols[end-2:end], "_")
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " ", "")
 	else
-		string(sampleCols, "_")
+		replace(string(sampleCols, "_"), " ", "")
 	end
 
 	(N, M) = size(X)
@@ -1629,7 +1629,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 		string(hidden)
 	end
 
-	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
 
 	bootstrapOut = pmap(1:num) do foo
 		#BLAS.set_num_threads(Sys.CPU_CORES)
@@ -1769,12 +1769,18 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	writecsv(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
 end
 
-function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)
+function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = if binInput
+	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
 	else
 		readInput(name)
+	end
+
+	X, Xtest = if isempty(sampleCols)
+		(Xraw, Xtestraw)
+	else
+		(Xraw[:, sampleCols], Xtestraw[:, sampleCols])
 	end
 
 	# meanY = Float32.(readcsv(string("invY_values_", name, ".csv"))[2:end, 1])
@@ -1791,6 +1797,14 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 		string(hidden)
 	end
 
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " ", "")
+	else
+		replace(string(sampleCols, "_"), " ", "")
+	end
+
 	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
 		"sqErr"
 	else
@@ -1798,9 +1812,9 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	end
 
 	filename = if adv
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", lambdaeta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backend, "_", costFunc)
+		string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", lambdaeta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backend, "_", costFunc)
 	else
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambdaeta, c, dropout), "ADAMAX_", costFunc)
+		string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambdaeta, c, dropout), "ADAMAX_", costFunc)
 		# if dropout == 0.0f0
 		# 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
 		# else

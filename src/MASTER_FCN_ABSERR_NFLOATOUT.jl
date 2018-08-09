@@ -67,7 +67,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		
 		println(string("training network with ", hidden, " hidden layers"))
 		println("initializing network parameters")
-		srand(1234)
+		Random.seed!(1234)
 		T0, B0 = if contains(costFunc, "Log")
 			initializeParams(M, hidden, 2*O)
 		else
@@ -75,7 +75,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		end	
 
 		println("beginning training")
-		srand(1234)
+		Random.seed!(1234)
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc)
 
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
@@ -99,7 +99,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 	
 	if isfile(string("archEval_", filename))
 		f = open(string("archEval_", filename), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
 		Xtrain_lin = [ones(Float32, size(Y, 1)) X]
@@ -151,7 +151,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		else
 			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
 		end
-		writecsv(string("archEval_", filename), [header; line0; line1; body])
+		writedlm(string("archEval_", filename), [header; line0; line1; body])
 	end
 end
 
@@ -178,10 +178,10 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0; b
 
 		println(string("training network with ", hidden, " hidden layers"))
 		println("initializing network parameters")
-		srand(1234)
+		Random.seed!(1234)
 		T0, B0 = initializeParams(M, hidden, O)
 		println("beginning training")
-		srand(1234)
+		Random.seed!(1234)
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X[:, cols], Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true)
 
 		outTrain = predict(T, B, X[:, cols])
@@ -200,10 +200,10 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0; b
 	line1 = [0 M+1 mean(abs.(Xtrain_lin*betas .- Y)) mean(abs.(Xtest_lin*betas .- Ytest))]
 	if isfile(string("archEval_", filename))
 		f = open(string("archEval_", filename), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
-		writecsv(string("archEval_", cols, "_colums_", filename), [header; line1; body])
+		writedlm(string("archEval_", cols, "_colums_", filename), [header; line1; body])
 	end
 end
 
@@ -240,7 +240,7 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 		
 		println(string("training network with ", hidden[2], " hidden layers"))
 		println("initializing network parameters")
-		srand(1234)
+		Random.seed!(1234)
 		T0, B0 = if contains(costFunc, "Log")
 			initializeParams(M, hidden[2], 2*O)
 		else
@@ -248,7 +248,7 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 		end	
 
 		println("beginning training")
-		srand(1234)
+		Random.seed!(1234)
 		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden[2], 0.0f0, Inf, alpha=alpha, R = R, printProgress = printProg, costFunc = costFunc)
 
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
@@ -259,10 +259,10 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 	end)
 	if isfile(string("evalLayers_", filename))
 		f = open(string("evalLayers_", filename), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
-		writecsv(string("evalLayers_", filename), [header; body])
+		writedlm(string("evalLayers_", filename), [header; body])
 	end
 end
 
@@ -302,7 +302,7 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	println("initializing network parameters")
-	srand(1234)
+	Random.seed!(1234)
 	T0, B0 = if contains(costFunc, "Log")
 		initializeParams(M, hidden, 2*O)
 	else
@@ -318,12 +318,12 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 			BLAS.set_num_threads(0)
 		end
 		
-		srand(1234)
+		Random.seed!(1234)
 		println("beginning training with ", alpha, " alpha")
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true, costFunc = costFunc)
 		record
 	end)
-	writecsv(string("alphaCostRecords_", filename), [header; body])
+	writedlm(string("alphaCostRecords_", filename), [header; body])
 end
 
 
@@ -331,7 +331,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 	M = size(X, 2)
 	O = size(Y, 2)
 
-	srand(1234)
+	Random.seed!(1234)
 	c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, 1, M, hidden, lambda, c, alpha = 0.0f0, costFunc = costFunc)[3]
 	println(string("Baseline cost = ", c1))
 	phi = 0.5f0*(1.0f0+sqrt(5.0f0))
@@ -360,7 +360,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 
 		x1 = 0.0f0
 		x2 = x
-		srand(1234)
+		Random.seed!(1234)
 		out2 = f(x2)
 		c2 = out2[3]
 
@@ -370,7 +370,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 			x3 = x2
 
 			x2 = (x3+phi*x1)/(phi+1.0f0)
-			srand(1234)
+			Random.seed!(1234)
 			out2 = f(x2)
 			c2 = out2[3]
 
@@ -379,14 +379,14 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				x3 = x2
 
 				x2 = (x3+phi*x1)/(phi+1.0f0)
-				srand(1234)
+				Random.seed!(1234)
 				out2 = f(x2)
 				c2 = out2[3]
 			end
 			((x1, c1), (x2, out2), (x3, c3))
 		else
 			x3 = x*(1.0f0+phi)
-			srand(1234)
+			Random.seed!(1234)
 			out3 = f(x3)
 			c3 = out3[3]
 
@@ -398,7 +398,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				out2 = out3
 				c2 = out2[3]
 				x3 = x2 + x*(phi^t)
-				srand(1234)
+				Random.seed!(1234)
 				out3 = f(x3)
 				c3 = out3[3]
 				t += 1
@@ -414,7 +414,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 		x = 0.02f0
 		x1 = 0.0f0
 		x2 = x
-		srand(1234)
+		Random.seed!(1234)
 		out2 = f(x2)
 		c2 = out2[3]
 
@@ -423,7 +423,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 			x3 = x2
 
 			x2 = (x3+phi*x1)/(phi+1.0f0)
-			srand(1234)
+			Random.seed!(1234)
 			out2 = f(x2)
 			c2 = out2[3]
 
@@ -432,14 +432,14 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				x3 = x2
 
 				x2 = (x3+phi*x1)/(phi+1.0f0)
-				srand(1234)
+				Random.seed!(1234)
 				out2 = f(x2)
 				c2 = out2[3]
 			end
 			((x1, c1), (x2, out2), (x3, c3))
 		else
 			x3 = x*(1.0f0+phi)
-			srand(1234)
+			Random.seed!(1234)
 			out3 = f(x3)
 			c3 = out3[3]
 
@@ -451,7 +451,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				out2 = out3
 				c2 = out2[3]
 				x3 = x2 + x*(phi^t)
-				srand(1234)
+				Random.seed!(1234)
 				out3 = f(x3)
 				c3 = out3[3]
 				t += 1
@@ -470,7 +470,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 		c3 = p3[2]
 		(x2, out2) = if isempty(p2)
 			x2 = (x3+phi*x1)/(phi+1.0f0)
-			srand(1234)
+			Random.seed!(1234)
 			out2 = f(x2)
 			(x2, out2)
 		else
@@ -478,15 +478,15 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 		end
 		c2 = out2[3]
 		x4 = (phi*x3 + x1)/(1.0f0+phi)
-		srand(1234)
+		Random.seed!(1234)
 		out4 = f(x4)
 		c4 = out4[3]
 		println("Current Values Are:")
 		println("x       |y      ")
-		println(string(round(x1, 6), "|", round(c1, 6)))
-		println(string(round(x2, 6), "|", round(c2, 6)))
-		println(string(round(x4, 6), "|", round(c4, 6)))
-		println(string(round(x3, 6), "|", round(c3, 6)))
+		println(string(round(x1, digits=6), "|", round(c1, digits=6)))
+		println(string(round(x2, digits=6), "|", round(c2, digits=6)))
+		println(string(round(x4, digits=6), "|", round(c4, digits=6)))
+		println(string(round(x3, digits=6), "|", round(c3, digits=6)))
 		#println(string("Current x values are ", [x1, x2, x4, x3]))
 
 		while (abs(c4-c2)/(0.5f0*abs(c4+c2)) > tau) & ((2.0f0*abs(x4-x2)/abs(x4+x2)) > tau)
@@ -498,7 +498,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				c2 = out2[3]
 
 				x4 = (phi*x3 + x1)/(1.0f0+phi)
-				srand(1234)
+				Random.seed!(1234)
 				out4 = f(x4)
 				c4 = out4[3]
 			else
@@ -509,16 +509,16 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				c4 = out4[3]
 
 				x2 = (x3+phi*x1)/(phi+1.0f0)
-				srand(1234)
+				Random.seed!(1234)
 				out2 = f(x2)
 				c2 = out2[3]
 			end
 			println("Current Values Are:")
 			println("x       |y      ")
-			println(string(round(x1, 6), "|", round(c1, 6)))
-			println(string(round(x2, 6), "|", round(c2, 6)))
-			println(string(round(x4, 6), "|", round(c4, 6)))
-			println(string(round(x3, 6), "|", round(c3, 6)))
+			println(string(round(x1, digits=6), "|", round(c1, digits=6)))
+			println(string(round(x2, digits=6), "|", round(c2, digits=6)))
+			println(string(round(x4, digits=6), "|", round(c4, digits=6)))
+			println(string(round(x3, digits=6), "|", round(c3, digits=6)))
 			#println(string("Current x values are ", [x1, x2, x4, x3]))
 		end
 
@@ -568,7 +568,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 		println()
 		println("Beginning search for decay rate interval")
 		println()
-		srand(1234)
+		Random.seed!(1234)
 		c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1, R = 0.0f0, dropout = dropout, costFunc = costFunc)[3]
 		(p1, p2, p3) = findRInterval(alpha1, c1)
 		# d1 = 2.0f0*(p1[2] - p2[2][3])/(p1[2]+p2[2][3])
@@ -600,9 +600,9 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 		range = 2.0f0
 		alpha1_plus = range*alpha1
 		alpha1_minus = alpha1*(1.0f0-(range-1.0f0)/phi)
-		srand(1234)
+		Random.seed!(1234)
 		out2_plus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
-		srand(1234)
+		Random.seed!(1234)
 		out2_minus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_minus, R = R1, dropout = dropout, costFunc = costFunc)
 		cost2_plus = out2_plus[3]
 		cost2_minus = out2_minus[3]
@@ -632,7 +632,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 					out2 = out2_plus
 					cost2 = cost2_plus
 					alpha1_plus = 0.1f0
-					srand(1234)
+					Random.seed!(1234)
 					out2_plus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
 					(alpha1_plus, out2_plus)
 				end
@@ -666,7 +666,7 @@ function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda
 				out2 = out2_plus
 				cost2 = cost2_plus
 				alpha1_plus = phi*0.5f0*alpha1 + alpha1
-				srand(1234)
+				Random.seed!(1234)
 				out2_plus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
 				cost2_plus = out2_plus[3]
 				if cost2_plus < cost2
@@ -723,7 +723,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 		x1 = p1[1]
 		c1 = p1[2]
 		x2 = x
-		srand(1234)
+		Random.seed!(1234)
 		out2 = f(x2)
 		c2 = out2[3]
 
@@ -732,7 +732,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 			x3 = x2
 
 			x2 = (x3+phi*x1)/(phi+1.0f0)
-			srand(1234)
+			Random.seed!(1234)
 			out2 = f(x2)
 			c2 = out2[3]
 
@@ -741,14 +741,14 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 				x3 = x2
 
 				x2 = (x3+phi*x1)/(phi+1.0f0)
-				srand(1234)
+				Random.seed!(1234)
 				out2 = f(x2)
 				c2 = out2[3]
 			end
 			((x1, c1), (x2, out2), (x3, c3))
 		else
 			x3 = x*(1.0f0+phi)
-			srand(1234)
+			Random.seed!(1234)
 			out3 = f(x3)
 			c3 = out3[3]
 
@@ -760,7 +760,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 				out2 = out3
 				c2 = out2[3]
 				x3 = x2 + x*(phi^t)
-				srand(1234)
+				Random.seed!(1234)
 				out3 = f(x3)
 				c3 = out3[3]
 				t += 1
@@ -778,7 +778,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 		c3 = p3[2]
 		(x2, out2) = if isempty(p2)
 			x2 = (x3+phi*x1)/(phi+1.0f0)
-			srand(1234)
+			Random.seed!(1234)
 			out2 = f(x2)
 			(x2, out2)
 		else
@@ -792,7 +792,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 		# else
 
 			x4 = (phi*x3 + x1)/(1.0f0+phi)
-			srand(1234)
+			Random.seed!(1234)
 			out4 = f(x4)
 			c4 = out4[3]
 			println(string("Current x values are ", [x1, x2, x4, x3]))
@@ -807,7 +807,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 					c2 = out2[3]
 
 					x4 = (phi*x3 + x1)/(1.0f0+phi)
-					srand(1234)
+					Random.seed!(1234)
 					out4 = f(x4)
 					c4 = out4[3]
 				else
@@ -818,7 +818,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 					c4 = out4[3]
 
 					x2 = (x3+phi*x1)/(phi+1.0f0)
-					srand(1234)
+					Random.seed!(1234)
 					out2 = f(x2)
 					c2 = out2[3]
 				end
@@ -846,7 +846,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 	end
 
 	if N > 100
-		srand(1234)
+		Random.seed!(1234)
 		out1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = 0.0f0, alpha = alpha, costFunc = costFunc)
 		c1 = out1[3]
 		println(string("Baseline cost = ", c1))
@@ -915,7 +915,7 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	println("initializing network parameters")
-	srand(1234)
+	Random.seed!(1234)
 	T0, B0 = if contains(costFunc, "Log")
 		initializeParams(M, hidden, 2*O)
 	else
@@ -931,7 +931,7 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 			BLAS.set_num_threads(0)
 		end
 
-		srand(1234)
+		Random.seed!(1234)
 		println("beginning decay rate optimization with ", alpha, " alpha")
 		(R, out, status) = autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = alpha, tau = tau, lambda = lambda, c = c, dropout = dropout, costFunc = costFunc)
 		T, B, bestCost, record, timeRecord, GFLOPS = out
@@ -963,10 +963,10 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 
 	if isfile(string("smartDecayRates_", filename))
 		f = open(string("smartDecayRates_", filename), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
-		writecsv(string("smartDecayRates_", filename), [header; body])
+		writedlm(string("smartDecayRates_", filename), [header; body])
 	end
 end
 
@@ -1009,12 +1009,12 @@ function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f
 			BLAS.set_num_threads(0)
 		end
 		
-		srand(1234)
+		Random.seed!(1234)
 		println("beginning training with ", alpha, " alpha")
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true, costFunc = costFunc)
 		record
 	end)
-	writecsv(string("decayRateCostRecords_", filename), [header; body])
+	writedlm(string("decayRateCostRecords_", filename), [header; body])
 end
 
 #L2Reg is a function that trains the same network architecture with the same training and test sets
@@ -1063,14 +1063,14 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFun
 		else
 			BLAS.set_num_threads(0)
 		end
-		srand(1234)
+		Random.seed!(1234)
 		println("beginning training with ", lambda, " lambda")
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha, printProgress = true, costFunc = costFunc)
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, costFunc = costFunc)
 		[lambda Jtrain Jtest]
 	end)
-	writecsv(string("L2Reg_", filename), [header; body])
+	writedlm(string("L2Reg_", filename), [header; body])
 end
 
 #maxNormReg is a function that trains the same network architecture with the same training and test sets
@@ -1109,7 +1109,7 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 
 	println(string("training network with ", hidden, " hidden layers "))
 	println("initializing network parameters")
-	srand(1234)
+	Random.seed!(1234)
 	T0, B0 = if contains(costFunc, "Log")
 		initializeParams(M, hidden, 2*O)
 	else
@@ -1127,7 +1127,7 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 		end
 		#BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(cList))))))
 		
-		srand(1234)
+		Random.seed!(1234)
 		println("beginning training with ", c, " max norm")
 		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
@@ -1136,10 +1136,10 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 	end)
 	if isfile(string("maxNormReg_", filename))
 		f = open(string("maxNormReg_", filename), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
-		writecsv(string("maxNormReg_", filename), [header; body])
+		writedlm(string("maxNormReg_", filename), [header; body])
 	end
 end
 
@@ -1165,7 +1165,7 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 
 	println(string("training network with ", hidden, " hidden layers "))
 	println("initializing network parameters")
-	srand(1234)
+	Random.seed!(1234)
 	T0, B0 = if contains(costFunc, "Log")
 		initializeParams(M, hidden, 2*O)
 	else
@@ -1182,7 +1182,7 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 			BLAS.set_num_threads(0)
 		end
 
-		srand(1234)
+		Random.seed!(1234)
 		println("beginning training with ", dropout, " dropout rate")
 		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
@@ -1191,10 +1191,10 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 	end)
 	if isfile(string("dropoutReg_", filename))
 		f = open(string("dropoutReg_", filename), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
-		writecsv(string("dropoutReg_", filename), [header; body])
+		writedlm(string("dropoutReg_", filename), [header; body])
 	end
 end
 
@@ -1230,7 +1230,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	
 	(T0, B0) = if isempty(startID)
 		println("initializing network parameters")
-		srand(1234)
+		Random.seed!(1234)
 		if contains(costFunc, "Log")
 			initializeParams(M, hidden, 2*O)
 		else
@@ -1246,7 +1246,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	#BLAS.set_num_threads(5)	
 	# BLAS.set_num_threads(0)
 
-	srand(1234)
+	Random.seed!(1234)
 	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
 
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
@@ -1255,17 +1255,17 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	if writeFiles
 		if contains(costFunc, "Log")
 			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O)]
-			writecsv(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
-			writecsv(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest outTest[:, 1:O] exp.(-outTest[:, O+1:2*O])]])
+			writedlm(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
+			writedlm(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest outTest[:, 1:O] exp.(-outTest[:, O+1:2*O])]])
 		else
 			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O)]
-			writecsv(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y outTrain]])
-			writecsv(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest outTest]])
+			writedlm(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y outTrain]])
+			writedlm(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest outTest]])
 		end
 
-		writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
-		writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
-		writecsv(string(ID, "_performance_", filename, ".csv"), [["Train Cost", "Test Cost"] [Jtrain, Jtest]])
+		writedlm(string(ID, "_costRecord_", filename, ".csv"), record)
+		writedlm(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
+		writedlm(string(ID, "_performance_", filename, ".csv"), [["Train Cost", "Test Cost"] [Jtrain, Jtest]])
 		
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
@@ -1284,7 +1284,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	
 	(T0, B0) = if isempty(startID)
 		println(string("initializing network parameters for ", M, " input ", O, " output ", hidden, " hidden network"))
-		srand(1234)
+		Random.seed!(1234)
 		if contains(costFunc, "Log")
 			initializeParams(M, hidden, 2*O)
 		else
@@ -1297,7 +1297,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	
 	#BLAS.set_num_threads(Sys.CPU_CORES)	
 	# BLAS.set_num_threads(0)	
-	srand(1234)
+	Random.seed!(1234)
 	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
 
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
@@ -1306,15 +1306,15 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	if writeFiles
 		if contains(costFunc, "Log")
 			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O)]
-			writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
+			writedlm(string(ID, "_predictionScatter_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
 		else
 			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O)]
-			writecsv(string(ID, "_predictionScatter_", filename, ".csv"), [header; [Y outTrain]])
+			writedlm(string(ID, "_predictionScatter_", filename, ".csv"), [header; [Y outTrain]])
 		end
 	
-		writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
-		writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
-		writecsv(string(ID, "_performance_", filename, ".csv"), ["Cost", Jtrain])
+		writedlm(string(ID, "_costRecord_", filename, ".csv"), record)
+		writedlm(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
+		writedlm(string(ID, "_performance_", filename, ".csv"), ["Cost", Jtrain])
 		
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
@@ -1354,10 +1354,10 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 		end
 
 		if ID == 1
-            srand(1234 + foo - 1)
+            Random.seed!(1234 + foo - 1)
         else
-               srand(ID)
-            srand(1234+rand(UInt32)+foo)
+               Random.seed!(ID)
+            Random.seed!(1234+rand(UInt32)+foo)
         end
   
 		T0, B0 = if contains(costFunc, "Log")
@@ -1366,10 +1366,10 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 			initializeParams(M, hidden, O)
 		end		
 		if ID == 1
-            srand(1234 + foo - 1)
+            Random.seed!(1234 + foo - 1)
         else
-               srand(ID)
-            srand(1234+rand(UInt32)+foo)
+               Random.seed!(ID)
+            Random.seed!(1234+rand(UInt32)+foo)
         end	
 		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, costFunc = costFunc)
 		(T, B)
@@ -1400,16 +1400,16 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 
 		# testOut=[mapreduce(a -> a[:, 1:O], +, bootstrapOutTest)/num sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, bootstrapOutTest)/num)]
 		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]
-		writecsv(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y trainOutValue trainOutRange trainOutValueErrEst trainOutRangeErrEst]])
-		writecsv(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest testOutValue testOutRange testOutValueErrEst testOutRangeErrEst]])
+		writedlm(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y trainOutValue trainOutRange trainOutValueErrEst trainOutRangeErrEst]])
+		writedlm(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest testOutValue testOutRange testOutValueErrEst testOutRangeErrEst]])
 	else
 		testOut = reduce(+, bootstrapOutTest)/num
 		testOutErrEst = mapreduce(a -> abs.(a .- testOut), +, bootstrapOutTest)/num
 		trainOut = reduce(+, bootstrapOutTrain)/num
 		trainOutErrEst = mapreduce(a -> abs.(a .- trainOut), +, bootstrapOutTrain)/num
 		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
-		writecsv(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut trainOutErrEst]])
-		writecsv(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut testOutErrEst]])
+		writedlm(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut trainOutErrEst]])
+		writedlm(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut testOutErrEst]])
 	end
 
 
@@ -1454,7 +1454,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
         [i Jtrain errorEstTrain Jtest errorEstTest]  
     end 
 
-	writecsv(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
+	writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
 end
 
 function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)
@@ -1511,7 +1511,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	#combine bootstram params from each ID into one large matrix
 	multiOut = if isempty(IDList)
 		if isfile(string("fullMultiParams_", filename, ".csv"))
-			params = map(Float32, readcsv(string("fullMultiParams_", filename, ".csv")))
+			params = map(Float32, readdlm(string("fullMultiParams_", filename, ".csv")))
 			map(1:size(params, 2)) do col
 				p = params[:, col]
 				(T, B) = if contains(costFunc, "Log")
@@ -1527,7 +1527,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 		if isfile(string(IDList[1], "_multiParams_", filename, ".csv"))
 			mapreduce(vcatRobust, IDList) do ID
 				try
-                    params = map(Float32, readcsv(string(ID, "_multiParams_", filename, ".csv"))) 
+                    params = map(Float32, readdlm(string(ID, "_multiParams_", filename, ".csv"))) 
         			map(1:size(params, 2)) do col
         				p = params[:, col]
         				(T, B) = if contains(costFunc, "Log")
@@ -1585,16 +1585,16 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 
 		# testOut=[mapreduce(a -> a[:, 1:O], +, multiOutTest)/num sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, multiOutTest)/num)]
 		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]
-		writecsv(string("predictionScatterTrain_", filename, ".csv"), [header; [Y trainOutValue trainOutRange trainOutValueErrEst trainOutRangeErrEst]])
-		writecsv(string("predictionScatterTest_", filename, ".csv"), [header; [Ytest testOutValue testOutRange testOutValueErrEst testOutRangeErrEst]])
+		writedlm(string("predictionScatterTrain_", filename, ".csv"), [header; [Y trainOutValue trainOutRange trainOutValueErrEst trainOutRangeErrEst]])
+		writedlm(string("predictionScatterTest_", filename, ".csv"), [header; [Ytest testOutValue testOutRange testOutValueErrEst testOutRangeErrEst]])
 	else
 		testOut = reduce(+, multiOutTest)/num
 		testOutErrEst = mapreduce(a -> abs.(a .- testOut), +, multiOutTest)/num
 		trainOut = reduce(+, multiOutTrain)/num
 		trainOutErrEst = mapreduce(a -> abs.(a .- trainOut), +, multiOutTrain)/num
 		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
-		writecsv(string("predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut trainOutErrEst]])
-		writecsv(string("predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut testOutErrEst]])
+		writedlm(string("predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut trainOutErrEst]])
+		writedlm(string("predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut testOutErrEst]])
 	end
 
 	println("calculating train and test errors as a function of number of networks")
@@ -1625,7 +1625,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	end
 		
 	println("saving results to file")	
-	writecsv(string("fullMultiPerformance_", filename, ".csv"), [header; fullMultiPerformance])		
+	writedlm(string("fullMultiPerformance_", filename, ".csv"), [header; fullMultiPerformance])		
 end
 
 function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr")
@@ -1655,7 +1655,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 		BLAS.set_num_threads(numThreads)
 		eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc)
 	end
-	slowestInd = indmax(map(a -> a[end][end], out))
+	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]
 	train_time = timeRecord[end]
 	timePerBatch = train_time/N/numBatches
@@ -1699,7 +1699,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	header = ["Epoch" "Time" "GFLOPS per Task" "Total GFLOPS"]
 	
 	if writeFile
-		writecsv(filename, [header; [1:N timeRecord[2:end] GFLOPS_per_epoch num*GFLOPS_per_epoch]])
+		writedlm(filename, [header; [1:N timeRecord[2:end] GFLOPS_per_epoch num*GFLOPS_per_epoch]])
 	end
 	
 	return (median(GFLOPS_per_epoch), median(GFLOPS_per_epoch*num), median(time_per_epoch))
@@ -1754,7 +1754,7 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 		# end
 		println(string("training network with ", hidden[2], " hidden layers"))
 		println("initializing network parameters")
-		srand(1234)
+		Random.seed!(1234)
 		T0, B0 = if contains(costFunc, "Log")
 			initializeParams(M, hidden[2], 2*O)
 		else
@@ -1762,7 +1762,7 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 		end	
 
 		println("beginning training")
-		srand(1234)
+		Random.seed!(1234)
 		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(X, Y, batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc)
 
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
@@ -1780,10 +1780,10 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	end)
 	if isfile(string("evalLayers_", filename))
 		f = open(string("evalLayers_", filename), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
-		writecsv(string("evalLayers_", filename), [header; body])
+		writedlm(string("evalLayers_", filename), [header; body])
 	end
 end
 
@@ -1815,7 +1815,7 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 	
 	function runMultiTrain(c)	
 		bootstrapOut = pmap(1:num) do foo
-			srand(1234+foo-1)	
+			Random.seed!(1234+foo-1)	
 			T0, B0 = if contains(costFunc, "Log")
 				initializeParams(M, hidden, 2*O)
 			else
@@ -1827,7 +1827,7 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 				BLAS.set_num_threads(0)
 			end
 
-			srand(1234+foo-1)
+			Random.seed!(1234+foo-1)
 			(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, numEpochs, M, hidden, 0.0f0, c, alpha=alpha, R = R, dropout=dropout, printProgress = printProg, costFunc = costFunc)
 			(T, B, median(timeRecord[2:end] - timeRecord[1:end-1]), median(GFLOPS))
 		end
@@ -1993,9 +1993,9 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 
 	if isfile(string("multiMaxNormAutoReg_", filename, ".csv"))
 		f = open(string("multiMaxNormAutoReg_", filename, ".csv"), "a")
-		writecsv(f, body)
+		writedlm(f, body)
 		close(f)
 	else
-		writecsv(string("multiMaxNormAutoReg_", filename, ".csv"), [header; body])		
+		writedlm(string("multiMaxNormAutoReg_", filename, ".csv"), [header; body])		
 	end
 end

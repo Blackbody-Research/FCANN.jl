@@ -59,7 +59,7 @@ function calcOps(M, H, O, B)
 end
 
 function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
-	srand(1234)
+	Random.seed!(1234)
 	m = 1000
 	input_layer_size = 3
 	n = 2
@@ -350,7 +350,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 	end
 
 	println()
-	print_with_color(:green, STDOUT, "Beginning training with the following parameters:", bold=true)
+	print_with_color(:green, stdout, "Beginning training with the following parameters:", bold=true)
 	println()
 	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	println("-------------------------------------------------------------------")
@@ -404,7 +404,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 	end
 	currentOut = currentOut/numBatches
 
-	print_with_color(:red, STDOUT, string("Initial cost is ", currentOut), bold=true)
+	print_with_color(:red, stdout, string("Initial cost is ", currentOut), bold=true)
 	println()
 	#println(string("Initial cost is ", currentOut))
 
@@ -506,8 +506,8 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 			lastReport = currentTime
 			hoursLeft = floor(timeRemainingEst/(60*60))
 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
-			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
-			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, 8)))
+			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, digits=1)
+			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, digits=8)))
 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
 		end
 		epoch += 1
@@ -531,14 +531,14 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 
 	if dropout == 0.0f0
 		println("-------------------------------------------------------------------")
-		print_with_color(:green, STDOUT, "Completed training with the following parameters: ", bold = true)
+		print_with_color(:green, stdout, "Completed training with the following parameters: ", bold = true)
 		println()
 		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	else
 		println(string("Completed training with dropout factor of ", dropout))
 		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	end
-	print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds"), bold=true)
+	print_with_color(:red, stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds"), bold=true)
 	println()	
 	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
     println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))

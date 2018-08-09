@@ -10,7 +10,7 @@ println("TEST PASSED")
 println()
 
 println("Testing parameters binary write")
-try rm("testParams1") end
+try rm("testParams1") catch; end
 writeParams([(T0, B0)], "testParams1")
 println("TEST PASSED")
 println()
@@ -38,7 +38,7 @@ println("TEST PASSED")
 println()
 
 println("Testing parameters binary write")
-try rm("testParams2") end
+try rm("testParams2") catch; end
 writeParams([(T0, B0)], "testParams2")
 println("TEST PASSED")
 println()

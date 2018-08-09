@@ -55,10 +55,10 @@ function writeTestData(name, M, O)
     Y = randn(Float32, 100000, O)
     Xtest = randn(Float32, 10000, M)
     Ytest = randn(Float32, 10000, O)
-    writecsv(string("Xtrain_", name, ".csv"), X)
-    writecsv(string("Xtest_", name, ".csv"), Xtest)
-    writecsv(string("ytrain_", name, ".csv"), Y)
-    writecsv(string("ytest_", name, ".csv"), Ytest)
+    writedlm(string("Xtrain_", name, ".csv"), X)
+    writedlm(string("Xtest_", name, ".csv"), Xtest)
+    writedlm(string("ytrain_", name, ".csv"), Y)
+    writedlm(string("ytest_", name, ".csv"), Ytest)
 end
 
 function writeBinData(name, M, O)
@@ -76,7 +76,7 @@ println("--------------------------------------")
 name = "test"
 M = 10
 O = 2
-srand(1234)
+Random.seed!(1234)
 writeTestData(name, M, O)
 writeBinData(name, M, O)
 

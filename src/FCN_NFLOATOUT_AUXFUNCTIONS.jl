@@ -3,8 +3,8 @@ function params2Theta(input_layer_size, hidden_layer_size, output_layer_size, nn
 #function based on the input and hidden layer sizes.
 
 num_hidden = length(hidden_layer_size)
-Thetas = Array{Matrix{Float32}}(num_hidden+1)
-Biases = Array{Vector{Float32}}(num_hidden+1)
+Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
+Biases = Array{Vector{Float32}}(undef, num_hidden+1)
 Theta_elements = zeros(num_hidden+1)
 
 if num_hidden > 0
@@ -45,8 +45,8 @@ end
 
 function initializeParams(input_layer_size, hidden_layers, output_layer_size)
 	num_hidden = length(hidden_layers)
-	Thetas = Array{Matrix{Float32}}(num_hidden+1)
-	Biases = Array{Vector{Float32}}(num_hidden+1)
+	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
+	Biases = Array{Vector{Float32}}(undef, num_hidden+1)
 	if num_hidden > 0
 		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) * input_layer_size^(-.5f0))
 		Biases[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5f0))
@@ -192,7 +192,7 @@ function readBinParams(filename::String)
 	n = read(f, Int64)
 	M = read(f, Int64)
 	H = if n != 0
-		read(f, Int64, n)
+		read!(f, Array{Int64}(undef, n)) # read(f, Int64, n)
 	else
 		[]
 	end
@@ -200,20 +200,20 @@ function readBinParams(filename::String)
 	println(string("Got the following network dimensions: ", M, H, O))
 	l = getNumParams(M, H, O)
 	println(string("Reading ", l, " parameters"))
-	nnParams = read(f, Float32, l)
+	nnParams = read!(f, Array{Float32}(undef, l)) # read(f, Float32, l)
 	(T, B) = params2Theta(M, H, O, nnParams)
 	out = [(T, B)]
 	while !eof(f)
 		n = read(f, Int64)
 		M = read(f, Int64)
 		H = if n != 0
-			read(f, Int64, n)
+			read!(f, Array{Int64}(undef, n)) #read(f, Int64, n)
 		else
 			[]
 		end
 		O = read(f, Int64)
 		l = getNumParams(M, H, O)
-		nnParams = read(f, Float32, l)
+		nnParams = read!(f, Array{Float32}(undef, l)) #read(f, Float32, l)
 		(T, B) = params2Theta(M, H, O, nnParams)
 		out = [out; (T, B)]
 	end
@@ -227,7 +227,7 @@ function readBinArray(filename::String)
 	N = read(f, Int64)
 	M = read(f, Int64)
 	println(string("Got the following array dimensions: ", N, " rows ", M, " columns"))
-	out = read(f, Float32, N, M)
+	out =read!(f, Array{Float32}(undef, N, M)) #read(f, Float32, N, M)
 end
 
 function readInput(name)

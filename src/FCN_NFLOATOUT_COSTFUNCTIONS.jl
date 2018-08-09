@@ -1,5 +1,6 @@
-using Base.LinAlg.BLAS
-import Base.BLAS: gemv!
+# using Base.LinAlg.BLAS
+using LinearAlgebra.BLAS
+# import Base.BLAS: gemv!
 
 #-----------------Types of Cost Functions---------------------------------
 function absErr(a, y)
@@ -188,10 +189,10 @@ function predict(Thetas, biases, X, D = 0.0f0)
 	#dropout scale factor
 	# F = (1.0f0 - D)
 
-	a = Array{Matrix{Float32}}(l)
+	a = Array{Matrix{Float32}}(undef, l)
 
 	for i = 1:l
-		a[i] = Array{Float32}(m, size(Thetas[i], 1))
+		a[i] = Array{Float32}(undef, m, size(Thetas[i], 1))
 	end
 
 	#a[1] = X * Thetas[1]' .+ biases[1]'
@@ -233,10 +234,10 @@ function predictBatches(Thetas, biases, batches, D = 0.0f0)
 	#dropout scale factor
 	# F = (1.0f0 - D)
 
-	a = Array{Matrix{Float32}}(l)
+	a = Array{Matrix{Float32}}(undef, l)
 
 	for i = 1:l
-		a[i] = Array{Float32}(m, size(Thetas[i], 1))
+		a[i] = Array{Float32}(undef, m, size(Thetas[i], 1))
 	end
 
 	#a[1] = X * Thetas[1]' .+ biases[1]'
@@ -280,10 +281,10 @@ function predictMulti(multiParams, X, D = 0.0f0)
 	#dropout scale factor
 	# F = (1.0f0 - D)
 
-	a = Array{Matrix{Float32}}(l)
+	a = Array{Matrix{Float32}}(undef, l)
 
 	for i = 1:l
-		a[i] = Array{Float32}(m, size(multiParams[1][1][i], 1))
+		a[i] = Array{Float32}(undef, m, size(multiParams[1][1][i], 1))
 	end
 
 	#a[1] = X * Thetas[1]' .+ biases[1]'
@@ -311,7 +312,7 @@ function predictMulti(multiParams, X, D = 0.0f0)
 
 			gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
 		end
-		return copy(a[end])
+		copy(a[end])
 	end
 	for params in multiParams]
 end
@@ -329,10 +330,10 @@ function predictMultiBatches(multiParams, batches, D = 0.0f0)
 	#dropout scale factor
 	# F = (1.0f0 - D)
 
-	a = Array{Matrix{Float32}}(l)
+	a = Array{Matrix{Float32}}(undef, l)
 
 	for i = 1:l
-		a[i] = Array{Float32}(m, size(multiParams[1][1][i], 1))
+		a[i] = Array{Float32}(undef, m, size(multiParams[1][1][i], 1))
 	end
 
 	#a[1] = X * Thetas[1]' .+ biases[1]'

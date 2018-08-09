@@ -1,5 +1,13 @@
 module FCANN
 
+using Statistics
+using Random
+using DelimitedFiles
+using LinearAlgebra
+using Printf
+using Random
+using Pkg
+
 function availableBackends()
     installList = Pkg.installed()
     if haskey(installList, "CUBLAS") & haskey(installList, "CUDAdrv") 
@@ -16,11 +24,12 @@ end
 global backend = :CPU
 global backendList = availableBackends()
 
+
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
 
 function requestCostFunctions()
-    assert(length(costFuncList) == length(costFuncNames))
-    assert(length(costFuncList) == length(costFuncDerivsList))
+    @assert (length(costFuncList) == length(costFuncNames))
+    @assert (length(costFuncList) == length(costFuncDerivsList))
     println("Available cost functions are: ")
     [println(n) for n in costFuncNames]
     println("------------------------------")

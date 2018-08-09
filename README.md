@@ -1,5 +1,6 @@
 # FCANN
-[![Build Status](https://travis-ci.org/Blackbody-Research/FCANN.jl.svg?branch=master)](https://travis-ci.org/Blackbody-Research/FCANN.jl)
+[![Build Status](https://travis-ci.org/Blackbody-Research/FCANN.jl.svg?branch=Streamline-Predictions-Errors)](https://travis-ci.org/Blackbody-Research/FCANN.jl)
+[![codecov.io](https://codecov.io/gh/Blackbody-Research/FCANN.jl/branch/Streamline-Predictions-Errors/graphs/badge.svg?)](http://codecov.io/gh/Blackbody-Research/FCANN.jl)
 
 Simple module for **F**ully **C**onnected **A**rtificial **N**eural **N**etworks.  Minimum functionality for changing error functions.  Current output task is fixed at regression (floating point value output) but in the future the option to define a network for classification will be added.
 

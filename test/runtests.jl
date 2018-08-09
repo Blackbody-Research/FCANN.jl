@@ -1,5 +1,5 @@
 using FCANN
-using Base.Test
+using Test
 
 include("initTests.jl")
 

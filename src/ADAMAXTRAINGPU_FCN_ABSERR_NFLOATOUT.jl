@@ -58,7 +58,7 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	# 	error("Only the absErr cost function exists for the GPU backend")
 	# end
 
-	srand(1234)
+	Random.seed!(1234)
 	m = 100
 	input_layer_size = 3
 	n = 2
@@ -306,7 +306,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	end
 
 	println()
-	print_with_color(:green, STDOUT, "Beginning training on GPU with the following parameters:", bold=true)
+	print_with_color(:green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
 	println()
 	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	println("-------------------------------------------------------------------")
@@ -456,7 +456,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	end
 	currentOut = currentOut/numBatches
 	
-	print_with_color(:red, STDOUT, string("Initial cost is ", currentOut), bold=true)
+	print_with_color(:red, stdout, string("Initial cost is ", currentOut), bold=true)
 	println()
 	#println(string("Initial cost is ", currentOut))
 
@@ -536,8 +536,8 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 			lastReport = currentTime
 			hoursLeft = floor(timeRemainingEst/(60*60))
 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
-			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, 1)
-			println(string("On epoch ", epoch, " out of ", numEpochs, " best cost is ", round(bestCost, 8)))
+			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, digits=1)
+			println(string("On epoch ", epoch, " out of ", numEpochs, " best cost is ", round(bestCost, digits=8)))
 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
 		end
 		epoch += 1
@@ -560,12 +560,12 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
     println("-------------------------------------------------------------------")
-	print_with_color(:green, STDOUT, "Completed training on GPU with the following parameters: ", bold = true)
+	print_with_color(:green, stdout, "Completed training on GPU with the following parameters: ", bold = true)
 	println()
 	#println(string("Completed training on GPU with the following parameters:"))
 	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize))
 	println(string("L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, " decay rate = ", R))
-	print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds"), bold=true)
+	print_with_color(:red, stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds"), bold=true)
 	println()	
 	#println(string("Cost reduced from ", costRecord[1], " to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds and ", numEpochs, " epochs"))		
 	println(string("Median time of ", round(Int64, 1e9*median(time_per_epoch)/m), " ns per example"))

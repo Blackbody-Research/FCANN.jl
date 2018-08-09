@@ -203,10 +203,10 @@ function readBinArray(filename::String)
 end
 
 function readInput(name)
-	X = Float32.(readcsv(string("Xtrain_", name, ".csv")))
-	Xtest = Float32.(readcsv(string("Xtest_", name, ".csv")))
-	Y = Float32.(readcsv(string("ytrain_", name, ".csv")))
-	Ytest = Float32.(readcsv(string("ytest_", name, ".csv")))
+	X = Float32.(readdlm(string("Xtrain_", name, ".csv")))
+	Xtest = Float32.(readdlm(string("Xtest_", name, ".csv")))
+	Y = Float32.(readdlm(string("ytrain_", name, ".csv")))
+	Ytest = Float32.(readdlm(string("ytest_", name, ".csv")))
 	(X, Xtest, Y, Ytest)
 end
 

@@ -28,7 +28,9 @@ function normLogLikelihoodDeriv(a1, a2, y)
 	((a1 - y)*exp(2*a2), exp(2*a2)*(y-a1)^2 - 1)
 end 
 
-#the exponential of a2 is the scale parameter, this ensures it is always positive
+#the exponential of a2 is the inverse of the scale parameter, this ensures it is always positive
+#exp(a2)=-1/b where b is the scale parameter => b = -1/exp(a2) and => log(exp(a2)/2) = log(-1/2b)
+#-abs(x-u)/b - log(2b) = -abs(x-u)*exp(a2)+log(0.5*exp(a2))
 function cauchyLogLikelihoodErr(a1, a2, y)
 	exp(a2)*abs(a1-y) - log(0.5f0*exp(a2))
 end
@@ -153,8 +155,9 @@ end
 
 function tanhGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32}, D::Float32)
 	l = length(z)
+	F = 1.0f0/(1.0f0 - D) #added scaling factor so dropout trained network can be treated normally during inference
 	@inbounds for i = 1:l
-		tanh_grad_z[i] = Float32(rand() > D)
+		tanh_grad_z[i] = Float32(rand() > D)*F
 	end
 
 	@inbounds @simd for i = 1:l	
@@ -175,15 +178,15 @@ end
 function predict(Thetas, biases, X, D = 0.0f0)
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
-#that had dropout applied to them are scaled by (1-D)
-
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
 	# Useful values
 	m = size(X, 1)
 	l = length(Thetas)
 	n = size(Thetas[end], 1)
 
 	#dropout scale factor
-	F = (1.0f0 - D)
+	# F = (1.0f0 - D)
 
 	a = Array{Matrix{Float32}}(l)
 
@@ -207,16 +210,161 @@ function predict(Thetas, biases, X, D = 0.0f0)
 
 		if (l-1) > 1
 			for i = 2:l-1
-				gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
 				tanhActivation!(a[i])
 			end
 		end
 
-		gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+	return a[end]
+end
+
+function predictBatches(Thetas, biases, batches, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(batches[1], 1)
+	l = length(Thetas)
+	n = size(Thetas[end], 1)
+
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	a = Array{Matrix{Float32}}(l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(m, size(Thetas[i], 1))
 	end
 
-	return a[end]
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
 
+	mapreduce(vcat, batches) do X
+		for ii = 1:l
+			for i = 1:length(biases[ii])
+				a[ii][:, i] = fill(biases[ii][i], m)
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+		if l > 1
+			tanhActivation!(a[1])
+
+			if (l-1) > 1
+				for i = 2:l-1
+					gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+					tanhActivation!(a[i])
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+		end
+		return copy(a[end])
+	end
+end
+
+function predictMulti(multiParams, X, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(X, 1)
+	l = length(multiParams[1][1])
+	n = size(multiParams[1][1][end], 1)
+
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	a = Array{Matrix{Float32}}(l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(m, size(multiParams[1][1][i], 1))
+	end
+
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
+	[begin
+		Thetas = params[1]
+		biases = params[2]
+		for ii = 1:l
+			for i = 1:length(biases[ii])
+				a[ii][:, i] = fill(biases[ii][i], m)
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+		if l > 1
+			tanhActivation!(a[1])
+
+			if (l-1) > 1
+				for i = 2:l-1
+					gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+					tanhActivation!(a[i])
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+		end
+		return copy(a[end])
+	end
+	for params in multiParams]
+end
+
+function predictMultiBatches(multiParams, batches, D = 0.0f0)
+#PREDICT Predict the value of an input in batches given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(batches[1], 1)
+	l = length(multiParams[1][1])
+	n = size(multiParams[1][1][end], 1)
+
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	a = Array{Matrix{Float32}}(l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(m, size(multiParams[1][1][i], 1))
+	end
+
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
+	[begin
+		mapreduce(vcat, batches) do X
+			Thetas = params[1]
+			biases = params[2]
+			for ii = 1:l
+				for i = 1:length(biases[ii])
+					a[ii][:, i] = fill(biases[ii][i], m)
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+			if l > 1
+				tanhActivation!(a[1])
+
+				if (l-1) > 1
+					for i = 2:l-1
+						gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+						tanhActivation!(a[i])
+					end
+				end
+
+				gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+			end
+			return copy(a[end])
+		end
+	end
+	for params in multiParams]
 end
 
 
@@ -297,7 +445,7 @@ function nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X
 	#Setup some useful variables
 	m = size(X, 1)
 	n = size(y, 2)
-	F = 1.0f0 - D
+	# F = 1.0f0 - D
 
 	fillAs!(a, biases, m)
 
@@ -309,12 +457,12 @@ function nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X
 
 		if num_hidden > 1
 			for i = 2:num_hidden
-				gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
 				tanhActivation!(a[i])
 			end
 		end
 
-		gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
 	end
 
 	#mean abs error cost function

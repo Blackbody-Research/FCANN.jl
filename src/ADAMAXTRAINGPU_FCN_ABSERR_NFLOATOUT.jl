@@ -52,6 +52,213 @@ function GPU2Host(hostvars, GPUvars)
 	end
 end
 
+function calcError(modelOut::CuArray{Float32, 2}, dataOut::CuArray{Float32, 2}; costFunc = "absErr")
+	(m, n) = size(dataOut)
+	
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	#array to store error values per example
+	if costFunc2 == costFunc
+		delt = copy(modelOut)
+
+		if (length(modelOut) == length(dataOut))
+			run_kernel(costFuncKs[costFunc], m, n, delt, dataOut)
+		else
+			error("output layer does not match data")
+		end
+
+		err = sum(Array{Float32, 2}(delt))/m
+	else
+		delt1 = copy(modelOut)
+		delt2 = copy(modelOut)
+		if (length(modelOut) == 2*length(dataOut))
+			run_kernel(costFuncKs[costFunc], m, n, delt1, dataOut)
+			run_kernel(costFuncKs[costFunc2], m, n, delt2, dataOut)
+		else
+			error("output layer does not match data")
+		end
+		err1 = sum(Array{Float32, 2}(delt1))/m
+		err2 = sum(Array{Float32, 2}(delt2)[:, 1:n])/m #needed b/c only the first n columns of delt2 contain valid errors
+		(err1, err2)
+	end
+
+end
+
+function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	# if costFunc != "absErr"
+	# 	error("Only the absErr cost function exists for the GPU backend")
+	# end
+
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+	
+	num_hidden = length(T) - 1
+	hidden_layers = if num_hidden > 0
+		map(p -> length(p), B[1:num_hidden])
+	else
+		Int64.([])
+	end
+
+	(m, input_layer_size) = size(input_data)
+	output_layer_size = if contains(costFunc, "Log")
+		2*n
+	else
+		n
+	end
+
+	#transfer parameters to GPU
+	d_Thetas = Array{CuArray{Float32, 2}}(length(T))
+	d_Biases = Array{CuArray{Float32, 1}}(length(T))
+
+	for i = 1:length(T)
+		d_Thetas[i] = CuArray(T[i])
+		d_Biases[i] = CuArray(B[i])
+	end
+	d_y = CuArray(output_data)
+	gc()
+	newMem = CUDAdrv.Mem.free() - (100*2^20)
+	maxB = min(2^17, getMaxGPUBatchSize(T, B, newMem))
+	if maxB == 0
+		println("Not enough GPU memory for calculation, returning nothing")
+		return nothing
+	else
+		(d_out, out) = if maxB > m 
+			d_X = CuArray(input_data)
+			
+			predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
+		else
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			end
+			numBatches = ceil(Int64, m/maxB)
+			if numBatches == 2
+				(d_out1, out1) = predict(d_Thetas, d_Biases, CuArray(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(d_out2, out2) = predict(d_Thetas, d_Biases, CuArray(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out3 = [out1; out2]
+				(CuArray(out3), out3)
+			else
+				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				(d_out1, out1) = predictBatches(d_Thetas, d_Biases, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(d_out2, out2) = predict(d_Thetas, d_Biases, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out3 = [out1; out2]
+				(CuArray(out3), out3)
+			end
+		end
+		errs = calcError(d_out, d_y, costFunc = costFunc)
+		gc()
+		return (out, errs)
+	end
+end
+
+function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	#Setup some useful variables
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+	
+	num_hidden = length(multiParams[1][1]) - 1
+	hidden_layers = if num_hidden > 0
+		map(p -> length(p), multiParams[1][2][1:num_hidden])
+	else
+		Int64.([])
+	end
+
+	(m, input_layer_size) = size(input_data)
+	output_layer_size = if contains(costFunc, "Log")
+		2*n
+	else
+		n
+	end
+
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	#transfer multiParams to GPU
+	multiParamsGPU = [begin
+		T = params[1]
+		B = params[2]
+		d_T = [CuArray(M) for M in T]
+		d_B = [CuArray(V) for V in B] 
+		(d_T, d_B)
+	end
+	for params in multiParams]	
+
+	
+	d_y = CuArray(output_data)
+	gc()
+	newMem = CUDAdrv.Mem.free() - (100*2^20)
+	maxB = min(2^17, getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem))
+
+	if maxB == 0
+		println("Not enough GPU memory for calculation, returning nothing")
+		return nothing
+	else 
+		multiOut = if maxB > m
+			d_X = CuArray(input_data)
+			predictMulti(multiParamsGPU, d_X, input_layer_size, output_layer_size, hidden_layers, dropout)
+		else
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			end
+			numBatches = ceil(Int64, m/maxB)
+			(out1, out2) = if numBatches == 2
+				out1 = predictMulti(multiParamsGPU, CuArray(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out2 = predictMulti(multiParamsGPU, CuArray(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(out1, out2)
+			else
+				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				out1 = predictMultiBatches(multiParamsGPU, batchInputs, input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				out2 = predictMulti(multiParamsGPU, CuArray(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, dropout)
+				gc()
+				(out1, out2)
+			end
+			map((a, b) -> [a; b], out1, out2)
+		end
+		gc()
+	
+		out = if contains(costFunc, "Log")
+			out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+			out2 = log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, n+1:2*n]), +, multiOut)/length(multiOut)))
+			[out1 out2]
+		else
+			mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+		end
+
+		outErrEst = if contains(costFunc, "Log")
+			mapreduce(a -> abs.([a[:, 1:n] exp.(-a[:, n+1:2*n])] .- [out[:, 1:n] exp.(-out[:, n+1:2*n])]), +, multiOut)/length(multiOut)
+		else
+			mapreduce(a -> abs.(a .- out), +, multiOut)/length(multiOut)
+		end
+
+		errs = calcError(out, output_data, costFunc = costFunc)
+		
+		return (multiOut, out, errs, outErrEst)
+	end
+end
+
 function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	
 	# if costFunc != "absErr"
@@ -181,99 +388,7 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr")
 	return GPUErr
 end
 
-function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
-#calculate network output given input data and a set of network parameters.
-#calculation is performed on the GPU and then returned to system memory
-	# if costFunc != "absErr"
-	# 	error("Only the absErr cost function exists for the GPU backend")
-	# end
-
-	#Setup some useful variables
-	m = size(input_data, 1)
-	n = size(output_data, 2)
-	
-	num_hidden = length(T) - 1
-	hidden_layers = if num_hidden > 0
-		map(p -> length(p), B[1:num_hidden])
-	else
-		Int64.([])
-	end
-
-	(m, input_layer_size) = size(input_data)
-	output_layer_size = if contains(costFunc, "Log")
-		2*n
-	else
-		n
-	end
-
-	#transfer parameters to GPU
-	d_Thetas = Array{CuArray{Float32, 2}}(length(T))
-	d_Biases = Array{CuArray{Float32, 1}}(length(T))
-
-	for i = 1:length(T)
-		d_Thetas[i] = CuArray(T[i])
-		d_Biases[i] = CuArray(B[i])
-	end
-
-	d_X = CuArray(input_data)
-
-	d_out = predict(d_Thetas, d_Biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
-
-	out = Array(d_out)
-
-	#array to store error values per example
-	delt = similar(output_data)
-
-	if (contains(costFunc, "Log")) & (length(out) == 2*length(output_data))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](out[i], out[i+(m*n)], output_data[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	elseif !(contains(costFunc, "Log")) & (length(out) == length(output_data))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](out[i], output_data[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	else
-		error("output layer does not match data")
-	end
-
-	err = sum(delt)/m
-
-	return (out, err)
-end
-
-function calcOutputGPU(input_data, T, B; dropout = 0.0f0)
-#calculate network output given input data and a set of network parameters.
-#calculation is performed on the GPU and then returned to system memory
-	num_hidden = length(T) - 1
-	hidden_layers = if num_hidden > 0
-		map(p -> length(p), B[1:num_hidden])
-	else
-		Int64.([])
-	end
-	(m, input_layer_size) = size(input_data)
-	output_layer_size = size(T[end], 1)
-
-	#transfer parameters to GPU
-	d_Thetas = Array{CuArray{Float32, 2}}(length(T))
-	d_Biases = Array{CuArray{Float32, 1}}(length(T))
-
-	for i = 1:length(T)
-		d_Thetas[i] = CuArray(T[i])
-		d_Biases[i] = CuArray(B[i])
-	end
-
-	d_X = CuArray(input_data)
-
-	d_out = predict(d_Thetas, d_Biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, dropout)
-
-	out = Array(d_out)
-
-	return out
-end
-
-function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, dropout = 0.0f0, costFunc="absErr")
+function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr")
 #train on a GPU fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
@@ -304,12 +419,15 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	elseif length(B0[end]) != output_layer_size
 		error("parameters incompatible with output data for sq/absErr cost function")
 	end
+<<<<<<< HEAD
 
 	println()
 	print_with_color(:green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
 	println()
 	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	println("-------------------------------------------------------------------")
+=======
+>>>>>>> Streamline-Predictions-Errors
 	
 	function scaleThetas!(d_Thetas, d_Theta_grads, d_onesVecParams, d_normVecParams, c)
 		for i = 1:length(d_Thetas)
@@ -371,6 +489,14 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	#total number of examples in dataset
 	if batchSize > m
 		error("Your batchsize is larger than the total number of examples.")
+	end
+
+	if printAnything
+		println()
+		print_with_color(:green, STDOUT, "Beginning training with the following parameters:", bold=true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", numEpochs, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+		println("-------------------------------------------------------------------")
 	end
 
 	numBatches = round(Int, ceil(m/batchSize))
@@ -452,7 +578,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 	
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
+		currentOut += nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, 0.0f0, costFunc = costFunc)
 	end
 	currentOut = currentOut/numBatches
 	
@@ -500,7 +626,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 		if epoch%period == 0
 			currentOut = 0.0f0
 			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
+				currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, 0.0f0, costFunc = costFunc)
 			end
 			currentOut = currentOut/numBatches
 			
@@ -545,7 +671,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, dropout, costFunc = costFunc)
+		currentOut += nnCostFunctionNOGRAD(d_Theta_est, d_Bias_est, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], lambda, 0.0f0, costFunc = costFunc)
 	end
 	currentOut = currentOut/numBatches
 
@@ -559,6 +685,7 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
     timePerBatch = train_time/numEpochs/numBatches
     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
+<<<<<<< HEAD
     println("-------------------------------------------------------------------")
 	print_with_color(:green, stdout, "Completed training on GPU with the following parameters: ", bold = true)
 	println()
@@ -572,5 +699,20 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
     println(string("Total operations per example = ", round(Int64, fops/batchSize), " foward prop ops + ", round(Int64, bops/batchSize), " backprop ops + ", round(Int64, pops/batchSize), " update ops = ", round(Int64, total_ops/batchSize)))
     println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
    	println("-------------------------------------------------------------------")
+=======
+   if printAnything
+		println("-------------------------------------------------------------------")
+		print_with_color(:green, STDOUT, "Completed training on GPU with the following parameters: ", bold = true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", numEpochs, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+	
+		print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[numEpochs]), " seconds and ", numEpochs, " epochs"), bold=true)
+		println()	
+		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
+	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
+	    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+	    println("-------------------------------------------------------------------")
+	end
+>>>>>>> Streamline-Predictions-Errors
     return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end	

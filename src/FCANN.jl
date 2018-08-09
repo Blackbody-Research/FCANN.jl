@@ -1,7 +1,7 @@
 module FCANN
 
 function availableBackends()
-    if Pkg.installed("CUBLAS") == nothing
+    if (Pkg.installed("CUBLAS") == nothing) | (Pkg.installed("CUDAdrv") == nothing)
         println("Available backends are: CPU")
         [:CPU]
     else
@@ -44,10 +44,59 @@ function checkNumGrad(lambda = 0.0f0; hidden_layers = [5, 5], costFunc = "absErr
     eval(Symbol("checkNumGrad", backend))(lambda; hidden_layers = hidden_layers, costFunc = costFunc)
 end
 
+function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0)
+    batchSizes = [512, 1024, 2048, 4096, 8192]
+    Ns = [32, 64, 128, 256, 512, 1024, 2048]
+    (_,_,_, cpuname, gpuname) = testTrain(1, [1], 1, 1024, 1, writeFile = false)
+     deviceName = if gpuname == ""
+        cpuname
+    else
+        string(cpuname, "_", gpuname)
+    end
+
+    if dropout == 0.0
+        if multi
+            println(string("Benchmarking device ", deviceName, " with cost function ", costFunc, " over ", nprocs(), " parallel tasks"))
+        else
+            println(string("Benchmarking device ", deviceName, " with cost function ", costFunc, " with a single training task"))
+        end
+    else
+        if multi
+            println(string("Benchmarking device ", deviceName, " with cost function ", costFunc, " over ", nprocs(), " parallel tasks with a dropout rate of ", dropout))
+        else
+            println(string("Benchmarking device ", deviceName, " with cost function ", costFunc, " with a single training task with a dropout rate of ", dropout))
+        end
+    end
+
+    out = [begin
+       (GFLOPS, parGFLOPS, t, cpuname, gpuname) = testTrain(N, [N, N], 2, B, 20; multi = multi, writeFile = false, numThreads = numThreads, costFunc = costFunc, dropout = dropout)
+       # println(string("Done with neurons = ", N, " batch size = ", B))
+       [N B GFLOPS parGFLOPS] 
+    end
+    for N in Ns for B in batchSizes]
+
+    header = ["Neurons" "Batch Size" "GFLOPS"]
+    body = if multi
+        mapreduce(a -> a[1, [1 2 4]], vcat, out)
+    else
+        mapreduce(a -> a[1, [1 2 3]], vcat, out)
+    end
+
+   
+
+    trainName = if dropout == 0
+        costFunc
+    else
+        string(dropout, "_dropout_", costFunc)
+    end
+
+    writecsv(string(deviceName, "_", trainName, "_trainingBenchmark.csv"), [header; body])
+end
+        
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, 
 maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, 
 testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions,
-availableBackends, setBackend, getBackend
+availableBackends, setBackend, getBackend, benchmarkDevice
 
 function __init__()
     function f()

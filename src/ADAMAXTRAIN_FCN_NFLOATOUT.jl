@@ -1,6 +1,5 @@
 #include neural network functions
 include("FCN_NFLOATOUT_COSTFUNCTIONS.jl")
-
 include("FCN_NFLOATOUT_AUXFUNCTIONS.jl")
 
 function calcOps(M, H, O, B)
@@ -56,6 +55,186 @@ function calcOps(M, H, O, B)
 		#fix this later, order of magnitude correct
 		((O*M+O), O*M + O, 0)
 	end
+end
+
+function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; costFunc = "absErr")
+	#Setup some useful variables
+	(m, n) = size(dataOut)
+
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	#array to store error values per example
+	if costFunc2 == costFunc
+		delt = similar(dataOut)
+
+		if (length(modelOut) == length(dataOut))
+			@simd for i = 1:m*n
+				@inbounds delt[i] = costFuncs[costFunc](modelOut[i], dataOut[i])
+			end
+		else
+			error("output layer does not match data")
+		end
+
+		err = sum(delt)/m
+	else
+		delt1 = similar(dataOut)
+		delt2 = similar(dataOut)
+		if (length(modelOut) == 2*length(dataOut))
+			@simd for i = 1:m*n
+				@inbounds delt1[i] = costFuncs[costFunc](modelOut[i], modelOut[i+(m*n)], dataOut[i])
+				@inbounds delt2[i] = costFuncs[costFunc2](modelOut[i], dataOut[i])
+			end
+		else
+			error("output layer does not match data")
+		end
+		err1 = sum(delt1)/m
+		err2 = sum(delt2)/m
+		(err1, err2)
+	end
+end
+
+function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+
+	#leave 1 GB of memory left over except on apple systems where free memory is underreported
+	newMem = if is_apple()
+		Int64(Sys.free_memory())
+	else
+		Int64(Sys.free_memory()) - (100*2^20)
+	end
+
+	maxB = min(2^17, getMaxBatchSize(T, B, newMem))
+	BLAS.set_num_threads(0)
+	
+	if maxB == 0
+		println("Not enough memory for calculation, returning nothing")
+		return nothing
+	else
+		out = if maxB > m
+			predict(T, B, input_data, dropout)
+		else
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+			end
+			numBatches = ceil(Int64, m/maxB)
+			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+			out1 = predictBatches(T, B, batchInputs, dropout)
+			out2 = predict(T, B, view(input_data, (numBatches-1)*maxB+1:m, :), dropout)
+			[out1; out2]
+		end
+
+		errs = calcError(out, output_data, costFunc = costFunc)
+		gc()
+		return (out, errs)
+	end
+end
+
+function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
+#calculate network output given input data and a set of network parameters.
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	#if copying the input data will result in needing to break up the data into smaller batches to preserve system memory, then it isn't worth it
+	#account for copying input data memory into other workers while leaving 1 GB left over 
+	#except on apple systems where free memory is underreported
+	function availMem(w)
+		if is_apple()
+			Int64(Sys.free_memory()) - (w * sizeof(input_data))
+		else
+			Int64(Sys.free_memory()) - (w * sizeof(input_data)) - (100*2^20)
+		end
+	end
+
+	calcMaxB(w) = getMaxBatchSize(multiParams[1][1], multiParams[1][2], availMem(w))
+	#create a vector of added workers that will still allow for large batch sizes
+	validProcCount = if nprocs() < 3
+		[]
+	else
+		find(a -> a > m, calcMaxB.(2:nprocs()-1)) 
+	end
+
+
+	multiOut = if isempty(validProcCount) 
+		if nprocs() > 2
+			println(string("Performing single threaded prediction because the limited available memory would require breaking input data into batches when copied to workers"))
+		else
+			println("Performing multi prediction on a single thread")
+		end
+		BLAS.set_num_threads(0)
+		newMem = if is_apple()
+			Int64(Sys.free_memory())
+		else
+			Int64(Sys.free_memory()) - (1024^3)
+		end
+		maxB = min(2^17, getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem))
+		if maxB == 0
+			println("Not enough memory for calculation, returning nothing")
+			return nothing
+		else
+			if maxB > m	
+				predictMulti(multiParams, input_data, dropout)
+			else
+				if maxB == 2^17
+					println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+				else
+					println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+				end
+				numBatches = ceil(Int64, m/maxB)
+				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				out1 = predictMultiBatches(multiParams, batchInputs, dropout)
+				out2 = predictMulti(multiParams, view(input_data, (numBatches-1)*maxB+1:m, :), dropout)
+				map((a, b) -> [a; b], out1, out2)
+			end
+		end
+	else
+		#value is the total number of parallel tasks that should be created to maximize batch size
+		numTasks = min(nprocs()-1, validProcCount[end] + 1)
+		println(string("Running multi prediction using ", numTasks, " parallel tasks"))
+		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs()-1, numTasks)))))
+		if length(multiParams) > numTasks
+			partitionInds = rem.(1:length(multiParams), numTasks)+1
+			multiParamsPartition = [multiParams[find(i -> i == n, partitionInds)] for n in 1:numTasks]
+			reduce(vcat, pmap(a -> predictMulti(a, input_data, dropout), multiParamsPartition))
+		else
+			pmap(a -> predict(a[1], a[2], input_data, dropout), multiParams) 
+		end
+	end
+
+
+	out = if contains(costFunc, "Log")
+		out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+		out2 = log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, n+1:2*n]), +, multiOut)/length(multiOut)))
+		[out1 out2]
+	else
+		mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+	end
+
+	outErrEst = if contains(costFunc, "Log")
+		mapreduce(a -> abs.([a[:, 1:n] exp.(-a[:, n+1:2*n])] .- [out[:, 1:n] exp.(-out[:, n+1:2*n])]), +, multiOut)/length(multiOut)
+	else
+		mapreduce(a -> abs.(a .- out), +, multiOut)/length(multiOut)
+	end
+
+	errs = calcError(out, output_data, costFunc = costFunc)
+	gc()
+	return (multiOut, out, errs, outErrEst)
 end
 
 function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
@@ -136,61 +315,6 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	err = norm(numGrad-funcGrad)/norm(numGrad + funcGrad)
 	println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
 	return err
-end
-
-function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
-#calculate network output given input data and a set of network parameters.
-#calculation is performed on the GPU and then returned to system memory
-	#Setup some useful variables
-	m = size(input_data, 1)
-	n = size(output_data, 2)
-
-	out = predict(T, B, input_data, dropout)
-
-	#array to store error values per example
-	delt = similar(output_data)
-
-	if (contains(costFunc, "Log")) & (length(out) == 2*length(output_data))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](out[i], out[i+(m*n)], output_data[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	elseif !(contains(costFunc, "Log")) & (length(out) == length(output_data))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](out[i], output_data[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	else
-		error("output layer does not match data")
-	end
-
-	err = sum(delt)/m
-
-	return (out, err)
-end
-
-function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; costFunc = "absErr")
-	#Setup some useful variables
-	(m, n) = size(dataOut)
-
-	#array to store error values per example
-	delt = similar(dataOut)
-
-	if (contains(costFunc, "Log")) & (length(modelOut) == 2*length(dataOut))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](modelOut[i], modelOut[i+(m*n)], dataOut[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	elseif !(contains(costFunc, "Log")) & (length(modelOut) == length(dataOut))
-		@simd for i = 1:m*n
-			@inbounds delt[i] = costFuncs[costFunc](modelOut[i], dataOut[i])
-			#@inbounds a[i] = absErr(a[i], y[i])
-		end
-	else
-		error("output layer does not match data")
-	end
-
-	err = sum(delt)/m
 end
 
 function updateM!(beta1, mT, mB, TG, BG)
@@ -312,7 +436,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, dropout = 0.0f0, costFunc = "absErr")
+function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr")
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -349,11 +473,21 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		error("Your batchsize is larger than the total number of examples.")
 	end
 
+<<<<<<< HEAD
 	println()
 	print_with_color(:green, stdout, "Beginning training with the following parameters:", bold=true)
 	println()
 	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
 	println("-------------------------------------------------------------------")
+=======
+	if printAnything
+		println()
+		print_with_color(:green, STDOUT, "Beginning training with the following parameters:", bold=true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+		println("-------------------------------------------------------------------")
+	end
+>>>>>>> Streamline-Predictions-Errors
 
 	numBatches = round(Int, ceil(m/batchSize))
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
@@ -404,9 +538,17 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 	end
 	currentOut = currentOut/numBatches
 
+<<<<<<< HEAD
 	print_with_color(:red, stdout, string("Initial cost is ", currentOut), bold=true)
 	println()
 	#println(string("Initial cost is ", currentOut))
+=======
+	if printAnything
+		print_with_color(:red, STDOUT, string("Initial cost is ", currentOut), bold=true)
+		println()
+		#println(string("Initial cost is ", currentOut))
+	end
+>>>>>>> Streamline-Predictions-Errors
 
 	#step rate and decay term for rms prop
 	beta1 = 0.9f0
@@ -468,7 +610,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		if epoch%period == 0
 			currentOut = 0.0f0
 			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc)
 			end
 			currentOut = currentOut/numBatches
 			
@@ -491,7 +633,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		currentTime = time()
 		#print status every 5 seconds
 		
-		if ((currentTime - lastReport) >= 5) & printProgress
+		if ((currentTime - lastReport) >= 5) & printProgress & printAnything
 			startEpoch = max(0, epoch-10)
 			#find average time per epoch over the last 10 epochs
 			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
@@ -515,7 +657,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc)
 	end
 	currentOut = currentOut/numBatches
 
@@ -529,21 +671,32 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
     timePerBatch = train_time/N/numBatches
     GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
 
-	if dropout == 0.0f0
+    if printAnything
 		println("-------------------------------------------------------------------")
+<<<<<<< HEAD
 		print_with_color(:green, stdout, "Completed training with the following parameters: ", bold = true)
+=======
+		print_with_color(:green, STDOUT, "Completed training on CPU with the following parameters: ", bold = true)
+>>>>>>> Streamline-Predictions-Errors
 		println()
-		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
-	else
-		println(string("Completed training with dropout factor of ", dropout))
-		println(string("Other training parameters: input size  = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+	
+		print_with_color(:red, STDOUT, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds and ", N, " epochs"), bold=true)
+		println()	
+		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
+	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
+	    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+	    println("-------------------------------------------------------------------")
 	end
+<<<<<<< HEAD
 	print_with_color(:red, stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds"), bold=true)
 	println()	
 	println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
     println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
     println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
     println("-------------------------------------------------------------------")
+=======
+>>>>>>> Streamline-Predictions-Errors
 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end	
 

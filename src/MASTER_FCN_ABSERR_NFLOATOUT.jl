@@ -37,7 +37,40 @@ function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "
 	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc)
 end
 
-function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "absErr", binInput = false)
+function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
+	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc)
+end
+
+#form file suffix string based on training parameters, ignore those that do not impact training
+#order of function inputs are lambda/L2 Reg factor, c/max norm reg factor, training decay rate, dropout rate
+function formIndicString(R, L2, c, D)
+	s1 = if L2 == 0.0
+		""
+	else
+		string(L2, "_L2_")
+	end
+
+	s2 = if c == Inf
+		""
+	else
+		string(round(c, 3), "_maxNorm_")
+	end
+
+	s3 = if R == 0.0
+		""
+	else
+		string(round(R, 3), "_decay_")
+	end
+
+	s4 = if D == 0.0
+		""
+	else
+		string(round(D, 3), "_dropout_")
+	end
+	string(s3, s1, s2, s4)
+end
+
+function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = if binInput
 		readBinInput(name)
@@ -48,7 +81,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 	M = size(X, 2)
 	O = size(Y, 2)
 
-	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "Log")
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
 		"sqErr"
 	else
 		"absErr"
@@ -57,7 +90,12 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_", costFunc, ".csv")
 	# BLAS.set_num_threads(0)
 
-	header = ["Layers" "Num Params" "Train Error" "Test Error" "Train Error 2" "Test Error 2"]
+	header = if costFunc2 == costFunc
+		["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error")]
+	else
+		["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
+	end
+
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden = hiddenList
 		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(hiddenList))))))
@@ -77,23 +115,18 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		println("beginning training")
 		Random.seed!(1234)
 		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc)
-
+		gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
+		gc()
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, costFunc = costFunc)
 
-		Jtrain2 = if costFunc2 != costFunc
-			calcError(outTrain[:, 1:O], Y, costFunc = costFunc2)
-		else
-			Jtrain
-		end
-		Jtest2 = if costFunc2 != costFunc
-			calcError(outTest[:, 1:O], Ytest, costFunc = costFunc2)
-		else
-			Jtrain
-		end
 
 		numParams = length(theta2Params(B, T))
-		[length(hidden) numParams Jtrain Jtest Jtrain2 Jtest2]
+		if costFunc2 == costFunc
+			[length(hidden) numParams Jtrain Jtest]
+		else
+			[length(hidden) numParams Jtrain[1] Jtest[1] Jtrain[2] Jtest[2]]
+		end
 	end)
 	
 	
@@ -101,6 +134,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		f = open(string("archEval_", filename), "a")
 		writedlm(f, body)
 		close(f)
+		string("archEval_", filename)[1:end-4]
 	else
 		Xtrain_lin = [ones(Float32, size(Y, 1)) X]
 		Xtest_lin = [ones(Float32, size(Ytest, 1)) Xtest]
@@ -110,7 +144,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		(naiveTrainErr1, naiveTrainErr2) = if contains(costFunc2, "sq")
 			err2 = calcError(fill(mean(Y), length(Y), 1), Y, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -120,7 +154,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 			b = mean(abs.(Y .- u))
 			err2 = calcError(fill(u, length(Y), 1), Y, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([u -0.5*log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)
+				calcError(repeat([u -log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -129,7 +163,7 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 		(naiveTestErr1, naiveTestErr2) = if contains(costFunc2, "sq")
 			err2 = calcError(fill(mean(Y), length(Ytest), 1), Ytest, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
 			else
 				err2
 			end
@@ -139,45 +173,68 @@ function archEval(name, N, batchSize, hiddenList, alpha = 0.002f0; costFunc = "a
 			b = mean(abs.(Y .- u))
 			err2 = calcError(fill(u, length(Ytest), 1), Ytest, costFunc = costFunc2)
 			err1 = if costFunc2 != costFunc
-				calcError(repeat([u -0.5*log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)
+				calcError(repeat([u -log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
 			else
 				err2
 			end
 			(err1, err2)
 		end
-		line0 = [0 0 naiveTrainErr1 naiveTestErr1 naiveTrainErr2 naiveTestErr2]
+		line0 = if costFunc2 == costFunc
+			[0 0 naiveTrainErr1 naiveTestErr1]
+		else
+			[0 0 naiveTrainErr1 naiveTestErr1 naiveTrainErr2 naiveTestErr2]
+		end
+
 		line1 = if costFunc2 == costFunc
-			[0 M+1 linRegTrainErr linRegTestErr linRegTrainErr linRegTestErr]
+			[0 M+1 linRegTrainErr linRegTestErr]
 		else
 			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
 		end
+<<<<<<< HEAD
 		writedlm(string("archEval_", filename), [header; line0; line1; body])
+=======
+		writecsv(string("archEval_", filename), [header; line0; line1; body])
+		string("archEval_", filename)[1:end-4]
+>>>>>>> Streamline-Predictions-Errors
 	end
 end
 
-function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0; binInput = false)
-#run arch eval but with a sampling of columns cols from the training set and test set
+function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = if binInput
 		readBinInput(name)
 	else
 		readInput(name)
 	end
+
 	M = length(cols)
 	O = size(Y, 2)
 
-	filename = string(name, "_", M, "_input_", O, "_output__ADAMAX", backend, ".csv")
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_", costFunc, ".csv")
 	# BLAS.set_num_threads(0)
-	header = ["Layers" "Num Params" "Train Error" "Test Error"]
+
+	header = if costFunc2 == costFunc
+		["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error")]
+	else
+		["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
+	end
+
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden = hiddenList
 		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(hiddenList))))))
 		else
 			BLAS.set_num_threads(0)
 		end
-
+		
 		println(string("training network with ", hidden, " hidden layers"))
 		println("initializing network parameters")
+<<<<<<< HEAD
 		Random.seed!(1234)
 		T0, B0 = initializeParams(M, hidden, O)
 		println("beginning training")
@@ -189,11 +246,33 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0; b
 
 		Jtrain = mean(abs.(outTrain - Y))
 		Jtest = mean(abs.(outTest - Ytest))
+=======
+		srand(1234)
+		T0, B0 = if contains(costFunc, "Log")
+			initializeParams(M, hidden, 2*O)
+		else
+			initializeParams(M, hidden, O)
+		end	
 
+		println("beginning training")
+		srand(1234)
+		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X[:, cols], Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc)
+		gc()
+		(outTrain, Jtrain) = calcOutput(X[:, cols], Y, T, B, costFunc = costFunc)
+		gc()
+		(outTest, Jtest) = calcOutput(Xtest[:, cols], Ytest, T, B, costFunc = costFunc)
+>>>>>>> Streamline-Predictions-Errors
+
+		
 		numParams = length(theta2Params(B, T))
-		[length(hidden) numParams Jtrain Jtest]
+		if costFunc2 == costFunc
+			[length(hidden) numParams Jtrain Jtest]
+		else
+			[length(hidden) numParams Jtrain[1] Jtest[1] Jtrain[2] Jtest[2]]
+		end	
 	end)
 	
+<<<<<<< HEAD
 	Xtrain_lin = [ones(size(Y, 1)) X[:, cols]]
 	Xtest_lin = [ones(size(Ytest, 1)) Xtest[:, cols]]
 	betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
@@ -201,9 +280,80 @@ function archEvalSample(name, N, batchSize, hiddenList, cols, alpha = 0.002f0; b
 	if isfile(string("archEval_", filename))
 		f = open(string("archEval_", filename), "a")
 		writedlm(f, body)
-		close(f)
+=======
+	colNames = replace(if length(cols) > 10
+		string(cols[1:3], "_", cols[end-2:end])
 	else
+		string(cols)
+	end, " ", "")
+	
+	if isfile(string("archEval_", colNames, "_cols_", filename))
+		f = open(string("archEval_", colNames, "_cols_", filename), "a")
+		writecsv(f, body)
+>>>>>>> Streamline-Predictions-Errors
+		close(f)
+		string("archEval_", colNames, "_cols_", filename)[1:end-4]
+	else
+<<<<<<< HEAD
 		writedlm(string("archEval_", cols, "_colums_", filename), [header; line1; body])
+=======
+		Xtrain_lin = [ones(Float32, size(Y, 1)) X[:, cols]]
+		Xtest_lin = [ones(Float32, size(Ytest, 1)) Xtest[:, cols]]
+		betas = pinv(Xtrain_lin'*Xtrain_lin)*Xtrain_lin'*Y
+		linRegTrainErr = calcError(Xtrain_lin*betas, Y, costFunc = costFunc2)
+		linRegTestErr = calcError(Xtest_lin*betas, Ytest, costFunc = costFunc2)
+		(naiveTrainErr1, naiveTrainErr2) = if contains(costFunc2, "sq")
+			err2 = calcError(fill(mean(Y), length(Y), 1), Y, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
+			else
+				err2
+			end
+			(err1, err2)
+		else
+			u = median(Y)
+			b = mean(abs.(Y .- u))
+			err2 = calcError(fill(u, length(Y), 1), Y, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([u -0.5*log(b)], inner = (length(Y), 1)), Y, costFunc = costFunc)[1]
+			else
+				err2
+			end
+			(err1, err2)
+		end
+		(naiveTestErr1, naiveTestErr2) = if contains(costFunc2, "sq")
+			err2 = calcError(fill(mean(Y), length(Ytest), 1), Ytest, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([mean(Y) -log(std(Y))], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
+			else
+				err2
+			end
+			(err1, err2)
+		else
+			u = median(Y)
+			b = mean(abs.(Y .- u))
+			err2 = calcError(fill(u, length(Ytest), 1), Ytest, costFunc = costFunc2)
+			err1 = if costFunc2 != costFunc
+				calcError(repeat([u -0.5*log(b)], inner = (length(Ytest), 1)), Ytest, costFunc = costFunc)[1]
+			else
+				err2
+			end
+			(err1, err2)
+		end
+		line0 = if costFunc2 == costFunc
+			[0 0 naiveTrainErr1 naiveTestErr1]
+		else
+			[0 0 naiveTrainErr1 naiveTestErr1 naiveTrainErr2 naiveTestErr2]
+		end		
+
+		line1 = if costFunc2 == costFunc
+			[0 M+1 linRegTrainErr linRegTestErr]
+		else
+			[0 M+1 "NA" "NA" linRegTrainErr linRegTestErr]
+		end
+		writecsv(string("archEval_", colNames, "_cols_", filename), [header; line0; line1; body])
+		string("archEval_", colNames, "_cols_", filename)[1:end-4]
+>>>>>>> Streamline-Predictions-Errors
 	end
 end
 
@@ -221,16 +371,39 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 
 	filename = string(name, "_", M, "_input_", O, "_output_", alpha, "_alpha_ADAMAX", backend, "_", costFunc, ".csv")
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	#determine number of layers to test in a range
-	hiddenList = mapreduce(vcat, Plist) do P 
+	fatHiddenList = mapreduce(vcat, Plist) do P 
 		map(layers) do L
-			H = ceil(Int64, getHiddenSize(M, O, L, P))
-			(P, H*ones(Int64, L))
+			H = if contains(costFunc, "Log")
+				ceil(Int64, getHiddenSize(M, 2*O, L, P))
+			else
+				ceil(Int64, getHiddenSize(M, O, L, P))
+			end
+			if H == 0
+				(P, Int64.([]))
+			else
+				(P, H*ones(Int64, L))
+			end
 		end
 	end
+
+	hiddenLayers = map(a -> a[2], fatHiddenList)
+	hiddenList = map(H -> fatHiddenList[find(a -> a == H, hiddenLayers)[1]], unique(hiddenLayers))
 	
 	# BLAS.set_num_threads(0)
-	header = ["Layers" "Num Params" "Target Num Params" "H" "Train Error" "Test Error" "Median GFLOPS"]
+
+	header = if costFunc2 == costFunc
+		["Layers" "Num Params" "Target Num Params" "H" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") "Median GFLOPS"]
+	else
+		["Layers" "Num Params" "Target Num Params" "H" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error") "Median GFLOPS"]
+	end
+
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden in hiddenList
 		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(hiddenList))))))
@@ -250,13 +423,20 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 		println("beginning training")
 		Random.seed!(1234)
 		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden[2], 0.0f0, Inf, alpha=alpha, R = R, printProgress = printProg, costFunc = costFunc)
-
+		gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
+		gc()
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, costFunc = costFunc)
 
 		numParams = length(theta2Params(B, T))
-		[length(hidden[2]) numParams hidden[1] hidden[2][1] Jtrain Jtest median(GFLOPS)]	
+		
+		if costFunc2 == costFunc
+			[length(hidden[2]) numParams hidden[1] hidden[2][1] Jtrain Jtest median(GFLOPS)]
+		else
+			[length(hidden[2]) numParams hidden[1] hidden[2][1] Jtrain[1] Jtest[1] Jtrain[2] Jtest[2] median(GFLOPS)]
+		end	
 	end)
+
 	if isfile(string("evalLayers_", filename))
 		f = open(string("evalLayers_", filename), "a")
 		writedlm(f, body)
@@ -901,6 +1081,12 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 	M = size(X, 2)
 	O = size(Y, 2)
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	h_name = if hidden == hidden[1]*ones(Int64, length(hidden))
 		string(hidden[1], "X", length(hidden))
 	else
@@ -935,7 +1121,9 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 		println("beginning decay rate optimization with ", alpha, " alpha")
 		(R, out, status) = autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = alpha, tau = tau, lambda = lambda, c = c, dropout = dropout, costFunc = costFunc)
 		T, B, bestCost, record, timeRecord, GFLOPS = out
+		gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
+		gc()
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc)
 		l = length(record)
 
@@ -956,9 +1144,15 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 			"NA"
 		end
 
+		(trainErr, testErr) = if costFunc2 == costFunc
+			(Jtrain, Jtest)
+		else
+			(Jtrain[1], Jtest[1])
+		end
+
 		#conv = mean((record[max(2, l-9):l]./record[max(1, l-10):l-1])-1)
 		
-		[alpha R Jtrain Jtest cc t median(GFLOPS) median(timeRecord[2:end]-timeRecord[1:end-1]) status]
+		[alpha R trainErr testErr cc t median(GFLOPS) median(timeRecord[2:end]-timeRecord[1:end-1]) status]
 	end)
 
 	if isfile(string("smartDecayRates_", filename))
@@ -1045,6 +1239,12 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFun
 		string(hidden)
 	end
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend, "_", costFunc, ".csv")
 	
 	println(string("training network with ", hidden, " hidden layers"))
@@ -1053,10 +1253,14 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFun
 		initializeParams(M, hidden, 2*O)
 	else
 		initializeParams(M, hidden, O)
-	end	
+	end
+
+	header = if costFunc2 == costFunc
+		["Lambda" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") "Median GFLOPS" "Median Time Per Epoch"]
+	else
+		["Lambda" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error") "Median GFLOPS" "Median Time Per Epoch"]
+	end
 	
-	
-	header = ["Lambda" "Train Error" "Test Error"]
 	body = reduce(vcat, pmap(lambdaList) do lambda # @parallel (vcat) for lambda = lambdaList
 		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), length(lambdaList))))))
@@ -1065,10 +1269,17 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFun
 		end
 		Random.seed!(1234)
 		println("beginning training with ", lambda, " lambda")
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha, printProgress = true, costFunc = costFunc)
+		(T, B, bestCost, record, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha, printProgress = true, costFunc = costFunc)
+		gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
+		gc()
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, costFunc = costFunc)
-		[lambda Jtrain Jtest]
+		
+		if costFunc2 == costFunc
+			[lambda Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		else
+			[lambda Jtrain[1] Jtest[1] Jtrain[2] Jtest[2] median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		end
 	end)
 	writedlm(string("L2Reg_", filename), [header; body])
 end
@@ -1101,6 +1312,12 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 		string(hidden)
 	end
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	if dropout == 0.0f0
 		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc, ".csv")
 	else
@@ -1116,8 +1333,12 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 		initializeParams(M, hidden, O)
 	end	
 	
+	header = if costFunc2 == costFunc
+		["Max Norm" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") "Median GFLOPS" "Median Time Per Epoch"]
+	else
+		["Max Norm" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error") "Median GFLOPS" "Median Time Per Epoch"]
+	end
 	
-	header = ["Max Norm" "Train Error" "Test Error" "Median GFLOPS" "Median Time Per Epoch"]
 	body = reduce(vcat, pmap(cList) do c # @parallel (vcat) for c = cList
 		#BLAS.set_num_threads(Sys.CPU_CORES)
 		if (nprocs() > 1) & (backend == :CPU)
@@ -1130,9 +1351,16 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 		Random.seed!(1234)
 		println("beginning training with ", c, " max norm")
 		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
+		gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
+		gc()
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc)
-		[c Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		
+		if costFunc2 == costFunc
+			[c Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		else 
+			[c Jtrain[1] Jtest[1] Jtrain[2] Jtest[2] median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		end			
 	end)
 	if isfile(string("maxNormReg_", filename))
 		f = open(string("maxNormReg_", filename), "a")
@@ -1161,6 +1389,12 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 		string(hidden)
 	end
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc, ".csv")
 
 	println(string("training network with ", hidden, " hidden layers "))
@@ -1172,7 +1406,12 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 		initializeParams(M, hidden, O)
 	end	
 
-	header = ["Dropout Rate" "Train Error" "Test Error" "Median GFLOPS" "Median Time Per Epoch"]
+	header = if costFunc2 == costFunc
+		["Dropout Rate" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") "Median GFLOPS" "Median Time Per Epoch"]
+	else
+		["Dropout Rate" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error") "Median GFLOPS" "Median Time Per Epoch"]
+	end
+
 	body = reduce(vcat, pmap(dropouts) do dropout # @parallel (vcat) for dropout in dropouts
 		#BLAS.set_num_threads(Sys.CPU_CORES)
 		#BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_CORES/min(nprocs(), length(dropouts))))))
@@ -1185,9 +1424,16 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 		Random.seed!(1234)
 		println("beginning training with ", dropout, " dropout rate")
 		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
+		gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
+		gc()
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc)
-		[dropout Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		
+		if costFunc2 == costFunc
+			[dropout Jtrain Jtest median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		else
+			[dropout Jtrain[1] Jtest[1] Jtrain[2] Jtest[2] median(GFLOPS) median(timeRecord[2:end] .- timeRecord[1:end-1])]
+		end			
 	end)
 	if isfile(string("dropoutReg_", filename))
 		f = open(string("dropoutReg_", filename), "a")
@@ -1213,18 +1459,46 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = if binInput
+	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
 	else
 		readInput(name)
 	end
 
-	M = size(X, 2)
+	X, Xtest = if isempty(sampleCols)
+		(Xraw, Xtestraw)
+	else
+		(Xraw[:, sampleCols], Xtestraw[:, sampleCols])
+	end
+
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " ", "")
+	else
+		replace(string(sampleCols, "_"), " ", "")
+	end
+
+	(numRows, M) = size(X)
 	O = size(Y, 2)
 
-	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend, "_", costFunc)
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+	
+	h_name = if isempty(hidden)
+		0
+	elseif hidden == hidden[1]*ones(Int64, length(hidden))
+		string(hidden[1], "X", length(hidden))
+	else
+		string(hidden)
+	end
+
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
 	
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
@@ -1248,13 +1522,15 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 
 	Random.seed!(1234)
 	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
-
+	gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
+	gc()
 	(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc)
 
 	if writeFiles
 		if contains(costFunc, "Log")
 			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O)]
+<<<<<<< HEAD
 			writedlm(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
 			writedlm(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest outTest[:, 1:O] exp.(-outTest[:, O+1:2*O])]])
 		else
@@ -1266,7 +1542,25 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 		writedlm(string(ID, "_costRecord_", filename, ".csv"), record)
 		writedlm(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
 		writedlm(string(ID, "_performance_", filename, ".csv"), [["Train Cost", "Test Cost"] [Jtrain, Jtest]])
+=======
+			writecsv(string(ID, "_predScatTrain_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
+			writecsv(string(ID, "_predScatTest_", filename, ".csv"), [header; [Ytest outTest[:, 1:O] exp.(-outTest[:, O+1:2*O])]])
+		else
+			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O)]
+			writecsv(string(ID, "_predScatTrain_", filename, ".csv"), [header; [Y outTrain]])
+			writecsv(string(ID, "_predScatTest_", filename, ".csv"), [header; [Ytest outTest]])
+		end
+
+		writecsv(string(ID, "_costRecord_", filename, ".csv"), record)
+		writecsv(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
+>>>>>>> Streamline-Predictions-Errors
 		
+		if costFunc2 == costFunc
+			writecsv(string(ID, "_performance_", filename, ".csv"), [[string("Train ", costFunc, " Error"), string("Test ", costFunc, " Error")] [Jtrain, Jtest]])
+		else
+			writecsv(string(ID, "_performance_", filename, ".csv"), [[string("Train ", costFunc, " Error"), string("Test ", costFunc, " Error"), string("Train ", costFunc2, " Error"), string("Test ", costFunc2, " Error")] [Jtrain[1], Jtest[1], Jtrain[2], Jtest[2]]])
+		end
+
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
 
@@ -1278,7 +1572,21 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	M = size(X, 2)
 	O = size(Y, 2)
 
-	filename = string(name, "_", M, "_input_", hidden, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend, "_", costFunc)
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	h_name = if isempty(hidden)
+		0
+	elseif hidden == hidden[1]*ones(Int64, length(hidden))
+		string(hidden[1], "X", length(hidden))
+	else
+		string(hidden)
+	end
+
+	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
 	
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
@@ -1299,51 +1607,82 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	# BLAS.set_num_threads(0)	
 	Random.seed!(1234)
 	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
-
+	gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
 	
 
 	if writeFiles
 		if contains(costFunc, "Log")
 			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O)]
+<<<<<<< HEAD
 			writedlm(string(ID, "_predictionScatter_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
 		else
 			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O)]
 			writedlm(string(ID, "_predictionScatter_", filename, ".csv"), [header; [Y outTrain]])
+=======
+			writecsv(string(ID, "_predScat_", filename, ".csv"), [header; [Y outTrain[:, 1:O] exp.(-outTrain[:, O+1:2*O])]])
+		else
+			header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O)]
+			writecsv(string(ID, "_predScat_", filename, ".csv"), [header; [Y outTrain]])
+>>>>>>> Streamline-Predictions-Errors
 		end
 	
 		writedlm(string(ID, "_costRecord_", filename, ".csv"), record)
 		writedlm(string(ID, "_timeRecord_", filename, ".csv"), timeRecord)
 		writedlm(string(ID, "_performance_", filename, ".csv"), ["Cost", Jtrain])
 		
+		if costFunc2 == costFunc
+			writecsv(string(ID, "_performance_", filename, ".csv"), [[string("Train ", costFunc, " Error")] [Jtrain]])
+		else
+			writecsv(string(ID, "_performance_", filename, ".csv"), [[string("Train ", costFunc, " Error"), string("Train ", costFunc2, " Error")] [Jtrain[1], Jtrain[2]]])
+		end
+
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
 	
 	(record, T, B, Jtrain, outTrain, bestCost)
 end
 
-function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false)
+function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = if binInput
+	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
 	else
 		readInput(name)
 	end
 
+	X, Xtest = if isempty(sampleCols)
+		(Xraw, Xtestraw)
+	else
+		(Xraw[:, sampleCols], Xtestraw[:, sampleCols])
+	end
+
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " ", "")
+	else
+		replace(string(sampleCols, "_"), " ", "")
+	end
+
 	(N, M) = size(X)
 	O = size(Y, 2)
+
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
 	
-	h_name = if hidden == hidden[1]*ones(Int64, length(hidden))
+	h_name = if isempty(hidden)
+		0
+	elseif hidden == hidden[1]*ones(Int64, length(hidden))
 		string(hidden[1], "X", length(hidden))
 	else
 		string(hidden)
 	end
 
-	filename = if dropout == 0.0f0
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
-	else
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
-	end
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
 
 	bootstrapOut = pmap(1:num) do foo
 		#BLAS.set_num_threads(Sys.CPU_CORES)
@@ -1374,12 +1713,17 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, costFunc = costFunc)
 		(T, B)
 	end
+	gc()
 	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
 	writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
 	
-	bootstrapOutTrain = pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-    bootstrapOutTest = pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+	println("Calculating training set outputs")
+	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+    gc()
+    println("Calculating test set outputs")
+    (bootstrapOutTest, outTest, errTest, errEstTest) = calcMultiOut(Xtest, Ytest, bootstrapOut, dropout = dropout, costFunc = costFunc) #pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
 	
+<<<<<<< HEAD
 	if contains(costFunc, "Log")
 		bootstrapOutTrainValue = map(a -> a[:, 1:O], bootstrapOutTrain)
 		bootstrapOutTrainRange = map(a -> exp.(-a[:, O+1:2*O]), bootstrapOutTrain)
@@ -1410,59 +1754,123 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
 		writedlm(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut trainOutErrEst]])
 		writedlm(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut testOutErrEst]])
+=======
+	header = if contains(costFunc, "Log")
+		[reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]
+	else
+		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
+>>>>>>> Streamline-Predictions-Errors
+	end
+	
+	println("Writing prediction scatters to file")
+	writecsv(string(ID, "_multiPredScatTrain_", filename, ".csv"), [header; [Y outTrain errEstTrain]])
+	writecsv(string(ID, "_multiPredScatTest_", filename, ".csv"), [header; [Ytest outTest errEstTest]])
+
+	header = if costFunc2 == costFunc
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est"]
+	else
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est" string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
 	end
 
+	println("Calculating performance vs number of networks")
+	d_y = if backend == :GPU
+		CuArray(Y)
+	else
+		[]
+	end
 
-	# if contains(costFunc, "Log")
-	# 	trainOut=[mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain)/num sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, bootstrapOutTrain)/num)]
-	# 	testOut=[mapreduce(a -> a[:, 1:O], +, bootstrapOutTest)/num sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, bootstrapOutTest)/num)]
-	# 	header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O)]
-	# 	writecsv(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut]])
-	# 	writecsv(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut]])
-	# else
-	# 	testOut = reduce(+, bootstrapOutTest)/length(bootstrapOutTest)
-	# 	trainOut = reduce(+, bootstrapOutTrain)/length(bootstrapOutTrain)
-	# 	header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O)]
-	# 	writecsv(string(ID, "_predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut]])
-	# 	writecsv(string(ID, "_predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut]])
-	# end
-
-	
-	header = ["Num Networks" "Training Error" "Training Error Est" "Test Error" "Test Error Est"]
+	d_ytest = if backend == :GPU
+		CuArray(Ytest)
+	else
+		[]
+	end
     	
-	#calculate average network output
-    fullMultiPerformance = mapreduce(vcat, 1:length(bootstrapOut)) do i
-        #calculate average network output
-        combinedOutputTrain = if contains(costFunc, "Log")
-            [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain[1:i])/i log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, bootstrapOutTrain[1:i])/i))]
-            # [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain[1:i])/i log.(1./((mapreduce(a -> exp.(-a[:, O+1:2*O]), +, bootstrapOutTrain[1:i]))/i))]
-        else
-            reduce(+, bootstrapOutTrain[1:i])/i
-        end
-        errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)   
-        Jtrain = calcError(combinedOutputTrain, Y, costFunc = costFunc)
+	bootstrapOutTrain2 = if contains(costFunc, "Log")
+		println("Calculating training non inverted ranges")
+		[[a[:, 1:O] exp.(-a[:, O+1:2*O])] for a in bootstrapOutTrain]
+	else
+		[]
+	end
+
+	bootstrapOutTest2 = if contains(costFunc, "Log")
+		println("Calculating test non inverted ranges")
+		[[a[:, 1:O] exp.(-a[:, O+1:2*O])] for a in bootstrapOutTest]
+	else
+		[]
+	end
+
+    fullMultiPerformance = mapreduce(vcat, 1:length(bootstrapOutTrain)) do i
+        #calculate average network output     
+        line = if contains(costFunc, "Log")
+            # combinedOutputTrainPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTrain[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTrain2[1:i]]))]  
+            combinedOutputTrainPre = [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain[1:i])/i sqrt.(mapreduce(a -> a[:, O+1:2*O].^2, +, bootstrapOutTrain2[1:i])/i)]
+            combinedOutputTrain = [combinedOutputTrainPre[:, 1:O] log.(1./combinedOutputTrainPre[:, O+1:2*O])]
+            # errorEstTrain = mean(reduce(+, [abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]) for a in bootstrapOutTrain2])/i)
+
+            errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
+      
+            Jtrain = if backend == :GPU
+            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+		
+			# combinedOutputTestPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTest[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTest2[1:i]]))] 
+            combinedOutputTestPre = [mapreduce(a -> a[:, 1:O], +, bootstrapOutTest[1:i])/i sqrt.(mapreduce(a -> a[:, O+1:2*O].^2, +, bootstrapOutTest2[1:i])/i)]
+            combinedOutputTest = [combinedOutputTestPre[:, 1:O] log.(1./combinedOutputTestPre[:, O+1:2*O])]
+            # errorEstTest = mean(reduce(+, [abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]) for a in bootstrapOutTest2])/i)
+            errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
             
-        combinedOutputTest = if contains(costFunc, "Log")
-        	[mapreduce(a -> a[:, 1:O], +, bootstrapOutTest[1:i])/i log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, bootstrapOutTest[1:i])/i))]
-            # [mapreduce(a -> a[:, 1:O], +, bootstrapOutTest[1:i])/i log.(1./((mapreduce(a -> exp.(-a[:, O+1:2*O]), +, bootstrapOutTest[1:i]))/i))]        
+            Jtest= if backend == :GPU
+            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
+            end
+
+            [i Jtrain[1] errorEstTrain Jtest[1] errorEstTest Jtrain[2] Jtest[2]]
         else
-            reduce(+, bootstrapOutTest)/i
+            combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
+            errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
+            Jtrain = if backend == :GPU
+            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+
+			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
+            errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
+            Jtest= if backend == :GPU
+            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
+            end
+
+            [i Jtrain errorEstTrain Jtest errorEstTest]
         end
-        errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
-        Jtest = calcError(combinedOutputTest, Ytest, costFunc = costFunc)
-        
-        [i Jtrain errorEstTrain Jtest errorEstTest]  
+        println(string("Done with networks 1 to ", i, " out of ", length(bootstrapOutTrain)))
+        line
     end 
 
+<<<<<<< HEAD
 	writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
+=======
+    println("saving results to file")
+	writecsv(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
+>>>>>>> Streamline-Predictions-Errors
 end
 
-function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)
+function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)
 	println("reading and converting training data")
-	X, Xtest, Y, Ytest = if binInput
+	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
 	else
 		readInput(name)
+	end
+
+	X, Xtest = if isempty(sampleCols)
+		(Xraw, Xtestraw)
+	else
+		(Xraw[:, sampleCols], Xtestraw[:, sampleCols])
 	end
 
 	# meanY = Float32.(readcsv(string("invY_values_", name, ".csv"))[2:end, 1])
@@ -1471,20 +1879,37 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	(N, M) = size(X)
 	O = size(Y, 2)
 	
-	h_name = if hidden == hidden[1]*ones(Int64, length(hidden))
+	h_name = if isempty(hidden)
+		0
+	elseif hidden == hidden[1]*ones(Int64, length(hidden))
 		string(hidden[1], "X", length(hidden))
 	else
 		string(hidden)
 	end
 
-	filename = if adv
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", lambdaeta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backend, "_", costFunc)
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " ", "")
 	else
-		if dropout == 0.0f0
-			string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
-		else
-			string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
-		end
+		replace(string(sampleCols, "_"), " ", "")
+	end
+
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	filename = if adv
+		string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", lambdaeta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backend, "_", costFunc)
+	else
+		string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambdaeta, c, dropout), "ADAMAX_", costFunc)
+		# if dropout == 0.0f0
+		# 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
+		# else
+		# 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
+		# end
 	end
 	
 	function hcatRobust(A, B)
@@ -1554,12 +1979,13 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 	println("saving combined parameters")
 	writeParams(convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, multiOut), string("fullMultiParams_", filename, ".bin"))
 	println(string("calculating combined outputs for ", length(multiOut), " networks"))
-
+	gc()
 	# BLAS.set_num_threads(0)
 	# num = length(multiOut)
  #  	if (nprocs() > 1) & (FCANN.backend == :CPU)
  #        BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_CORES/min(nprocs(), num)))))
  #    end
+<<<<<<< HEAD
 
 	multiOutTrain = pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], multiOut)
     multiOutTest = pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], multiOut)
@@ -1595,40 +2021,115 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; IDList = [], adv = fals
 		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
 		writedlm(string("predictionScatterTrain_", filename, ".csv"), [header; [Y trainOut trainOutErrEst]])
 		writedlm(string("predictionScatterTest_", filename, ".csv"), [header; [Ytest testOut testOutErrEst]])
+=======
+ 	println("Calculating training set outputs")
+	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, multiOut, dropout = dropout, costFunc = costFunc)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+    gc()
+    println("Calculating test set outputs")
+    (bootstrapOutTest, outTest, errTest, errEstTest) = calcMultiOut(Xtest, Ytest, multiOut, dropout = dropout, costFunc = costFunc) #pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+
+    header = if contains(costFunc, "Log")
+		[reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]
+	else
+		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
+>>>>>>> Streamline-Predictions-Errors
 	end
 
-	println("calculating train and test errors as a function of number of networks")
-	header = ["Num Networks" "Training Error" "Training Error Est" "Test Error" "Test Error Est"]
+	println("Writing prediction scatters to file")
+	writecsv(string("multiPredScatTrain_", filename, ".csv"), [header; [Y outTrain errEstTrain]])
+	writecsv(string("multiPredScatTest_", filename, ".csv"), [header; [Ytest outTest errEstTest]])
 	
-	#calculate average network output
-	fullMultiPerformance = mapreduce(vcat, 1:length(multiOut)) do i
-		combinedOutputTrain = if contains(costFunc, "Log")
-            [mapreduce(a -> a[:, 1:O], +, multiOutTrain[1:i])/i log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, multiOutTrain[1:i])/i))]
-            # [mapreduce(a -> a[:, 1:O], +, multiOutTrain[1:i])/i log.(1./((mapreduce(a -> exp.(-a[:, O+1:2*O]), +, multiOutTrain[1:i]))/i))]
-        	# reduce(+, multiOutTrain[1:i])/i
-        else
-            reduce(+, multiOutTrain[1:i])/i
-        end
-		errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, multiOutTrain[1:i])/i)	
-		Jtrain = calcError(combinedOutputTrain, Y, costFunc = costFunc)
-			
-		combinedOutputTest = if contains(costFunc, "Log")
-            [mapreduce(a -> a[:, 1:O], +, multiOutTest[1:i])/i log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, multiOutTest[1:i])/i))]
-            # [mapreduce(a -> a[:, 1:O], +, multiOutTest[1:i])/i log.(1./((mapreduce(a -> exp.(-a[:, O+1:2*O]), +, multiOutTest[1:i]))/i))]        
-        	# reduce(+, multiOutTest[1:i])/i
-        else
-            reduce(+, multiOutTest[1:i])/i
-        end
-		errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, multiOutTest[1:i])/i)	
-		Jtest = calcError(combinedOutputTest, Ytest, costFunc = costFunc)
-		[i Jtrain errorEstTrain Jtest errorEstTest]
+	header = if costFunc2 == costFunc
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est"]
+	else
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est" string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
 	end
+    	
+	#calculate average network output
+	println("Calculating performance vs number of networks")
+	d_y = if backend == :GPU
+		CuArray(Y)
+	else
+		[]
+	end
+
+	d_ytest = if backend == :GPU
+		CuArray(Ytest)
+	else
+		[]
+	end
+
+	bootstrapOutTrain2 = if contains(costFunc, "Log")
+		println("Calculating training non inverted ranges")
+		[[a[:, 1:O] exp.(-a[:, O+1:2*O])] for a in bootstrapOutTrain]
+	else
+		[]
+	end
+
+	bootstrapOutTest2 = if contains(costFunc, "Log")
+		println("Calculating test non inverted ranges")
+		[[a[:, 1:O] exp.(-a[:, O+1:2*O])] for a in bootstrapOutTest]
+	else
+		[]
+	end
+
+    fullMultiPerformance = mapreduce(vcat, 1:length(bootstrapOutTrain)) do i
+        #calculate average network output     
+        line = if contains(costFunc, "Log")
+            # combinedOutputTrainPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTrain[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTrain2[1:i]]))]  
+            combinedOutputTrainPre = [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain[1:i])/i sqrt.(mapreduce(a -> a[:, O+1:2*O].^2, +, bootstrapOutTrain2[1:i])/i)]
+            combinedOutputTrain = [combinedOutputTrainPre[:, 1:O] log.(1./combinedOutputTrainPre[:, O+1:2*O])]
+            # errorEstTrain = mean(reduce(+, [abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]) for a in bootstrapOutTrain2])/i)
+
+            errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
+      
+            Jtrain = if backend == :GPU
+            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+		
+			# combinedOutputTestPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTest[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTest2[1:i]]))] 
+            combinedOutputTestPre = [mapreduce(a -> a[:, 1:O], +, bootstrapOutTest[1:i])/i sqrt.(mapreduce(a -> a[:, O+1:2*O].^2, +, bootstrapOutTest2[1:i])/i)]
+            combinedOutputTest = [combinedOutputTestPre[:, 1:O] log.(1./combinedOutputTestPre[:, O+1:2*O])]
+            # errorEstTest = mean(reduce(+, [abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]) for a in bootstrapOutTest2])/i)
+            errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
+            
+            Jtest= if backend == :GPU
+            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
+            end
+
+            [i Jtrain[1] errorEstTrain Jtest[1] errorEstTest Jtrain[2] Jtest[2]]
+        else
+            combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
+            errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
+            Jtrain = if backend == :GPU
+            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+
+			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
+            errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
+            Jtest= if backend == :GPU
+            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
+            end
+
+            [i Jtrain errorEstTrain Jtest errorEstTest]
+        end
+        println(string("Done with networks 1 to ", i, " out of ", length(bootstrapOutTrain)))
+        line
+    end 
 		
 	println("saving results to file")	
 	writedlm(string("fullMultiPerformance_", filename, ".csv"), [header; fullMultiPerformance])		
 end
 
-function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr")
+function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0)
 	#generate training set with 100000 examples
 	X = randn(Float32, 100000, M)
 	Y = randn(Float32, 100000, O)
@@ -1653,7 +2154,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end	
 	out = pmap(1:num) do _
 		BLAS.set_num_threads(numThreads)
-		eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc)
+		eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout)
 	end
 	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]
@@ -1687,11 +2188,11 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end
 
 	filename = if backend == :GPU
-		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ', '_'), "_", replace(gpu_name, ' ', '_'), "_", costFunc, "_timingBenchmark.csv")
+		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ', '_'), "_", replace(gpu_name, ' ', '_'), "_", dropout, "_dropout_", costFunc, "_timingBenchmark.csv")
 	elseif num > 1
-		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ', '_'), "_", costFunc, "_", num, "_parallelTasks_", numThreads, "_BLASThreads_timingBenchmark.csv")
+		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ', '_'), "_", dropout, "_dropout_", costFunc, "_", num, "_parallelTasks_", numThreads, "_BLASThreads_timingBenchmark.csv")
 	else
-		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ', '_'), "_", costFunc, "_", numThreads, "_BLASThreads_timingBenchmark.csv")
+		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ', '_'), "_", dropout, "_dropout_", costFunc, "_", numThreads, "_BLASThreads_timingBenchmark.csv")
 	end
 
 	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
@@ -1702,7 +2203,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 		writedlm(filename, [header; [1:N timeRecord[2:end] GFLOPS_per_epoch num*GFLOPS_per_epoch]])
 	end
 	
-	return (median(GFLOPS_per_epoch), median(GFLOPS_per_epoch*num), median(time_per_epoch))
+	return (median(GFLOPS_per_epoch), median(GFLOPS_per_epoch*num), median(time_per_epoch), replace(cpu_name, ' ', '_'), replace(gpu_name, ' ', '_'))
 end
 
 #train a network with a variable number of layers for a given target number
@@ -1718,6 +2219,12 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	M = size(X, 2)
 	O = size(Y, 2)
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	filename = if dropout == 0.0f0
 		string(name, "_", M, "_input_", O, "_output_", N, "_epochs_smartParams_ADAMAX", backend, "_", costFunc, ".csv")
 	else
@@ -1725,7 +2232,7 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	end
 
 	#determine number of layers to test in a range
-	hiddenList = mapreduce(vcat, Plist) do P 
+	fatHiddenList = mapreduce(vcat, Plist) do P 
 		map(layers) do L
 			H = if contains(costFunc, "Log")
 				ceil(Int64, getHiddenSize(M, 2*O, L, P))
@@ -1739,8 +2246,15 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 			end
 		end
 	end
-	
-	header = ["Layers" "Num Params" "Target Num Params" "H" "Train Error" "Test Error" "Alpha" "Decay Rate" "Time Per Epoch" "Median GFLOPS" "Opt Success"]
+
+	hiddenLayers = map(a -> a[2], fatHiddenList)
+	hiddenList = map(H -> fatHiddenList[find(a -> a == H, hiddenLayers)[1]], unique(hiddenLayers))
+
+	header = if costFunc2 == costFunc
+		["Layers" "Num Params" "Target Num Params" "H" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") "Alpha" "Decay Rate" "Time Per Epoch" "Median GFLOPS" "Opt Success"]
+	else
+		["Layers" "Num Params" "Target Num Params" "H" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error") "Alpha" "Decay Rate" "Time Per Epoch" "Median GFLOPS" "Opt Success"]
+	end
 
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden in hiddenList
 		if (nprocs() > 1) & (backend == :CPU)
@@ -1764,8 +2278,9 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 		println("beginning training")
 		Random.seed!(1234)
 		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(X, Y, batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc)
-
+		gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
+		gc()
 		(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc)
 
 		numParams = length(theta2Params(B, T))
@@ -1776,7 +2291,11 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 			hidden[2][1]
 		end
 
-		[length(hidden[2]) numParams hidden[1] Hsize Jtrain Jtest alpha R median(timeRecord[2:end] - timeRecord[1:end-1]) median(GFLOPS) success]	
+		if costFunc == costFunc2
+			[length(hidden[2]) numParams hidden[1] Hsize Jtrain Jtest alpha R median(timeRecord[2:end] - timeRecord[1:end-1]) median(GFLOPS) success]	
+		else
+			[length(hidden[2]) numParams hidden[1] Hsize Jtrain[1] Jtest[1] Jtrain[2] Jtest[2] alpha R median(timeRecord[2:end] - timeRecord[1:end-1]) median(GFLOPS) success]	
+		end
 	end)
 	if isfile(string("evalLayers_", filename))
 		f = open(string("evalLayers_", filename), "a")
@@ -1803,13 +2322,23 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 		string(hidden)
 	end
 
+	costFunc2 = if contains(costFunc, "sq") | contains(costFunc, "norm")
+		"sqErr"
+	else
+		"absErr"
+	end
+
 	filename = if dropout == 0.0f0
 		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
 	else
 		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
 	end
 
-	header = ["Max Norm" "Training Error" "Training Error Est" "Test Error" "Test Error Est" "Median Time Per Epoch" "Median GLFOPS"]
+	header = if costFunc2 == costFunc
+		["Max Norm" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est" "Median Time Per Epoch" "Median GLFOPS"]
+	else
+		["Max Norm" string("Train ", costFunc, " Error")  "Training Error Est"  string("Test ", costFunc, " Error") "Test Error Est" string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")  "Median Time Per Epoch" "Median GLFOPS"]
+	end
 
 	phi = 0.5f0*(1.0f0+sqrt(5.0f0))
 	
@@ -1831,32 +2360,16 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 			(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, numEpochs, M, hidden, 0.0f0, c, alpha=alpha, R = R, dropout=dropout, printProgress = printProg, costFunc = costFunc)
 			(T, B, median(timeRecord[2:end] - timeRecord[1:end-1]), median(GFLOPS))
 		end
-		
-		#calculate average network output
-		bootstrapOutTrain = map(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-		combinedOutputTrain = if contains(costFunc, "Log")
-            [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain)/num log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, bootstrapOutTrain)/num))]
-            # [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain[1:i])/i log.(1./((mapreduce(a -> exp.(-a[:, O+1:2*O]), +, bootstrapOutTrain[1:i]))/i))]
-        	# reduce(+, bootstrapOutTrain[1:i])/i
-        else
-            reduce(+, bootstrapOutTrain)/num
-        end
-		# combinedOutputTrain = reduce(+, bootstrapOutTrain)/num
-		errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain)/num)	
-		Jtrain = calcError(combinedOutputTrain, Y, costFunc = costFunc)
-			
-		bootstrapOutTest = map(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-		combinedOutputTest = if contains(costFunc, "Log")
-            [mapreduce(a -> a[:, 1:O], +, bootstrapOutTest)/num log.(1./sqrt.(mapreduce(a -> exp.(-2*a[:, O+1:2*O]), +, bootstrapOutTest)/num))]
-            # [mapreduce(a -> a[:, 1:O], +, bootstrapOutTest[1:i])/i log.(1./((mapreduce(a -> exp.(-a[:, O+1:2*O]), +, bootstrapOutTest[1:i]))/i))]
-        	# reduce(+, bootstrapOutTest[1:i])/i
-        else
-            reduce(+, bootstrapOutTest)/num
-        end
-		# combinedOutputTest = reduce(+, bootstrapOutTest)/num
-		errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest)/num)	
-		Jtest = calcError(combinedOutputTest, Ytest, costFunc = costFunc)
-		(Jtest, [c Jtrain errorEstTrain Jtest errorEstTest maximum(map(a -> a[3], bootstrapOut)) minimum(map(a -> a[4], bootstrapOut))])	
+		gc()
+		(bootstrapOutTrain, combinedOutputTrain, Jtrain, errorEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc)
+
+		(bootstrapOutTest, combinedOutputTest, Jtest, errorEstTest) = calcMultiOut(Xtest, Ytest, bootstrapOut, dropout = dropout, costFunc = costFunc)
+
+		if costFunc2 == costFunc
+			(Jtest, [c Jtrain errorEstTrain Jtest errorEstTest maximum(map(a -> a[3], bootstrapOut)) minimum(map(a -> a[4], bootstrapOut))])
+		else
+			(Jtest[1], [c Jtrain[1] mean(errorEstTrain) Jtest[1] mean(errorEstTest) Jtrain[2] Jtest[2] maximum(map(a -> a[3], bootstrapOut)) minimum(map(a -> a[4], bootstrapOut))])
+		end
 	end
 
 	println()

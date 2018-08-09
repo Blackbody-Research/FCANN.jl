@@ -48,20 +48,20 @@ function initializeParams(input_layer_size, hidden_layers, output_layer_size)
 	Thetas = Array{Matrix{Float32}}(num_hidden+1)
 	Biases = Array{Vector{Float32}}(num_hidden+1)
 	if num_hidden > 0
-		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) * input_layer_size^(-.5))
-		Biases[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5))
+		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) * input_layer_size^(-.5f0))
+		Biases[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5f0))
 		
 		if num_hidden > 1
 			for i = 2:num_hidden
-				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) * hidden_layers[i-1]^(-.5))
-				Biases[i] = map(Float32, randn(hidden_layers[i]) * hidden_layers[i-1]^(-.5))
+				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) * hidden_layers[i-1]^(-.5f0))
+				Biases[i] = map(Float32, randn(hidden_layers[i]) * hidden_layers[i-1]^(-.5f0))
 			end
 		end
-		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) * hidden_layers[num_hidden]^(-.5))
-		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) * hidden_layers[num_hidden]^(-.5))
+		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) * hidden_layers[num_hidden]^(-.5f0))
+		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) * hidden_layers[num_hidden]^(-.5f0))
 	else
-		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^-.5f0
-		Biases[1] = randn(Float32, output_layer_size)*input_layer_size^-0.5f0
+		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^(-.5f0)
+		Biases[1] = randn(Float32, output_layer_size)*input_layer_size^(-0.5f0)
 	end
 	return Thetas, Biases
 end
@@ -80,6 +80,28 @@ function getNumParams(M, H, O)
 		num += M*O+O
 	end
 	return num
+end
+
+#estimate the memory usage for inference given parameters T, B, and the number
+#of examples in each batch m
+function estPredictMemUsage(T, B, m, numType = Float32)
+	lengthA = mapreduce(t -> size(t, 1)*m, +, T)
+	sizeof(numType)*lengthA
+end
+
+#get the maximum batch size that will fit in remaining free memory for an inference task
+#with parameters T, B.  free is an integer representing the number of available bytes
+function getMaxBatchSize(T, B, free, numType=Float32)
+	neuronCount = mapreduce(t -> size(t, 1), +, T)
+	floor(Int64, max(0, free)/(sizeof(numType)*neuronCount))
+end
+
+#get the maximum batch size that will fit in remaining GPU free memory for an inference task
+#with parameters T, B.  free is an integer representing the number of available bytes
+function getMaxGPUBatchSize(T, B, free, numType=Float32)
+	neuronCount = mapreduce(t -> size(t, 1), +, T)
+	#also add allocation for the new input batches which need to be moved to the GPU
+	floor(Int64, max(0, free)/(sizeof(numType)*(neuronCount + size(T[1], 2))))
 end
 
 #given a fixed M and O.  Try to generate networks with different numbers of hidden layers
@@ -123,6 +145,9 @@ function writeParams(params::Array{Tuple{Array{Array{Float32,2},1},Array{Array{F
 #the read function determine how to reconstruct the T and B arrays.  The encoding is as follows: first value N indicates
 #how many hidden layers are in the network.  If n = 1 then 3 integers will preceed the parameters namely, M, H, and O.  
 #Larger values of n will mean more preceeding ints need to be read.
+	if isfile(filename)
+		rm(filename)
+	end
 	f = open(filename, "a")
 	for P in params
 		(T, B) = (P[1], P[2])
@@ -146,6 +171,9 @@ function writeArray(input::Array{Float32,2}, filename::String)
 #the read function determine how to reconstruct the array.  The encoding is as follows: first value N indicates
 #how many rows are in the array.  The second value M indicates how many columns are in the array.  All of the
 #following lines are the data.
+	if isfile(filename)
+		rm(filename)
+	end
 	f = open(filename, "a")
 	(N, M) = size(input)
 	write(f, N)

@@ -1,12 +1,14 @@
 module FCANN
 
 function availableBackends()
-    if (Pkg.installed("CUBLAS") == nothing) | (Pkg.installed("CUDAdrv") == nothing)
-        println("Available backends are: CPU")
-        [:CPU]
-    else
+    installList = Pkg.installed()
+    if haskey(installList, "CUBLAS") & haskey(installList, "CUDAdrv") 
         println("Available backends are: CPU, GPU")
         [:CPU, :GPU]
+
+    else
+        println("Available backends are: CPU")
+        [:CPU]
     end
 end
 

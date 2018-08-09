@@ -109,10 +109,10 @@ A helper function wraps some of the above code in a manner that allows easier lo
 
 ``` julia
 #write data to disk with the name "ex"
-writecsv("Xtrain_ex.csv", Xtrain)
-writecsv("Xtest_ex.csv", Xtest)
-writecsv("ytrain_ex.csv", ytrain)
-writecsv("ytest_ex.csv", ytest)
+writedlm("Xtrain_ex.csv", Xtrain)
+writedlm("Xtest_ex.csv", Xtest)
+writedlm("ytrain_ex.csv", ytrain)
+writedlm("ytest_ex.csv", ytest)
 
 #define training parameters
 alpha = 0.002f0

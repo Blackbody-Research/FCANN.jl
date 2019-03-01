@@ -12,7 +12,11 @@ end
 # dispatch to output calculation for proper backend, the GPU backend version will crash
 # with any cost function other than "absErr"
 function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
-	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc)
+	eval(Symbol("calcOutput", backend))(input_data, output_data, (T, B), dropout = dropout, costFunc = costFunc)
+end
+
+function calcOutput(input_data, output_data, T, B, G; dropout = 0.0f0, costFunc = "absErr")
+	eval(Symbol("calcOutput", backend))(input_data, output_data, (T, B, G), dropout = dropout, costFunc = costFunc)
 end
 
 function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
@@ -1435,7 +1439,7 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, layerNorm = false)
 	println("reading and converting training data")
 	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
@@ -1474,17 +1478,17 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 		string(hidden)
 	end
 
-	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), layerNorm ? "layerNorm" : "", "ADAMAX_", costFunc)
 	
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
-	(T0, B0) = if isempty(startID)
+	params = if isempty(startID)
 		println("initializing network parameters")
 		Random.seed!(1234)
 		if occursin("Log", costFunc)
-			initializeParams(M, hidden, 2*O)
+			layerNorm ? initializeLayerNormParams(M, hidden, 2*O) : initializeParams(M, hidden, 2*O)
 		else
-			initializeParams(M, hidden, O)
+			layerNorm ? initializeLayerNormParams(M, hidden, O) : initializeParams(M, hidden, O)
 		end	
 	else
 		println("reading previous session parameters")
@@ -1496,12 +1500,14 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	#BLAS.set_num_threads(5)	
 	# BLAS.set_num_threads(0)
 
+	trainSym = layerNorm ? Symbol(string("ADAMAXTrainLayerNormNN", backend)) : Symbol(string("ADAMAXTrainNN", backend))
+
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
+	params, bestCost, record, timeRecord = eval(trainSym)(X, Y, batchSize, params..., N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
 	GC.gc()
-	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
+	(outTrain, Jtrain) = calcOutput(X, Y, params..., dropout = dropout, costFunc = costFunc)
 	GC.gc()
-	(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc)
+	(outTest, Jtest) = calcOutput(Xtest, Ytest, params..., dropout = dropout, costFunc = costFunc)
 
 	if writeFiles
 		if occursin("Log", costFunc)
@@ -1527,10 +1533,10 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
 
-	(record, T, B, Jtrain, outTrain, bestCost)
+	(record, params..., Jtrain, outTrain, bestCost)
 end
 
-function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true)
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, layerNorm = false)
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -1549,29 +1555,29 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 		string(hidden)
 	end
 
-	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX_", costFunc)
+	filename = 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout), layerNorm ? "layerNorm" : "", "ADAMAX_", costFunc)
 	
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
-	(T0, B0) = if isempty(startID)
-		println(string("initializing network parameters for ", M, " input ", O, " output ", hidden, " hidden network"))
+	params = if isempty(startID)
+		println("initializing network parameters")
 		Random.seed!(1234)
 		if occursin("Log", costFunc)
-			initializeParams(M, hidden, 2*O)
+			layerNorm ? initializeLayerNormParams(M, hidden, 2*O) : initializeParams(M, hidden, 2*O)
 		else
-			initializeParams(M, hidden, O)
+			layerNorm ? initializeLayerNormParams(M, hidden, O) : initializeParams(M, hidden, O)
 		end	
 	else
 		println("reading previous session parameters")
 		readBinParams(string(startID, "_params_", filename, ".bin"))[1]
 	end
 	
-	#BLAS.set_num_threads(Sys.CPU_THREADS)	
-	# BLAS.set_num_threads(0)	
+	trainSym = layerNorm ? Symbol(string("ADAMAXTrainLayerNormNN", backend)) : Symbol(string("ADAMAXTrainNN", backend))
+
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
+	params, bestCost, record, timeRecord = eval(trainSym)(X, Y, batchSize, params..., N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc)
 	GC.gc()
-	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
+	(outTrain, Jtrain) = calcOutput(X, Y, params..., dropout = dropout, costFunc = costFunc)
 	
 
 	if writeFiles
@@ -1598,7 +1604,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
 	
-	(record, T, B, Jtrain, outTrain, bestCost)
+	(record, params..., Jtrain, outTrain, bestCost)
 end
 
 function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false)

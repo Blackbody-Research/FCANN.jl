@@ -97,7 +97,7 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 	end
 end
 
-function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
+function calcOutputCPU(input_data, output_data, params; dropout = 0.0f0, costFunc = "absErr")
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	#Setup some useful variables
@@ -111,7 +111,7 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		Int64(Sys.free_memory()) - (100*2^20)
 	end
 
-	maxB = min(2^17, getMaxBatchSize(T, B, newMem))
+	maxB = min(2^17, getMaxBatchSize(params..., newMem))
 	BLAS.set_num_threads(0)
 	
 	if maxB == 0
@@ -119,7 +119,7 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		return nothing
 	else
 		out = if maxB > m
-			predict(T, B, input_data, dropout)
+			predict(params..., input_data)
 		else
 			if maxB == 2^17
 				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -128,8 +128,8 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			end
 			numBatches = ceil(Int64, m/maxB)
 			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
-			out1 = predictBatches(T, B, batchInputs, dropout)
-			out2 = predict(T, B, view(input_data, (numBatches-1)*maxB+1:m, :), dropout)
+			out1 = predictBatches(params..., batchInputs)
+			out2 = predict(params..., view(input_data, (numBatches-1)*maxB+1:m, :))
 			[out1; out2]
 		end
 
@@ -162,7 +162,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		end
 	end
 
-	calcMaxB(w) = getMaxBatchSize(multiParams[1][1], multiParams[1][2], availMem(w))
+	calcMaxB(w) = getMaxBatchSize(multiParams[1]..., availMem(w))
 	#create a vector of added workers that will still allow for large batch sizes
 	validProcCount = if nprocs() < 3
 		[]
@@ -183,13 +183,13 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		else
 			Int64(Sys.free_memory()) - (1024^3)
 		end
-		maxB = min(2^17, getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem))
+		maxB = min(2^17, getMaxBatchSize(multiParams[1]..., newMem))
 		if maxB == 0
 			println("Not enough memory for calculation, returning nothing")
 			return nothing
 		else
 			if maxB > m	
-				predictMulti(multiParams, input_data, dropout)
+				predictMulti(multiParams, input_data)
 			else
 				if maxB == 2^17
 					println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -198,8 +198,8 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 				end
 				numBatches = ceil(Int64, m/maxB)
 				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
-				out1 = predictMultiBatches(multiParams, batchInputs, dropout)
-				out2 = predictMulti(multiParams, view(input_data, (numBatches-1)*maxB+1:m, :), dropout)
+				out1 = predictMultiBatches(multiParams, batchInputs)
+				out2 = predictMulti(multiParams, view(input_data, (numBatches-1)*maxB+1:m, :))
 				map((a, b) -> [a; b], out1, out2)
 			end
 		end
@@ -211,9 +211,9 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		if length(multiParams) > numTasks
 			partitionInds = rem.(1:length(multiParams), numTasks) .+ 1
 			multiParamsPartition = [multiParams[findall(i -> i == n, partitionInds)] for n in 1:numTasks]
-			reduce(vcat, pmap(a -> predictMulti(a, input_data, dropout), multiParamsPartition))
+			reduce(vcat, pmap(a -> predictMulti(a, input_data), multiParamsPartition))
 		else
-			pmap(a -> predict(a[1], a[2], input_data, dropout), multiParams) 
+			pmap(a -> predict(a[1], a[2], input_data), multiParams) 
 		end
 	end
 
@@ -237,9 +237,9 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	return (multiOut, out, errs, outErrEst)
 end
 
-function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
+function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", m = 1000)
 	Random.seed!(1234)
-	m = 1000
+	# m = 1000
 	input_layer_size = 3
 	n = 2
 	#if using log likelihood cost function then need to double output layer size
@@ -252,7 +252,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	X = map(Float32, randn(m, input_layer_size))
 	y = map(Float32, randn(m, n))
 
-	hidden_layers = [5, 5]
+	# hidden_layers = [5, 5]
 	num_hidden = length(hidden_layers)
 
 	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
@@ -317,6 +317,115 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	return err
 end
 
+function checkNumGradLayerNormCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", m = 1000, n = 2, input_layer_size = 3, e = 1f-4)
+	Random.seed!(1234)
+	# m = 1000
+	# input_layer_size = 3
+	# n = 2
+	#if using log likelihood cost function then need to double output layer size
+	#relative to output example size
+	output_layer_size = if occursin("Log", costFunc)
+		2*n
+	else
+		n
+	end
+	X = map(Float32, randn(m, input_layer_size))
+	y = map(Float32, randn(m, n))
+
+	println("X = $X")
+	println("y = $y")
+
+	# hidden_layers = [5, 5]
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+	G0 = similar(B0)
+	for i in 1:length(G0)
+		G0[i] = ones(Float32, length(B0[i]))
+	end
+	println("T0 = $T0")
+	println("B0 = $B0")
+	println("G0 = $G0")
+
+
+	Theta_grads = similar(T0)
+	for i = 1:length(Theta_grads)
+		Theta_grads[i] = similar(T0[i])
+	end
+
+	Bias_grads = similar(B0)
+	for i = 1:length(B0)
+		Bias_grads[i] = similar(B0[i])
+	end
+
+	gain_grads = similar(G0)
+	for i = 1:length(G0)
+		gain_grads[i] = similar(G0[i])
+	end
+
+	onesVec = ones(Float32, m)
+
+	numLayers = length(T0)
+	
+	a = Array{Matrix{Float32}}(undef, num_hidden+1)
+	agrad = Array{Matrix{Float32}}(undef, num_hidden+1)
+	z = Array{Matrix{Float32}}(undef, num_hidden+1)
+	if num_hidden > 0
+		for i = 1:num_hidden
+			a[i] = Array{Float32}(undef, m, hidden_layers[i])
+			agrad[i] = Array{Float32}(undef, m, hidden_layers[i])
+			z[i] = Array{Float32}(undef, m, hidden_layers[i])
+		end
+	end
+	a[end] = Array{Float32}(undef, m, output_layer_size)
+	agrad[end] = Array{Float32}(undef, m, output_layer_size)
+	z[end] = Array{Float32}(undef, m, output_layer_size)
+
+	tanh_grad_z = deepcopy(a)
+	deltas = deepcopy(a)
+
+	#need to have this in a numerically stable zone because layer norm derivatives are highly sensitive to 
+	#the delta, using e = 0.01 caused failures unless hidden layer size was very large.  If e is too small then numerical gradients become zero and fail as well
+	# e = 1f-4
+	params = theta2Params(B0, G0, T0)
+	l = length(params)
+	perturb = zeros(Float32, l)
+	numGrad = Array{Float32}(undef, l)
+
+	nnCostFunctionLayerNorm(T0, B0, G0, input_layer_size, hidden_layers, X, y, lambda, Theta_grads, Bias_grads, gain_grads, tanh_grad_z, a, agrad, z, deltas, onesVec, costFunc=costFunc)
+	
+	funcGrad = theta2Params(Bias_grads, gain_grads, Theta_grads)
+
+	#establish mean and sigma constants for gradient checking
+	(J, Us, Sigs) = nnCostFunctionLayerNormNOGRAD(T0, B0, G0, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
+	println("output = $(a[end])")
+	println("J = $J")
+
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus, Gplus = layerNormParams2Theta(input_layer_size, hidden_layers, output_layer_size, params .+ perturb)
+		println("Tplus = $Tplus")
+		println("output = $(a[end])")
+		Tminus, Bminus, Gminus = layerNormParams2Theta(input_layer_size, hidden_layers, output_layer_size, params .- perturb)
+
+		(outminus, Us, Sigs) = nnCostFunctionLayerNormNOGRAD(Tminus, Bminus, Gminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
+		(outplus, Us, Sigs) = nnCostFunctionLayerNormNOGRAD(Tplus, Bplus, Gplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
+		# println("_________")	
+		perturb[i] = 0.0f0  #restore perturb vector to 0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	
+	println("Num Grads  Func Grads")
+	for i = 1:length(numGrad)
+		@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
+	end
+	err = norm(numGrad-funcGrad)/norm(numGrad + funcGrad)
+	println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
+	return err
+end
+
 function updateM!(beta1, mT, mB, TG, BG)
 	b2 = 1.0f0 - beta1
 	for i = 1:length(TG)
@@ -326,6 +435,17 @@ function updateM!(beta1, mT, mB, TG, BG)
 		
 		@simd for ii = 1:length(BG[i])
 			@inbounds mB[i][ii] = beta1*mB[i][ii] + b2*BG[i][ii]
+		end
+	end
+end
+
+function updateM!(beta1, Ms, Gs)
+	b2 = 1.0f0 - beta1
+	for i = 1:length(Gs[1])
+		for j in eachindex(Gs)
+			@simd for ii = 1:length(Gs[j][i])
+				@inbounds Ms[j][i][ii] = beta1*Ms[j][i][ii] + b2*Gs[j][i][ii]
+			end
 		end
 	end
 end
@@ -341,6 +461,16 @@ function updateV!(beta2, vT, vB, TG, BG)
 	end
 end
 
+function updateV!(beta2, Vs, Gs)
+	for i = 1:length(Gs[1])
+		for j in eachindex(Gs)
+			@simd for ii = 1:length(Gs[j][i])
+				@inbounds Vs[j][i][ii] = max(beta2*Vs[j][i][ii], abs(Gs[j][i][ii]), 1.0f-16)
+			end
+		end
+	end
+end
+
 function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t)
 	scale = alpha/(1.0f0 - beta1^t)
 	for i = 1:length(T)
@@ -349,6 +479,17 @@ function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t)
 		end
 		@simd for ii = 1:length(B[i])
 			@inbounds B[i][ii] = B[i][ii] - scale*mB[i][ii]/vB[i][ii]
+		end
+	end
+end
+
+function updateParams!(alpha, beta1, Ps, Ms, Vs, t)
+	scale = alpha/(1.0f0 - beta1^t)
+	for i = 1:length(Ps[1])
+		for j in eachindex(Ps)
+			@simd for ii = 1:length(Ps[j][i])
+				@inbounds Ps[j][i][ii] = Ps[j][i][ii] - scale*Ms[j][i][ii]/Vs[j][i][ii]
+			end
 		end
 	end
 end
@@ -366,6 +507,21 @@ function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
 		@simd for ii = 1:length(B[i])
 			@inbounds B_avg[i][ii] = beta2*B_avg[i][ii] + b2*B[i][ii]
 			@inbounds B_est[i][ii] = scale*B_avg[i][ii]
+		end
+	end
+end
+
+function updateEst!(beta2, t, Ps, Ps_avg, Ps_est)
+	for i = 1:length(Ps[1])
+		(N, M) = size(Ps[1][i])
+		scale = 1.0f0/(1.0f0 - beta2^t)
+		b2 = 1.0f0 - beta2
+
+		for j in eachindex(Ps)
+			@simd for ii = 1:length(Ps[j][i])
+				@inbounds Ps_avg[j][i][ii] = beta2*Ps_avg[j][i][ii] + b2*Ps[j][i][ii]
+				@inbounds Ps_est[j][i][ii] = scale*Ps_avg[j][i][ii]
+			end
 		end
 	end
 end
@@ -396,6 +552,7 @@ function scaleParams!(T, B, c)
 	end
 end
 
+
 function apply!(f, A, B)
 #apply a function f(x, y) that takes two inputs and produces a single output to each pair 
 #of elements in A and B where A and B are collections of Arrays and saves the answer in B
@@ -415,6 +572,17 @@ function updateBest!(bestT, bestB, newT, newB)
 		end
 		@simd for ii = 1:length(bestT[i])
 			@inbounds bestT[i][ii] = newT[i][ii]
+		end
+	end
+end
+
+function updateBest!(bestPs, newPs)
+#update best parameters when a new lowest cost is found 
+	for i = 1:length(bestPs[1])
+		for j in eachindex(bestPs)
+			@simd for ii = 1:length(bestPs[j][i])
+				@inbounds bestPs[j][i][ii] = newPs[j][i][ii]
+			end
 		end
 	end
 end
@@ -665,15 +833,276 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		println()
 		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
 	
-		printstyled(stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds and ", N, " epochs"), bold=true, color=:red)
+		printstyled(stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[max(1, N)]), " seconds and ", N, " epochs"), bold=true, color=:red)
 		println()	
-		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
+		println(string("Median time of ", 1e9*(try median(time_per_epoch)/m catch; 0 end), " ns per example"))
 	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
-	    println(string("Approximate GFLOPS = ", median(GFLOPS_per_epoch)))
+	    println(string("Approximate GFLOPS = ", try median(GFLOPS_per_epoch) catch; 0 end))
 	    println("-------------------------------------------------------------------")
 	end
 
-	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
+	return (bestThetas, bestBiases), bestCost, costRecord, timeRecord, GFLOPS_per_epoch
+end	
+
+function ADAMAXTrainLayerNormNNCPU(input_data, output_data, batchSize, T0, B0, G0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr")
+#train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
+#initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
+#a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
+#Note that all floating point input variables must be float32 or single precision   
+	@assert ((dropout >= 0.0f0) & (dropout < 1.0f0)) string("Dropout rate of ", dropout, " is not between 0 and 1")
+	(m, n) = size(input_data)
+	(m2, output_layer_size) = size(output_data)
+	
+	n2 = if occursin("Log", costFunc)
+		2*output_layer_size
+	else
+		output_layer_size
+	end
+
+	if m2 != m 
+		error("input and output data do not match")
+	end
+
+	#check that parameters are appropriate for input and output data given selected cost function
+	if size(T0[1], 2) != n 
+		error("parameters incompatible with input data")
+	end
+	
+	if occursin("Log", costFunc)
+		if length(B0[end]) != 2*output_layer_size
+			error("parameters incompatible with output data for log likelihood cost function")
+		end
+	elseif length(B0[end]) != output_layer_size
+		error("parameters incompatible with output data for sq/absErr cost function")
+	end
+
+	#total number of examples in dataset
+	if batchSize > m
+		error("Your batchsize is larger than the total number of examples.")
+	end
+
+	if printAnything
+		println()
+		printstyled(stdout, "Beginning training with the following parameters:", bold=true, color=:green)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+		println("-------------------------------------------------------------------")
+	end
+
+	numBatches = round(Int, ceil(m/batchSize))
+	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
+    total_ops = fops + bops + pops
+
+	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
+		
+	#create memory objects used in cost function
+	num_hidden = length(hidden_layers)
+
+	tanh_grad_zBATCH = Array{Matrix{Float32}}(undef, num_hidden)
+	for i = 1:num_hidden
+		tanh_grad_zBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
+	end
+	
+	aBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
+	agradBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
+	zBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
+	for i = 1:num_hidden
+		aBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
+		agradBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
+		zBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
+	end
+	aBATCH[end] = Array{Float32}(undef, batchSize, n2)
+	agradBATCH[end] = Array{Float32}(undef, batchSize, n2)
+	zBATCH[end] = Array{Float32}(undef, batchSize, n2)
+	
+	deltasBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
+	for i = 1:length(deltasBATCH)
+		deltasBATCH[i] = similar(aBATCH[i])
+	end
+
+	Theta_grads = similar(T0)
+	for i = 1:length(Theta_grads)
+		Theta_grads[i] = similar(T0[i])
+	end
+
+
+	Bias_grads = similar(B0)
+	for i = 1:length(B0)
+		Bias_grads[i] = similar(B0[i])
+	end
+
+	Gain_grads = similar(G0)
+	for i = 1:length(G0)
+		Gain_grads[i] = similar(G0[i])
+	end
+
+	onesVecBATCH = ones(Float32, batchSize)
+
+	numLayers = length(T0)
+
+
+
+	nnCostFunctionLayerNorm(T0, B0, G0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, Gain_grads, tanh_grad_zBATCH, aBATCH, agradBATCH, zBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc)
+	currentOut = 0.0f0 
+	for i = 1:numBatches
+		newOut, _, _ = nnCostFunctionLayerNormNOGRAD(T0, B0, G0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+		# println(newOut)
+		currentOut += newOut
+	end
+	currentOut = currentOut/numBatches
+
+	if printAnything
+		printstyled(stdout, string("Initial cost is ", currentOut), bold=true, color=:red)
+		println()
+		#println(string("Initial cost is ", currentOut))
+	end
+
+
+	#step rate and decay term for rms prop
+	beta1 = 0.9f0
+	beta2 = 0.999f0
+
+	mT = 0.0f0*deepcopy(T0)
+	mB = 0.0f0*deepcopy(B0)
+	mG = 0.0f0*deepcopy(G0)
+
+	vT = 0.0f0*deepcopy(T0)
+	vB = 0.0f0*deepcopy(B0)
+	vG = 0.0f0*deepcopy(G0)
+
+	T_avg = 0.0f0*deepcopy(T0)
+	B_avg = 0.0f0*deepcopy(B0)
+	G_avg = 0.0f0*deepcopy(G0)
+
+	T_est = 0.0f0*deepcopy(T0)
+	B_est = 0.0f0*deepcopy(B0)
+	G_est = 0.0f0*deepcopy(G0)
+
+	Thetas = deepcopy(T0)
+	Biases = deepcopy(B0)
+	Gains = deepcopy(G0)
+
+	period = 10
+	costRecord = Array{Float32}(undef, ceil(Int, N/period)+1)
+	costRecord[1] = currentOut
+
+	startTime = time()
+	lastReport = startTime
+
+	timeRecord = Array{Float64}(undef, N+1)
+	timeRecord[1] = 0.0
+
+	bestThetas = deepcopy(T0)
+	bestBiases = deepcopy(B0)
+	bestGains = deepcopy(G0)
+	bestCost = currentOut
+	rollingAvgCost = currentOut
+
+	iter = 1
+	epoch = 1
+	eta = alpha
+	F = (1.0f0 - R)
+
+	t = 1
+	while epoch <= N
+	#while epoch <= N
+		#run through an epoch in batches with randomized order
+		for batch in randperm(numBatches)
+			nnCostFunctionLayerNorm(Thetas, Biases, Gains, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, Gain_grads, tanh_grad_zBATCH, aBATCH, agradBATCH, zBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc)
+			updateM!(beta1, (mT, mB, mG), (Theta_grads, Bias_grads, Gain_grads))
+			updateV!(beta2, (vT, vB, vG), (Theta_grads, Bias_grads, Gain_grads))		
+			updateParams!(eta, beta1, (Thetas, Biases, Gains), (mT, mB, mG), (vT, vB, vG), t)
+			if c < Inf 
+				scaleParams!(Thetas[1:end-1], Biases[1:end-1], c)
+			end
+			#use recent time average of parameter changes for estimate
+			updateEst!(beta2, t, (Thetas, Biases, Gains), (T_avg, B_avg, G_avg), (T_est, B_est, G_est))
+			t += 1
+		end
+		timeRecord[epoch + 1] = time() - startTime
+
+		if epoch%period == 0
+			currentOut = 0.0f0
+			for i = 1:numBatches
+				(newOut, _, _) = nnCostFunctionLayerNormNOGRAD(T_est, B_est, G_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc)
+				currentOut += newOut
+			end
+			currentOut = currentOut/numBatches
+			
+			costRecord[iter + 1] = currentOut
+			
+			if currentOut < bestCost
+				updateBest!((bestThetas, bestBiases, bestGains), (T_est, B_est, G_est))
+				bestCost = currentOut
+			end
+
+			if epoch > 100
+				#println(string("eta = ", eta))
+				eta = eta*F
+			end
+			
+			iter += 1
+		end
+
+	
+		currentTime = time()
+		#print status every 5 seconds
+		
+		if ((currentTime - lastReport) >= 5) & printProgress & printAnything
+			startEpoch = max(0, epoch-10)
+			#find average time per epoch over the last 10 epochs
+			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
+			remainingEpochs = N - epoch
+
+			timeRemainingEst = remainingEpochs*epochTime
+
+			#elapsed = currentTime - startTime
+			#percentComplete = epoch/N
+			#totalTimeEst = elapsed / percentComplete
+			#timeRemainingEst = totalTimeEst - elapsed
+			lastReport = currentTime
+			hoursLeft = floor(timeRemainingEst/(60*60))
+			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
+			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, digits=1)
+			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, digits=8)))
+			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
+		end
+		epoch += 1
+	end
+
+	currentOut = 0.0f0
+	for i = 1:numBatches
+		newOut, _, _ = nnCostFunctionLayerNormNOGRAD(T_est, B_est, G_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc)
+		currentOut += newOut
+	end
+	currentOut = currentOut/numBatches
+
+	if currentOut < bestCost
+		bestCost = currentOut
+		updateBest!((bestThetas, bestBiases, bestGains), (T_est, B_est, G_est))
+	end
+	
+	time_per_epoch = timeRecord[2:end] .- timeRecord[1:end-1]
+    train_time = timeRecord[end]
+    timePerBatch = train_time/N/numBatches
+    GFLOPS_per_epoch = total_ops * numBatches ./ time_per_epoch / 1e9
+
+    if printAnything
+		println("-------------------------------------------------------------------")
+		printstyled(stdout, "Completed training on CPU with the following parameters: ", bold = true, color=:green)
+
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+	
+		printstyled(stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[max(1, N)]), " seconds and ", N, " epochs"), bold=true, color=:red)
+		println()	
+		println(string("Median time of ", 1e9*(try median(time_per_epoch)/m catch; 0 end), " ns per example"))
+	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))
+	    println(string("Approximate GFLOPS = ", try median(GFLOPS_per_epoch) catch; 0 end))
+	    println("-------------------------------------------------------------------")
+	end
+
+	return (bestThetas, bestBiases, bestGains), bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end	
 
 # function ADAMAXTrainNNAdv(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, eta, c, alpha; printProgress = false)

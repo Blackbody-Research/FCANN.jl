@@ -32,55 +32,6 @@ end
 return Thetas, Biases
 end
 
-function layerNormParams2Theta(input_layer_size, hidden_layer_size, output_layer_size, nn_params)
-#convert a vector of nn parameters into the matrices used for the predict
-#function based on the input and hidden layer sizes.
-
-num_hidden = length(hidden_layer_size)
-Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
-Biases = Array{Vector{Float32}}(undef, num_hidden+1)
-Gains = Array{Vector{Float32}}(undef, num_hidden+1)
-
-if num_hidden > 0
-	Theta_elements = input_layer_size*hidden_layer_size[1]
-	Biases[1] = nn_params[1:hidden_layer_size[1]]
-	Gains[1] = nn_params[hidden_layer_size[1]+1:2*hidden_layer_size[1]]
-	Thetas[1] = reshape(nn_params[2*hidden_layer_size[1] + 1:2*hidden_layer_size[1] + Theta_elements], hidden_layer_size[1], input_layer_size)
-	currentIndex = 2*hidden_layer_size[1] + Theta_elements
-
-	if num_hidden > 1
-		for i = 2:num_hidden
-			Theta_elements = hidden_layer_size[i-1] * hidden_layer_size[i]
-			Biases[i] = nn_params[currentIndex+1:currentIndex+hidden_layer_size[i]]
-			Gains[i] = nn_params[currentIndex+hidden_layer_size[i]+1:currentIndex+2*hidden_layer_size[i]]
-			Thetas[i] = reshape(nn_params[currentIndex+2*hidden_layer_size[i]+1:currentIndex+2*hidden_layer_size[i]+Theta_elements], hidden_layer_size[i], hidden_layer_size[i-1])
-			currentIndex = currentIndex+2*hidden_layer_size[i]+Theta_elements
-		end
-	end
-	Theta_elements = hidden_layer_size[num_hidden]*output_layer_size
-	Biases[num_hidden+1] = nn_params[currentIndex+1:currentIndex+output_layer_size]
-	Gains[num_hidden+1] = nn_params[currentIndex+output_layer_size+1:currentIndex+2*output_layer_size]
-	Thetas[num_hidden+1] = reshape(nn_params[currentIndex+2*output_layer_size+1:currentIndex+2*output_layer_size+Theta_elements], output_layer_size, hidden_layer_size[num_hidden])
-else
-	Biases[1] = nn_params[1:output_layer_size]
-	Gains[1] = nn_params[output_layer_size+1:2*output_layer_size]
-	Thetas[1] = reshape(nn_params[2*output_layer_size+1:end], output_layer_size, input_layer_size)
-end
-
-return Thetas, Biases, Gains
-end
-
-function theta2Params(Biases, Gains, Thetas)
-#convert Theta and Bias arrays to vector of parameters
-l = length(Thetas)
-nn_params = []
-for i = 1:l
-	nn_params = [nn_params; Biases[i]; Gains[i]; Thetas[i][:]]
-end
-
-return map(Float32, nn_params)
-end
-
 function theta2Params(Biases, Thetas)
 #convert Theta and Bias arrays to vector of parameters
 l = length(Thetas)
@@ -115,34 +66,6 @@ function initializeParams(input_layer_size, hidden_layers, output_layer_size)
 	return Thetas, Biases
 end
 
-function initializeLayerNormParams(input_layer_size, hidden_layers, output_layer_size)
-	num_hidden = length(hidden_layers)
-	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
-	Biases = Array{Vector{Float32}}(undef, num_hidden+1)
-	Gains = Array{Vector{Float32}}(undef, num_hidden+1)
-	if num_hidden > 0
-		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) * input_layer_size^(-.5f0))
-		Biases[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5f0))
-		Gains[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5f0)) #zeros(Float32, hidden_layers[1])
-		
-		if num_hidden > 1
-			for i = 2:num_hidden
-				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) * hidden_layers[i-1]^(-.5f0))
-				Biases[i] = map(Float32, randn(hidden_layers[i]) * hidden_layers[i-1]^(-.5f0))
-				Gains[i] = map(Float32, randn(hidden_layers[i]) * hidden_layers[i-1]^(-.5f0)) #zeros(Float32, hidden_layers[i])
-			end
-		end
-		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) * hidden_layers[num_hidden]^(-.5f0))
-		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) * hidden_layers[num_hidden]^(-.5f0))
-		Gains[num_hidden+1] = map(Float32, randn(output_layer_size) * hidden_layers[num_hidden]^(-.5f0)) #zeros(Float32, output_layer_size)
-	else
-		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^(-.5f0)
-		Biases[1] = randn(Float32, output_layer_size)*input_layer_size^(-0.5f0)
-		Gains[1] = randn(Float32, output_layer_size)*input_layer_size^(-0.5f0) #zeros(Float32, output_layer_size)
-	end
-	return Thetas, Biases, Gains
-end
-
 function getNumParams(M, H, O)
 	num = 0
 	if length(H) > 0
@@ -161,32 +84,21 @@ end
 
 #estimate the memory usage for inference given parameters T, B, and the number
 #of examples in each batch m
-function estPredictMemUsage(T::Vector{Matrix{numType}}, B::Vector{Vector{numType}}, m) where numType
+function estPredictMemUsage(T, B, m, numType = Float32)
 	lengthA = mapreduce(t -> size(t, 1)*m, +, T)
 	sizeof(numType)*lengthA
 end
 
 #get the maximum batch size that will fit in remaining free memory for an inference task
 #with parameters T, B.  free is an integer representing the number of available bytes
-function getMaxBatchSize(T::Vector{Matrix{numType}}, B::Vector{Vector{numType}}, free) where numType
-	neuronCount = mapreduce(t -> size(t, 1), +, T)
-	floor(Int64, max(0, free)/(sizeof(numType)*neuronCount))
-end
-
-function getMaxBatchSize(T::Vector{Matrix{numType}}, B::Vector{Vector{numType}}, ::Vector{Vector{numType}}, free) where numType
+function getMaxBatchSize(T, B, free, numType=Float32)
 	neuronCount = mapreduce(t -> size(t, 1), +, T)
 	floor(Int64, max(0, free)/(sizeof(numType)*neuronCount))
 end
 
 #get the maximum batch size that will fit in remaining GPU free memory for an inference task
 #with parameters T, B.  free is an integer representing the number of available bytes
-function getMaxGPUBatchSize(T::Vector{Matrix{numType}}, B::Vector{Vector{numType}}, free) where numType
-	neuronCount = mapreduce(t -> size(t, 1), +, T)
-	#also add allocation for the new input batches which need to be moved to the GPU
-	floor(Int64, max(0, free)/(sizeof(numType)*(neuronCount + size(T[1], 2))))
-end
-
-function getMaxGPUBatchSize(T::Vector{Matrix{numType}}, B::Vector{Vector{numType}}, ::Vector{Vector{numType}}, free) where numType
+function getMaxGPUBatchSize(T, B, free, numType=Float32)
 	neuronCount = mapreduce(t -> size(t, 1), +, T)
 	#also add allocation for the new input batches which need to be moved to the GPU
 	floor(Int64, max(0, free)/(sizeof(numType)*(neuronCount + size(T[1], 2))))

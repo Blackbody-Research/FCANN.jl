@@ -97,7 +97,7 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 	end
 end
 
-function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr")
+function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	#Setup some useful variables
@@ -119,7 +119,7 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		return nothing
 	else
 		out = if maxB > m
-			predict(T, B, input_data, dropout)
+			predict(T, B, input_data, resLayers)
 		else
 			if maxB == 2^17
 				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -128,8 +128,8 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			end
 			numBatches = ceil(Int64, m/maxB)
 			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
-			out1 = predictBatches(T, B, batchInputs, dropout)
-			out2 = predict(T, B, view(input_data, (numBatches-1)*maxB+1:m, :), dropout)
+			out1 = predictBatches(T, B, batchInputs, resLayers)
+			out2 = predict(T, B, view(input_data, (numBatches-1)*maxB+1:m, :), resLayers)
 			[out1; out2]
 		end
 
@@ -237,11 +237,11 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	return (multiOut, out, errs, outErrEst)
 end
 
-function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
+function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLayers = 0, m = 1000, input_layer_size = 3, n = 2, e = 1f-3)
 	Random.seed!(1234)
-	m = 1000
-	input_layer_size = 3
-	n = 2
+	# m = 1000
+	# input_layer_size = 3
+	# n = 2
 	#if using log likelihood cost function then need to double output layer size
 	#relative to output example size
 	output_layer_size = if occursin("Log", costFunc)
@@ -252,7 +252,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	X = map(Float32, randn(m, input_layer_size))
 	y = map(Float32, randn(m, n))
 
-	hidden_layers = [5, 5]
+	# hidden_layers = [5, 5]
 	num_hidden = length(hidden_layers)
 
 	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
@@ -283,13 +283,13 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	tanh_grad_z = deepcopy(a)
 	deltas = deepcopy(a)
 
-	e = 0.01f0
+	# e = 1f-3
 	params = theta2Params(B0, T0)
 	l = length(params)
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc)
+	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers)
 	
 	funcGrad = theta2Params(Bias_grads, Theta_grads)
 
@@ -299,8 +299,8 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
 	
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
@@ -316,6 +316,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
 	return err
 end
+
 
 function updateM!(beta1, mT, mB, TG, BG)
 	b2 = 1.0f0 - beta1
@@ -436,7 +437,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr")
+function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -477,7 +478,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		println()
 		printstyled(stdout, "Beginning training with the following parameters:", bold=true, color=:green)
 		println()
-		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout, ", residual layer size = ", resLayers))
 		println("-------------------------------------------------------------------")
 	end
 
@@ -523,10 +524,10 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 
 
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc)
+	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
 	currentOut = 0.0f0 
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc)
+		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
 	end
 	currentOut = currentOut/numBatches
 
@@ -581,7 +582,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 	#while epoch <= N
 		#run through an epoch in batches with randomized order
 		for batch in randperm(numBatches)
-			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc)
+			nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
 			updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
 			updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
 			updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
@@ -597,7 +598,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		if epoch%period == 0
 			currentOut = 0.0f0
 			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc)
+				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc, resLayers = resLayers)
 			end
 			currentOut = currentOut/numBatches
 			
@@ -644,7 +645,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 
 	currentOut = 0.0f0
 	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc)
+		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc, resLayers = resLayers)
 	end
 	currentOut = currentOut/numBatches
 
@@ -663,7 +664,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_l
 		printstyled(stdout, "Completed training on CPU with the following parameters: ", bold = true, color=:green)
 
 		println()
-		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout, ", residual layer size = ", resLayers))
 	
 		printstyled(stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[N]), " seconds and ", N, " epochs"), bold=true, color=:red)
 		println()	

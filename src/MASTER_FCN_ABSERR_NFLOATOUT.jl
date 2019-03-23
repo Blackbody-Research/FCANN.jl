@@ -2328,7 +2328,7 @@ function smartEvalLayers(name, (X, Y, Xtest, Ytest), N, batchSize, Plist; tau = 
 	end)
 	if isfile(string("evalLayers_", filename))
 		f = open(string("evalLayers_", filename), "a")
-		writedlm(f, body)
+		writedlm(f, body, ',')
 		close(f)
 	else
 		writedlm(string("evalLayers_", filename), [header; body], ',')

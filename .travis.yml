@@ -46,7 +46,7 @@ matrix:
 
 install:
   - chmod +x .travis.linux; ./.travis.linux
-  - julia -e 'using Pkg; Pkg.add("NVIDIALibraries")'
+  - julia -e 'using Pkg; Pkg.add("https://github.com/Blackbody-Research/NVIDIALibraries.jl")'
   # - if [[ $TRAVIS_OS_NAME == "linux" ]]; then chmod +x .travis.linux ./.travis.linux; fi
   # - sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/7fa2af80.pub
 

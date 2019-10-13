@@ -45,8 +45,7 @@ matrix:
       dist: xenial
 
 install:
-  -chmod +x .travis.linux;
-  -./.travis.linux;
+  - chmod +x .travis.linux; ./.travis.linux;
   # - if [[ $TRAVIS_OS_NAME == "linux" ]]; then chmod +x .travis.linux ./.travis.linux; fi
   # - sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/7fa2af80.pub
 

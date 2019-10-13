@@ -5,7 +5,6 @@ uuid = "96bba95e-1607-5f3f-bdb6-ec83c16be7b8"
 DelimitedFiles = "8bb1440f-4735-579b-a4ab-409b98df4dab"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-NVIDIALibraries = "07b2bead-af83-5fbe-9296-6c1433ab9b26"
 Pkg = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
@@ -16,7 +15,8 @@ Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 julia = "0.7,1"
 
 [extras]
-Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40
+NVIDIALibraries = "07b2bead-af83-5fbe-9296-6c1433ab9b26"
 
 [targets]
 test = ["Test"]

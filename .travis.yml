@@ -82,8 +82,9 @@ install:
 #  - if [ $TRAVIS_OS_NAME = osx ]; then brew install gcc; fi
 
 ## uncomment the following lines to override the default test script
-# script:
-#  - julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test(; coverage=true)'
+script:
+ - export PATH=/usr/local/cuda-10.0/bin:$PATH
+ - julia --project -e 'using Pkg; Pkg.build(); Pkg.test(coverage=true)'
 # after_success:
 #   # push coverage results to Coveralls
 #   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'

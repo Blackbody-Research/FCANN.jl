@@ -20,7 +20,8 @@ function availableBackends()
             println("Available backends are: CPU")
             [:CPU]
         end
-    catch
+    catch msg
+        println(msg)
         println("Available backends are: CPU.  Install the Cuda Toolkit and NVIDIALibraries package to have access to the GPU backend")
         [:CPU]
     end

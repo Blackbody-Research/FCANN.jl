@@ -12,9 +12,9 @@ installers["10.0"]="http://developer.download.nvidia.com/compute/cuda/repos/ubun
 declare -A components
 components["8.0"]="cuda-drivers cuda-core-8-0 cuda-cudart-dev-8-0"
 components["9.0"]="cuda-drivers cuda-core-9-0 cuda-cudart-dev-9-0"
-components["9.1"]="cuda-drivers cuda-core-9-1 cuda-cudart-dev-9-1 
-components["9.2"]="cuda-drivers cuda-core-9-2 cuda-cudart-dev-9-2 
-components["10.0"]="cuda-drivers cuda-core-10-0 cuda-cudart-dev-10-0
+components["9.1"]="cuda-drivers cuda-core-9-1 cuda-cudart-dev-9-1" 
+components["9.2"]="cuda-drivers cuda-core-9-2 cuda-cudart-dev-9-2" 
+components["10.0"]="cuda-drivers cuda-core-10-0 cuda-cudart-dev-10-0"
 
 installer=${installers[$CUDA]}
 wget -O cuda.deb "$installer"

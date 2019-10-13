@@ -11,7 +11,7 @@ julia:
 notifications:
   email: false
 git:
-  depth: 99999999
+  depth: false
 
 codecov: true
 coveralls: true

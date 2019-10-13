@@ -2,8 +2,7 @@
 language: julia
 os:
   - linux
-  - osx
-  - windows
+
 julia:
   - 1.0.5
   - 1.2.0
@@ -23,6 +22,26 @@ matrix:
   allow_failures:
   - julia: nightly
   - julia: 1.3.0
+  include:
+  # linux builds
+    - env: CUDA=8.0
+      os: linux
+      dist: xenial
+    - env: CUDA=9.0
+      os: linux
+      dist: xenial
+    - env: CUDA=9.1
+      os: linux
+      dist: xenial
+    - env: CUDA=9.2
+      os: linux
+      dist: xenial
+    - env: CUDA=10.0
+      os: linux
+      dist: xenial
+
+install:
+  - if [[ $TRAVIS_OS_NAME == "linux" ]]; then ./.travis.linux; fi
 
 ## uncomment and modify the following lines to manually install system packages
 #addons:

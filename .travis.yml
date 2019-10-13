@@ -45,7 +45,7 @@ matrix:
       dist: xenial
 
 install:
-  - if [[ $TRAVIS_OS_NAME == "linux" ]]; then ./.travis.linux; fi
+#  - if [[ $TRAVIS_OS_NAME == "linux" ]]; then ./.travis.linux; fi
 
 ## uncomment and modify the following lines to manually install system packages
 #addons:

@@ -1,6 +1,7 @@
 # FCANN
 [![Build Status](https://travis-ci.org/Blackbody-Research/FCANN.jl.svg?branch=julia07fixes)](https://travis-ci.org/Blackbody-Research/FCANN.jl)
 [![codecov.io](https://codecov.io/gh/Blackbody-Research/FCANN.jl/branch/julia07fixes/graphs/badge.svg?)](http://codecov.io/gh/Blackbody-Research/FCANN.jl)
+[![Coverage Status](https://coveralls.io/repos/github/Blackbody-Research/FCANN.jl/badge.svg?branch=julia07fixes)](https://coveralls.io/github/Blackbody-Research/FCANN.jl?branch=julia07fixes)
 
 Simple module for **F**ully **C**onnected **A**rtificial **N**eural **N**etworks.  Minimum functionality for changing error functions.  Current output task is fixed at regression (floating point value output) but in the future the option to define a network for classification will be added.
 

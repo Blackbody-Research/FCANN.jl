@@ -1,7 +1,7 @@
 ## Documentation: http://docs.travis-ci.com/user/languages/julia/
 language: julia
-os:
-  - linux
+
+sudo: required
 
 julia:
   - 1.0.5
@@ -15,6 +15,10 @@ git:
 
 codecov: true
 coveralls: true
+
+env:
+  global:
+    - JULIA_DEBUG=CUDAapi
 
 ## uncomment the following lines to allow failures on nightly julia
 ## (tests will run but not make your overall status red)

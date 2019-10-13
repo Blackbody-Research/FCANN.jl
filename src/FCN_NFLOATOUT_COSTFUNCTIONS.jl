@@ -20,31 +20,31 @@ function sqErrDeriv(a, y)
 end
 
 #the exponential of a2 is the sigma parameter, this ensures it is always positive
-function normLogLikelihoodErr(a1, a2, y)
+function normLogErr(a1, a2, y)
 	0.5f0*exp(2*a2)*a1^2 - exp(2*a2)*a1*y + 0.5f0*exp(2*a2)*y*y - a2 + 0.9189385332
 	#0.5f0*(a2^2)*(a1-y)^2 - log(abs.(a2)) + 0.9189385332f0
 end
 
-function normLogLikelihoodDeriv(a1, a2, y)
+function normLogErrDeriv(a1, a2, y)
 	((a1 - y)*exp(2*a2), exp(2*a2)*(y-a1)^2 - 1)
 end 
 
 #the exponential of a2 is the inverse of the scale parameter, this ensures it is always positive
 #exp(a2)=-1/b where b is the scale parameter => b = -1/exp(a2) and => log(exp(a2)/2) = log(-1/2b)
 #-abs(x-u)/b - log(2b) = -abs(x-u)*exp(a2)+log(0.5*exp(a2))
-function cauchyLogLikelihoodErr(a1, a2, y)
+function cauchyLogErr(a1, a2, y)
 	exp(a2)*abs(a1-y) - log(0.5f0*exp(a2))
 end
 
-function cauchyLogLikelihoodDeriv(a1, a2, y)
+function cauchyLogErrDeriv(a1, a2, y)
 	(exp(a2)*ifelse(a1 > y, 1.0f0, ifelse(a1 < y, -1.0f0, 0.0f0)), exp(a2)*abs(a1-y) - 1)
 end
 
 
 #names, functions, and function derivatives must all be in order here
-costFuncList = [absErr, sqErr, normLogLikelihoodErr, cauchyLogLikelihoodErr]
-costFuncDerivsList = [absErrDeriv, sqErrDeriv, normLogLikelihoodDeriv, cauchyLogLikelihoodDeriv]
-costFuncNames = ["absErr", "sqErr", "normLog", "cauchyLog"]
+costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr")
+costFuncList = eval.(Symbol.(costFuncNames))
+costFuncDerivsList = eval.(Symbol.(map(a -> "$(a)Deriv", costFuncNames)))
 #--------------------------------------------------------------------------
 
 function calcJ(m, n, delta, lambda, Thetas)
@@ -175,7 +175,29 @@ function tanhActivation!(z::Matrix{Float32})
 		@inbounds z[i] = 1.7159f0*fast_tanh(2.0f0*z[i]/3.0f0)
 	end
 end
-	
+
+function form_activations(Thetas::Vector{Matrix{Float32}}, m::Int64)
+	l = length(Thetas)
+	a = Array{Matrix{Float32}}(undef, l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(undef, m, size(Thetas[i], 1))
+	end
+
+	return a
+end
+
+function form_tanh_grads(hidden_layers::AbstractVector{Int64}, m::Int64)
+	num_hidden = length(hidden_layers)
+	tanh_grad_z = Array{Matrix{Float32}, 1}(undef, num_hidden)
+	if num_hidden > 0
+		for i in 1:num_hidden
+			tanh_grad_z[i] = Matrix{Float32}(undef, m, hidden_layers[i])
+		end
+	end
+	return tanh_grad_z
+end
+
 function predict(Thetas, biases, X, D = 0.0f0)
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
@@ -189,11 +211,7 @@ function predict(Thetas, biases, X, D = 0.0f0)
 	#dropout scale factor
 	# F = (1.0f0 - D)
 
-	a = Array{Matrix{Float32}}(undef, l)
-
-	for i = 1:l
-		a[i] = Array{Float32}(undef, m, size(Thetas[i], 1))
-	end
+	a = form_activations(Thetas, m)
 
 	#a[1] = X * Thetas[1]' .+ biases[1]'
 	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
@@ -412,6 +430,8 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#mean abs error cost function
 	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], y, m, n)
 
+	# println("deltas[end] CPU is $(deltas[end])")
+
 
 	i = num_hidden
 	if num_hidden > 0
@@ -424,6 +444,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 
 	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+
 
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]

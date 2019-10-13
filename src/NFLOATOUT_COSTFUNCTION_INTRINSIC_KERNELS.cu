@@ -237,7 +237,7 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
-	__global__ void normLogDeriv(int N, int M, float *A, float *Y, float *out)
+	__global__ void normLogErrDeriv(int N, int M, float *A, float *Y, float *out)
     {	
 		int i = blockIdx.x * blockDim.x + threadIdx.x;	
 		int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -275,7 +275,7 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
-	__global__ void cauchyLogDeriv(int N, int M, float *A, float *Y, float *out)
+	__global__ void cauchyLogErrDeriv(int N, int M, float *A, float *Y, float *out)
     {	
 		int i = blockIdx.x * blockDim.x + threadIdx.x;	
 		int j = blockIdx.y * blockDim.y + threadIdx.y;

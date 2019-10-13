@@ -89,15 +89,13 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 	end
 
 	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_", costFunc, ".csv")
-	# BLAS.set_num_threads(0)
 
-	header = if costFunc2 == costFunc
-		["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error")]
-	else
-		["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error") string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
-	end
+	baseheader = ["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error")]
+	exheader = [string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
+	header = (costFunc2 == costFunc) ? baseheader : hcat(baseheader, exheader)
+		
 
-	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden = hiddenList
+	body = reduce(vcat, pmap(hiddenList) do hidden
 		if (nprocs() > 1) & (backend == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(hiddenList))))))
 		else
@@ -1699,13 +1697,13 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 
 	println("Calculating performance vs number of networks")
 	d_y = if backend == :GPU
-		CuArray(Y)
+		cuda_allocate(Y)
 	else
 		[]
 	end
 
 	d_ytest = if backend == :GPU
-		CuArray(Ytest)
+		cuda_allocate(Ytest)
 	else
 		[]
 	end
@@ -1735,7 +1733,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
             errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
       
             Jtrain = if backend == :GPU
-            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
             end
@@ -1747,7 +1745,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
             errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
             
             Jtest= if backend == :GPU
-            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
@@ -1757,7 +1755,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
             Jtrain = if backend == :GPU
-            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
             end
@@ -1765,7 +1763,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
             errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
             Jtest= if backend == :GPU
-            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
@@ -1934,13 +1932,13 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 	#calculate average network output
 	println("Calculating performance vs number of networks")
 	d_y = if backend == :GPU
-		CuArray(Y)
+		cuda_allocate(Y)
 	else
 		[]
 	end
 
 	d_ytest = if backend == :GPU
-		CuArray(Ytest)
+		cuda_allocate(Ytest)
 	else
 		[]
 	end
@@ -1970,7 +1968,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
             errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
       
             Jtrain = if backend == :GPU
-            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
             end
@@ -1982,7 +1980,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
             errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
             
             Jtest= if backend == :GPU
-            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
@@ -1992,7 +1990,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
             Jtrain = if backend == :GPU
-            	calcError(CuArray(combinedOutputTrain), d_y, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
             end
@@ -2000,7 +1998,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
             errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
             Jtest= if backend == :GPU
-            	calcError(CuArray(combinedOutputTest), d_ytest, costFunc = costFunc)
+            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
@@ -2016,9 +2014,10 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 end
 
 function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0)
-	#generate training set with 100000 examples
-	X = randn(Float32, 100000, M)
-	Y = randn(Float32, 100000, O)
+	#generate training set with m examples
+	m = 102400
+	X = randn(Float32, m, M)
+	Y = randn(Float32, m, O)
 
 	#if multi is true, run training tasks across workers
 	num = if multi & (backend == :CPU)
@@ -2027,7 +2026,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 		1
 	end
 
-	numBatches = ceil(Int, 100000/batchSize)
+	numBatches = ceil(Int, m/batchSize)
 	
 	#number of total perations per batch
 	(fops, bops, pops) = calcOps(M, hidden, O, batchSize)
@@ -2053,7 +2052,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	cpu_name = strip(split(cpu_info, ':')[1])
 
 	gpu_name = if backend == :GPU
-		name(CuDevice(dev))
+		cuDeviceGetName(current_device)
 	else
 		""
 	end

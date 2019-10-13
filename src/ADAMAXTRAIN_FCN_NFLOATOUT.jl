@@ -237,11 +237,9 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	return (multiOut, out, errs, outErrEst)
 end
 
-function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
+function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", input_layer_size = 3, n = 2, m = 1000)
 	Random.seed!(1234)
-	m = 1000
-	input_layer_size = 3
-	n = 2
+
 	#if using log likelihood cost function then need to double output layer size
 	#relative to output example size
 	output_layer_size = if occursin("Log", costFunc)
@@ -252,7 +250,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	X = map(Float32, randn(m, input_layer_size))
 	y = map(Float32, randn(m, n))
 
-	hidden_layers = [5, 5]
+	hidden_layers = hidden_layers
 	num_hidden = length(hidden_layers)
 
 	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
@@ -312,7 +310,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr")
 	for i = 1:length(numGrad)
 		@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
 	end
-	err = norm(numGrad-funcGrad)/norm(numGrad + funcGrad)
+	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
 	println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
 	return err
 end

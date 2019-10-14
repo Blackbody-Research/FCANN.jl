@@ -10,10 +10,10 @@ installers["9.2"]="http://developer.download.nvidia.com/compute/cuda/repos/ubunt
 installers["10.0"]="http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/cuda-repo-ubuntu1604_10.0.130-1_amd64.deb"
 
 # declare -A components
-components["8.0"]="cuda-8-0 "
-components["9.0"]="cuda-9-0 "
-components["9.1"]="cuda-9-1 " 
-components["9.2"]="cuda-9-2 " 
+components["8.0"]="cuda-8-0"
+components["9.0"]="cuda-9-0"
+components["9.1"]="cuda-9-1" 
+components["9.2"]="cuda-9-2" 
 components["10.0"]="cuda-10-0"
 
 installer=${installers[$CUDA]}

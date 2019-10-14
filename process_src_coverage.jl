@@ -1,6 +1,6 @@
 using Coverage
 
-function process_folder(folder="src")
+function process_folder2(folder="src")
     @info "Coverage.process_folder: Searching $folder for .jl files..."
     source_files = FileCoverage[]
     files = readdir(folder)
@@ -13,9 +13,9 @@ function process_folder(folder="src")
             else
                 @debug "Coverage.process_folder: Skipping $file, not a .jl file"
             end
-        elseif isdir(fullfile)
+        elseif isdir(fullfile) && (fullfile != "src")
             # If it is a folder, recursively traverse
-            append!(source_files, process_folder(fullfile))
+            append!(source_files, process_folder2(fullfile))
         end
     end
     return source_files

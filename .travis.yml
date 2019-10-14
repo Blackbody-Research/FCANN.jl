@@ -57,7 +57,7 @@ matrix:
       julia: 1
 
 install:
-  - if [[ $TRAVIS_OS_NAME == "linux"]]; 
+  - if [[ $TRAVIS_OS_NAME == "linux" ]]; 
     then 
       if [[ $CUDA != "" ]];
       then
@@ -88,7 +88,8 @@ after_success:
               cd(Pkg.dir("FCANN"));
               Pkg.add("Coverage");
               using Coverage;
-              Codecov.submit(process_folder())'
+              Codecov.submit(process_folder());
+              Coveralls.submit(process_folder())'
 #   # push coverage results to Coveralls
 #   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
 #   # push coverage results to Codecov

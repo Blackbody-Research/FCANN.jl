@@ -17,7 +17,7 @@ function process_folder2(folder="src")
             # If it is a folder, recursively traverse
             append!(source_files, process_folder2(fullfile))
         else
-            @debut "Coverage.process_folder2: Skipping folder $file, cuda runtime tests not possible on travis"
+            @debug "Coverage.process_folder2: Skipping folder $file, cuda runtime tests not possible on travis"
         end
     end
     return source_files

@@ -79,8 +79,8 @@ install:
 script:
  - if [[ $CUDA != "" ]];
    then 
-    export PATH=/usr/local/cuda-$CUDA/bin:$PATH
-   fi;
+    export PATH=/usr/local/cuda-$CUDA/bin:$PATH;
+   fi
  - julia --project -e 'using Pkg; Pkg.build(); Pkg.test(coverage=true)'
 
 after_success:

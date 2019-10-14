@@ -8,20 +8,14 @@ notifications:
 git:
   depth: false
 
-
-# codecov: true
-# coveralls: true
-
 env:
   global:
     - JULIA_DEBUG=CUDAapi
 
-## uncomment the following lines to allow failures on nightly julia
-## (tests will run but not make your overall status red)
-allow_failures:
-  - julia: nightly
-
 matrix: 
+  allow_failures:
+    - julia: nightly
+
   include:
   # linux builds
     - env: CUDA=8.0
@@ -30,7 +24,7 @@ matrix:
       julia: 1
     - env: CUDA=9.0
       os: linux
-      dist: xenial
+      dist: xenialz
       julia: 1
     - env: CUDA=9.1
       os: linux
@@ -50,10 +44,10 @@ matrix:
       julia: nightly
   # osx builds
     - os: osx
-    - julia: 1.0
+      julia: 1.0
   # windows builds
     - os: windows
-    - julia: 1.0
+      julia: 1.0
 
 install:
   - if [[ $TRAVIS_OS_NAME == "linux" ]]; 
@@ -89,7 +83,3 @@ after_success:
               include("process_src_coverage.jl");
               Codecov.submit(process_folder2());
               Coveralls.submit(process_folder2())'
-#   # push coverage results to Coveralls
-#   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
-#   # push coverage results to Codecov
-#   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Codecov.submit(Codecov.process_folder())'

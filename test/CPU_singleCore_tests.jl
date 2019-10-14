@@ -51,26 +51,21 @@ println()
 
 #full train test with data read and output
 function writeTestData(name, M, O)
-    X = randn(Float32, 100000, M)
-    Y = randn(Float32, 100000, O)
-    Xtest = randn(Float32, 10000, M)
-    Ytest = randn(Float32, 10000, O)
-    writedlm(string("Xtrain_", name, ".csv"), X)
-    writedlm(string("Xtest_", name, ".csv"), Xtest)
-    writedlm(string("ytrain_", name, ".csv"), Y)
-    writedlm(string("ytest_", name, ".csv"), Ytest)
+    for p1 = ("X", "y"), p2 = ("train", "test")
+        l = (p2 == "train") ? 100000 : 10000
+        N = (p1 == "X") ? M : O
+        writedlm(string(p1, p2, "_", name, ".csv"), rand(Float32, l, N))
+    end
 end
 
 function writeBinData(name, M, O)
-    X = randn(Float32, 100000, M)
-    Y = randn(Float32, 100000, O)
-    Xtest = randn(Float32, 10000, M)
-    Ytest = randn(Float32, 10000, O)
-    writeArray(X, string("Xtrain_", name, ".bin"))
-    writeArray(Xtest, string("Xtest_", name, ".bin"))
-    writeArray(Y, string("ytrain_", name, ".bin"))
-    writeArray(Ytest, string("ytest_", name, ".bin"))
+    for p1 = ("X", "y"), p2 = ("train", "test")
+        l = (p2 == "train") ? 100000 : 10000
+        N = (p1 == "X") ? M : O
+        writeArray(rand(Float32, l, N), string(p1, p2, "_", name, ".bin"))
+    end
 end
+
 println("Testing full ANN train with test data")
 println("--------------------------------------")
 name = "test"

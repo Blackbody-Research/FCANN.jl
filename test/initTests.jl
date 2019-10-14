@@ -5,7 +5,7 @@ requestCostFunctions()
 println("Testing AUX functions for 0 hidden layer network")
 println("------------------------------------------------")
 println("Testing paramter initialization")
-T0, B0 = initializeParams(10, [], 2)
+T0, B0 = initializeParams(10, Vector{Int64}(), 2)
 println("TEST PASSED")
 println()
 

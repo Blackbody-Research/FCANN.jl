@@ -6,7 +6,6 @@ sudo: required
 julia:
   - 1.0
   - 1
-  - 1.3
   - nightly
 
 os:
@@ -30,7 +29,6 @@ env:
 ## (tests will run but not make your overall status red)
 allow_failures:
   - julia: nightly
-  - julia: 1.3
 
 matrix: 
   include:

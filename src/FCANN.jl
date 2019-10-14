@@ -72,17 +72,17 @@ function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, num
     writedlm(string(deviceName, "_", trainName, "_trainingBenchmark.csv"), [header; body], ',')
 end
         
-export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList
-
-if in(:GPU, backendList)
-    export switch_device, devlist, current_device
-end
+export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device
 
 function __init__()
     installList = Pkg.installed()
     if haskey(installList, "NVIDIALibraries")
         try
             run(`nvcc --version`)
+            
+            #initialize cuda driver
+            cuInit(0)
+
             #get device list and set default device to 0
             deviceNum = cuDeviceGetCount()
             global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
@@ -120,13 +120,15 @@ function __init__()
 
     function f()
         if in(:GPU, backendList)
-            if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-                println("Removing cuda cost function .ptx files")
-                rm("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-            end
-            if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
-                println("Removing cuda adamax .ptx files")
-                rm("ADAMAX_INTRINSIC_KERNELS.ptx")
+            if myid() == 1
+                if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+                    println("Removing cuda cost function .ptx files")
+                    rm("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+                end
+                if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
+                    println("Removing cuda adamax .ptx files")
+                    rm("ADAMAX_INTRINSIC_KERNELS.ptx")
+                end
             end
             println("Destroying GPU cublas handle")
             # cuDevicePrimaryCtxRelease(current_device)

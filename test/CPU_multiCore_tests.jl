@@ -1,5 +1,9 @@
 println("-----------------------Testing CPU Multi Core-------------------------------------")
 backend = setBackend(:CPU)
+name = "test"
+M = 10
+O = 2
+
 println("Adding 4 cores to test multitrain algorithms")
 addprocs(4)
 @everywhere using FCANN
@@ -32,10 +36,9 @@ println()
 rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_100_epochs_smartParams_ADAMAX", backend, "_absErr.csv"))
 
 println("Testing multiTrain")
-multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, 1)
-multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, 2)
-multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, 1, costFunc = "normLogErr")
-multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, 2, costFunc = "normLogErr")
+for v1 = (1, 2), costFunc = ("absErr", "normLogErr")
+	multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, v1, costFunc = costFunc)
+end
 println("TEST PASSED")
 println()
 
@@ -45,45 +48,26 @@ evalMulti(name, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, IDList = [1, 2], costFunc 
 println("TEST PASSED")
 println()
 
-filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.002_alpha_0.1_decay_1.0_maxNorm_ADAMAX_absErr")
+for errFunc = ("absErr", "normLogErr")
+	filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.002_alpha_0.1_decay_1.0_maxNorm_ADAMAX_", errFunc)
 
-rm(string("1_multiParams_", filename, ".bin"))
-rm(string("1_multiPerformance_", filename, ".csv"))
-rm(string("1_multiPredScatTrain_", filename, ".csv"))
-rm(string("1_multiPredScatTest_", filename, ".csv"))
-rm(string("2_multiParams_", filename, ".bin"))
-rm(string("2_multiPerformance_", filename, ".csv"))
-rm(string("2_multiPredScatTrain_", filename, ".csv"))
-rm(string("2_multiPredScatTest_", filename, ".csv"))
-rm(string("fullMultiParams_", filename, ".bin"))
-rm(string("fullMultiPerformance_", filename, ".csv"))
-rm(string("multiPredScatTrain_", filename, ".csv"))
-rm(string("multiPredScatTest_", filename, ".csv"))
-
-filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.002_alpha_0.1_decay_1.0_maxNorm_ADAMAX_normLogErr")
-
-rm(string("1_multiPerformance_", filename, ".csv"))
-rm(string("1_multiPredScatTrain_", filename, ".csv"))
-rm(string("1_multiPredScatTest_", filename, ".csv"))
-rm(string("1_multiParams_", filename, ".bin"))
-rm(string("2_multiPerformance_", filename, ".csv"))
-rm(string("2_multiPredScatTrain_", filename, ".csv"))
-rm(string("2_multiPredScatTest_", filename, ".csv"))
-rm(string("2_multiParams_", filename, ".bin"))
-rm(string("fullMultiPerformance_", filename, ".csv"))
-rm(string("multiPredScatTrain_", filename, ".csv"))
-rm(string("multiPredScatTest_", filename, ".csv"))
-rm(string("fullMultiParams_", filename, ".bin"))
+	for v1 = (1, 2), v2 = ("Params", "Performance", "PredScatTrain", "PredScatTest")
+		fend = (v2 == "Params") ? ".bin" : ".csv"
+		rmname = string(v1, "_multi", v2, "_", filename, fend)
+		println("Removing $rmname")
+		rm(rmname)
+	end
+	rm(string("fullMultiParams_", filename, ".bin"))
+	rm(string("fullMultiPerformance_", filename, ".csv"))
+	rm(string("multiPredScatTrain_", filename, ".csv"))
+	rm(string("multiPredScatTest_", filename, ".csv"))
+end
 
 # Remove generated files
-rm("Xtrain_test.csv")
-rm("Xtest_test.csv")
-rm("ytrain_test.csv")
-rm("ytest_test.csv")
-rm("Xtrain_test.bin")
-rm("Xtest_test.bin")
-rm("ytrain_test.bin")
-rm("ytest_test.bin")
+for v in ("X", "y"), t = ("train", "test"), e = (".csv", ".bin")
+	rm(string(v, t, "_test", e))	
+end
+
 
 # filename = string(name, "_10_input_", [], "_hidden_2_output_0.0_L2_Inf_maxNorm_0.002_alpha_ADAMAX", backend, "_absErr")
 # rm(string("1_costRecord_", filename, ".csv"))
@@ -92,12 +76,10 @@ rm("ytest_test.bin")
 # rm(string("1_params_", filename, ".bin"))
 
 filename = string(name, "_10_input_2X2_hidden_2_output_0.002_alpha_0.1_decay_ADAMAX_absErr")
-rm(string("1_costRecord_", filename, ".csv"))
-rm(string("1_timeRecord_", filename, ".csv"))
-rm(string("1_performance_", filename, ".csv"))
-rm(string("1_predScatTest_", filename, ".csv"))
-rm(string("1_predScatTrain_", filename, ".csv"))
-rm(string("1_params_", filename, ".bin"))
+for n in ("costRecord", "timeRecord", "performance", "predScatTrain", "predScatTest", "params")
+	fend = (n == "params") ? ".bin" : ".csv"
+	rm(string("1_", n, "_", filename, fend))
+end
 
 # rm(string("2_costRecord_", filename, ".csv"))
 # rm(string("2_timeRecord_", filename, ".csv"))

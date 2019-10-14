@@ -1,5 +1,6 @@
 using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
+println("Importing appropriate cuda libraries for installed version")
 @using_nvidialib_settings
 
 costfunc_kernel_names = ("fill_cols", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "tanhActivation")
@@ -176,7 +177,7 @@ function forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
 	cuCtxSynchronize()
 end
 
-function nnCostFunctionNOGRAD(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr")
+function nnCostFunctionNOGRAD(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
 
 	@assert d_a[end].size[1] == d_y.size[1]
 
@@ -209,7 +210,7 @@ function form_activations(d_Thetas::Vector{CUDAArray}, m::Int64)
 	return d_a
 end
 
-function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers)
+function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -224,7 +225,7 @@ function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, h
 	return (d_a[end], host_allocate(d_a[end]))
 end
 
-function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0, resLayers::Int64 = 0)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -290,7 +291,7 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
 end
 
-function nnCostFunction(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::NVIDIALibraries.DeviceArray.CUDAArray, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_tanh_grad_z::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_deltas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_Theta_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_bias_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr")
+function nnCostFunction(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::NVIDIALibraries.DeviceArray.CUDAArray, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_tanh_grad_z::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_deltas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_Theta_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_bias_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
 
 	num_hidden = length(hidden_layers)
 

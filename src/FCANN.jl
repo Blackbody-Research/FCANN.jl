@@ -8,27 +8,9 @@ using Printf
 using Random
 using Pkg
 
-function availableBackends()
-    try
-        run(`nvcc --version`)
-        installList = Pkg.installed()
-        if haskey(installList, "NVIDIALibraries")
-            println("Available backends are: CPU, GPU")
-            return [:CPU, :GPU]
-        else
-            println("GPU backend not currently available.  Install NVIDIALibraries package to have access to it with instructions here: https://github.com/Blackbody-Research/NVIDIALibraries.jl")
-            println("Available backends are: CPU")
-            [:CPU]
-        end
-    catch
-        println("Available backends are: CPU.  Install the Cuda Toolkit and NVIDIALibraries package to have access to the GPU backend")
-        [:CPU]
-    end
-end
-
 #set default backend to CPU
 global backend = :CPU
-global backendList = availableBackends()
+global backendList = [:CPU]
 
 
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
@@ -42,8 +24,7 @@ function requestCostFunctions()
 end
 
 function setBackend(b::Symbol)
-    list = availableBackends()
-    if in(b, list)
+    if in(b, backendList)
         global backend = b
     else
         println(string("Selected backend: ", b, " is not available."))
@@ -91,53 +72,63 @@ function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, num
     writedlm(string(deviceName, "_", trainName, "_trainingBenchmark.csv"), [header; body], ',')
 end
         
-export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions,
-availableBackends, setBackend, getBackend, benchmarkDevice, backendList
-
-if in(:GPU, backendList)
-    export switch_device, devlist, current_device
-end
+export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device
 
 function __init__()
-    
-    if in(:GPU, backendList)
-        #initialize cuda driver api
-        cuInit(0)
+    installList = Pkg.installed()
+    if haskey(installList, "NVIDIALibraries")
+        try
+            run(`nvcc --version`)
+            
+            #initialize cuda driver
+            cuInit(0)
 
-        #get device list and set default device to 0
-        deviceNum = cuDeviceGetCount()
-        global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
-        global current_device = devlist[1]
+            #get device list and set default device to 0
+            deviceNum = cuDeviceGetCount()
+            global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
+            global current_device = devlist[1]
 
-        #set device for kernel and variable loading to default device
-        cudaSetDevice(current_device)
+            #set device for kernel and variable loading to default device
+            cudaSetDevice(current_device)
 
-        #create primary context handle on default device
-        # global ctx = cuDevicePrimaryCtxRetain(current_device)
+            #create primary context handle on default device
+            # global ctx = cuDevicePrimaryCtxRetain(current_device)
 
-        #create cublas handle to reference for calls on the default device
-        global cublas_handle = cublasCreate_v2()
+            #create cublas handle to reference for calls on the default device
+            global cublas_handle = cublasCreate_v2()
 
-        (adamax_md, costfunc_md) = cu_module_load()
-        # eval(cu_module_load)
+            (adamax_md, costfunc_md) = cu_module_load()
+            # eval(cu_module_load)
 
-        #create adamax and costfunction kernels in global scope
-        create_kernels(adamax_md, adamax_kernel_names)
-        create_kernels(costfunc_md, costfunc_kernel_names)
-        
-        #make error kernels available in global scope
-        create_errorfunction_dicts(costfunc_md) 
+            #create adamax and costfunction kernels in global scope
+            create_kernels(adamax_md, adamax_kernel_names)
+            create_kernels(costfunc_md, costfunc_kernel_names)
+            
+            #make error kernels available in global scope
+            create_errorfunction_dicts(costfunc_md) 
+
+            println("Available backends are: CPU, GPU")
+            #add GPU to backendList after successful initialization
+            push!(backendList, :GPU)
+        catch msg
+            println("Could not initialize cuda drivers and compile kernels due to $msg")
+            println("Available backends are: CPU")
+        end
+    else
+        println("Available backends are: CPU")
     end
 
     function f()
         if in(:GPU, backendList)
-            if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-                println("Removing cuda cost function .ptx files")
-                rm("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-            end
-            if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
-                println("Removing cuda adamax .ptx files")
-                rm("ADAMAX_INTRINSIC_KERNELS.ptx")
+            if myid() == 1
+                if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+                    println("Removing cuda cost function .ptx files")
+                    rm("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+                end
+                if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
+                    println("Removing cuda adamax .ptx files")
+                    rm("ADAMAX_INTRINSIC_KERNELS.ptx")
+                end
             end
             println("Destroying GPU cublas handle")
             # cuDevicePrimaryCtxRelease(current_device)

@@ -1,28 +1,64 @@
 ## Documentation: http://docs.travis-ci.com/user/languages/julia/
 language: julia
-os:
-  - linux
-  - osx
-  - windows
-julia:
-  - 1.0.5
-  - 1.2.0
-  - 1.3.0
-  - nightly
+
+sudo: required
+
 notifications:
   email: false
 git:
-  depth: 99999999
+  depth: false
 
-codecov: true
-coveralls: true
+env:
+  global:
+    - JULIA_DEBUG=CUDAapi
 
-## uncomment the following lines to allow failures on nightly julia
-## (tests will run but not make your overall status red)
-matrix:
+matrix: 
   allow_failures:
-  - julia: nightly
-  - julia: 1.3.0
+    - julia: nightly
+
+  include:
+  # linux builds
+    # - env: CUDA=8.0
+    #   os: linux
+    #   dist: xenial
+    #   julia: 1
+    # - env: CUDA=9.0
+    #   os: linux
+    #   dist: xenialz
+    #   julia: 1
+    # - env: CUDA=9.1
+    #   os: linux
+    #   dist: xenial
+    #   julia: 1
+    # - env: CUDA=9.2
+    #   os: linux
+    #   dist: xenial
+    #   julia: 1
+    - env: CUDA=10.0
+      os: linux
+      dist: xenial
+      julia: 1
+    - os: linux
+      julia: 1.0
+    - os: linux
+      julia: nightly
+  # osx builds
+    - os: osx
+      julia: 1.0
+  # windows builds
+    - os: windows
+      julia: 1.0
+
+install:
+  - if [[ $TRAVIS_OS_NAME == "linux" ]]; 
+    then 
+      if [[ $CUDA != "" ]];
+      then
+        chmod +x .travis.linux;
+        ./.travis.linux; 
+        julia -e 'using Pkg; Pkg.add(PackageSpec(url = "https://github.com/Blackbody-Research/NVIDIALibraries.jl"))';
+      fi;
+    fi
 
 ## uncomment and modify the following lines to manually install system packages
 #addons:
@@ -33,10 +69,17 @@ matrix:
 #  - if [ $TRAVIS_OS_NAME = osx ]; then brew install gcc; fi
 
 ## uncomment the following lines to override the default test script
-# script:
-#  - julia --project -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test(; coverage=true)'
-# after_success:
-#   # push coverage results to Coveralls
-#   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
-#   # push coverage results to Codecov
-#   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Codecov.submit(Codecov.process_folder())'
+script:
+ - if [[ $CUDA != "" ]];
+   then 
+    export PATH=/usr/local/cuda-$CUDA/bin:$PATH;
+   fi
+ - julia --project -e 'using Pkg; Pkg.build(); Pkg.test(coverage=true)'
+
+after_success:
+  - julia -e 'using Pkg;
+              cd(Pkg.dir("FCANN"));
+              Pkg.add("Coverage");
+              include("process_src_coverage.jl");
+              Codecov.submit(process_folder2());
+              Coveralls.submit(process_folder2())'

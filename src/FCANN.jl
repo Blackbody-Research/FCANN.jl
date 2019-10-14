@@ -79,10 +79,10 @@ if in(:GPU, backendList)
 end
 
 function __init__()
-    try
-        run(`nvcc --version`)
-        installList = Pkg.installed()
-        if haskey(installList, "NVIDIALibraries")
+    installList = Pkg.installed()
+    if haskey(installList, "NVIDIALibraries")
+        try
+            run(`nvcc --version`)
             #get device list and set default device to 0
             deviceNum = cuDeviceGetCount()
             global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
@@ -110,11 +110,11 @@ function __init__()
             println("Available backends are: CPU, GPU")
             #add GPU to backendList after successful initialization
             push!(backendList, :GPU)
-        else
+        catch msg
+            println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
         end
-    catch msg
-        println("Could not initialize cuda drivers and compile kernels due to $msg")
+    else
         println("Available backends are: CPU")
     end
 

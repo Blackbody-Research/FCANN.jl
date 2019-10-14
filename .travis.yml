@@ -87,9 +87,9 @@ after_success:
   - julia -e 'using Pkg;
               cd(Pkg.dir("FCANN"));
               Pkg.add("Coverage");
-              using Coverage;
-              Codecov.submit(process_folder());
-              Coveralls.submit(process_folder())'
+              include("process_src_coverage.jl");
+              Codecov.submit(process_folder2());
+              Coveralls.submit(process_folder2())'
 #   # push coverage results to Coveralls
 #   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
 #   # push coverage results to Codecov

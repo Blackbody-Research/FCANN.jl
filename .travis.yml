@@ -3,20 +3,11 @@ language: julia
 
 sudo: required
 
-julia:
-  - 1.0
-  - 1
-  - nightly
-
-os:
-  - linux
-  - osx
-  - windows
-
 notifications:
   email: false
 git:
   depth: false
+
 
 # codecov: true
 # coveralls: true
@@ -53,6 +44,16 @@ matrix:
       os: linux
       dist: xenial
       julia: 1
+
+julia:
+  - 1.0
+  - 1
+  - nightly
+
+os:
+  - linux
+  - osx
+  - windows
 
 install:
   - if [[ $TRAVIS_OS_NAME == "linux" ]]; 

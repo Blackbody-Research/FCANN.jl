@@ -13,7 +13,7 @@ function process_folder2(folder="src")
             else
                 @debug "Coverage.process_folder: Skipping $file, not a .jl file"
             end
-        elseif isdir(fullfile) && (fullfile != "src")
+        elseif isdir(fullfile) && (fullfile != "cuda")
             # If it is a folder, recursively traverse
             append!(source_files, process_folder2(fullfile))
         end

@@ -4,10 +4,11 @@
 include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
 using Distributed
 
-if in(:GPU, backendList)
+if haskey(Pkg.installed(), "NVIDIALibraries")
 	include("cuda/ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl")
+else
+	println("NVIDIALibraries is not currently installed so cuda functions will not be initialized")
 end
-
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash
 # with any cost function other than "absErr"

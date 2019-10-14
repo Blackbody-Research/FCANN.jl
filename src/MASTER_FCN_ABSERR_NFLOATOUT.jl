@@ -8,6 +8,7 @@ if haskey(Pkg.installed(), "NVIDIALibraries")
 	include("cuda/ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl")
 else
 	println("NVIDIALibraries is not currently installed so cuda functions will not be initialized")
+	println("If you have an Nvidia GPU, install the Cuda Toolkit and the NVIDIALibraries package from https://github.com/Blackbody-Research/NVIDIALibraries.jl to have the GPU backend available")
 end
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash

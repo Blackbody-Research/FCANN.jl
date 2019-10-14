@@ -111,12 +111,11 @@ function __init__()
             #add GPU to backendList after successful initialization
             push!(backendList, :GPU)
         else
-            println("GPU backend not currently available.  Install NVIDIALibraries package to have access to it with instructions here: https://github.com/Blackbody-Research/NVIDIALibraries.jl")
             println("Available backends are: CPU")
         end
     catch msg
         println("Could not initialize cuda drivers and compile kernels due to $msg")
-        println("Available backends are: CPU.  Install the Cuda Toolkit and NVIDIALibraries package to have access to the GPU backend")
+        println("Available backends are: CPU")
     end
 
     function f()

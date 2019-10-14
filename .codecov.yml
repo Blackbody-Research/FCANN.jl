@@ -1,6 +1,6 @@
 coverage:
   ignore:
-    - "src/cuda/*"
+    - "src/cuda"
   status:
     patch: false
     project: false

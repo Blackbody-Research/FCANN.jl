@@ -1,7 +1,7 @@
 using Coverage
 
 function process_folder2(folder="src")
-    @info "Coverage.process_folder: Searching $folder for .jl files..."
+    @info "Coverage.process_folder2: Searching $folder for .jl files..."
     source_files = FileCoverage[]
     files = readdir(folder)
     for file in files
@@ -11,11 +11,13 @@ function process_folder2(folder="src")
             if splitext(fullfile)[2] == ".jl"
                 push!(source_files, process_file(fullfile, folder))
             else
-                @debug "Coverage.process_folder: Skipping $file, not a .jl file"
+                @debug "Coverage.process_folder2: Skipping $file, not a .jl file"
             end
-        elseif isdir(fullfile) && (fullfile != "cuda")
+        elseif isdir(fullfile) && (file != "cuda")
             # If it is a folder, recursively traverse
             append!(source_files, process_folder2(fullfile))
+        else
+            @debut "Coverage.process_folder2: Skipping folder $file, cuda runtime tests not possible on travis"
         end
     end
     return source_files

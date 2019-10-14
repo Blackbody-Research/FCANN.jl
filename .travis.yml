@@ -3,11 +3,11 @@ language: julia
 
 sudo: required
 
-julia:
-  - 1.0.5
-  - 1.2.0
-  - 1.3.0
-  - nightly
+# julia:
+#   - 1.0.5
+#   - 1.2.0
+#   - 1.3.0
+#   - nightly
 notifications:
   email: false
 git:

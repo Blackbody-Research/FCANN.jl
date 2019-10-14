@@ -13,8 +13,8 @@ notifications:
 git:
   depth: false
 
-codecov: true
-coveralls: true
+# codecov: true
+# coveralls: true
 
 env:
   global:
@@ -85,7 +85,12 @@ install:
 script:
  - export PATH=/usr/local/cuda-10.0/bin:$PATH
  - julia --project -e 'using Pkg; Pkg.build(); Pkg.test(coverage=true)'
-# after_success:
+after_success:
+  - julia -e 'using Pkg;
+              cd(Pkg.dir("FCANN"))
+              Pkg.add("Coverage")
+              using Coverage;
+              Codecov.submit(process_folder())'
 #   # push coverage results to Coveralls
 #   - julia --project -e 'using Pkg; import FCANN; pathof(FCANN); Pkg.add("Coverage"); using Coverage; Coveralls.submit(Coveralls.process_folder())'
 #   # push coverage results to Codecov

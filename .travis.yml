@@ -63,9 +63,9 @@ install:
       then
         chmod +x .travis.linux;
         ./.travis.linux; 
+        julia -e 'using Pkg; Pkg.add(PackageSpec(url = "https://github.com/Blackbody-Research/NVIDIALibraries.jl"))'
       fi;
     fi
-  - julia -e 'using Pkg; Pkg.add(PackageSpec(url = "https://github.com/Blackbody-Research/NVIDIALibraries.jl"))'
 
 ## uncomment and modify the following lines to manually install system packages
 #addons:

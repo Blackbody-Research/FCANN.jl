@@ -23,7 +23,7 @@ sudo dpkg -i cuda.deb
 
 sudo apt-get update
 sudo apt-get install -y ${components[$CUDA]}
-export PATH=/usr/local/cuda-10.0/bin:$PATH
+export PATH=/usr/local/cuda-$CUDA/bin:$PATH
 # export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
 nvcc --version

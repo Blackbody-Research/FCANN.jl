@@ -3,11 +3,17 @@ language: julia
 
 sudo: required
 
-# julia:
-#   - 1.0.5
-#   - 1.2.0
-#   - 1.3.0
-#   - nightly
+julia:
+  - 1
+  - 1.2.0
+  - 1.3.0
+  - nightly
+
+os:
+  - linux
+  - osx
+  - windows
+
 notifications:
   email: false
 git:
@@ -22,56 +28,44 @@ env:
 
 ## uncomment the following lines to allow failures on nightly julia
 ## (tests will run but not make your overall status red)
-matrix:
-  allow_failures:
+allow_failures:
   - julia: nightly
   - julia: 1.3.0
+
+matrix: 
   include:
   # linux builds
-    # - env: CUDA=8.0
-    #   os: linux
-    #   dist: xenial
-    # - env: CUDA=9.0
-    #   os: linux
-    #   dist: xenial
-    # - env: CUDA=9.1
-    #   os: linux
-    #   dist: xenial
-    # - env: CUDA=9.2
-    #   os: linux
-    #   dist: xenial
+    - env: CUDA=8.0
+      os: linux
+      dist: xenial
+      julia: 1
+    - env: CUDA=9.0
+      os: linux
+      dist: xenial
+      julia: 1
+    - env: CUDA=9.1
+      os: linux
+      dist: xenial
+      julia: 1
+    - env: CUDA=9.2
+      os: linux
+      dist: xenial
+      julia: 1
     - env: CUDA=10.0
       os: linux
       dist: xenial
+      julia: 1
 
 install:
-  - chmod +x .travis.linux; ./.travis.linux
+  - if [[ $TRAVIS_OS_NAME == "linux"]]; 
+    then 
+      if [[ $CUDA != "" ]];
+      then
+        chmod +x .travis.linux;
+        ./.travis.linux; 
+      fi;
+    fi
   - julia -e 'using Pkg; Pkg.add(PackageSpec(url = "https://github.com/Blackbody-Research/NVIDIALibraries.jl"))'
-  # - if [[ $TRAVIS_OS_NAME == "linux" ]]; then chmod +x .travis.linux ./.travis.linux; fi
-  # - sudo apt-key adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/7fa2af80.pub
-
-  # - declare -A installers
-  # - installers["8.0"]="http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/cuda-repo-ubuntu1604_8.0.61-1_amd64.deb"
-  # - installers["9.0"]="http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/cuda-repo-ubuntu1604_9.0.176-1_amd64.deb"
-  # - installers["9.1"]="http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/cuda-repo-ubuntu1604_9.1.85-1_amd64.deb"
-  # - installers["9.2"]="http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/cuda-repo-ubuntu1604_9.2.148-1_amd64.deb"
-  # - installers["10.0"]="http://developer.download.nvidia.com/compute/cuda/repos/ubuntu1604/x86_64/cuda-repo-ubuntu1604_10.0.130-1_amd64.deb"
-
-  # - declare -A components
-  # - components["8.0"]="cuda-drivers cuda-core-8-0 cuda-cudart-dev-8-0"
-  # - components["9.0"]="cuda-drivers cuda-core-9-0 cuda-cudart-dev-9-0"
-  # - components["9.1"]="cuda-drivers cuda-core-9-1 cuda-cudart-dev-9-1" 
-  # - components["9.2"]="cuda-drivers cuda-core-9-2 cuda-cudart-dev-9-2" 
-  # - components["10.0"]="cuda-drivers cuda-core-10-0 cuda-cudart-dev-10-0"
-
-  # - installer=${installers[$CUDA]}
-  # - wget -O cuda.deb "$installer"
-
-  # - sudo dpkg -i cuda.deb
-
-  # - sudo apt-get update
-  # - sudo apt-get install -y ${components[$CUDA]}
-
 
 ## uncomment and modify the following lines to manually install system packages
 #addons:
@@ -83,12 +77,16 @@ install:
 
 ## uncomment the following lines to override the default test script
 script:
- - export PATH=/usr/local/cuda-10.0/bin:$PATH
+ - if [[ $CUDA != "" ]];
+   then 
+    export PATH=/usr/local/cuda-$CUDA/bin:$PATH
+   fi;
  - julia --project -e 'using Pkg; Pkg.build(); Pkg.test(coverage=true)'
+
 after_success:
   - julia -e 'using Pkg;
-              cd(Pkg.dir("FCANN"))
-              Pkg.add("Coverage")
+              cd(Pkg.dir("FCANN"));
+              Pkg.add("Coverage");
               using Coverage;
               Codecov.submit(process_folder())'
 #   # push coverage results to Coveralls

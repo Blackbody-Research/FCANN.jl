@@ -8,28 +8,9 @@ using Printf
 using Random
 using Pkg
 
-function availableBackends()
-    try
-        run(`nvcc --version`)
-        installList = Pkg.installed()
-        if haskey(installList, "NVIDIALibraries")
-            println("Available backends are: CPU, GPU")
-            return [:CPU, :GPU]
-        else
-            println("GPU backend not currently available.  Install NVIDIALibraries package to have access to it with instructions here: https://github.com/Blackbody-Research/NVIDIALibraries.jl")
-            println("Available backends are: CPU")
-            [:CPU]
-        end
-    catch msg
-        println(msg)
-        println("Available backends are: CPU.  Install the Cuda Toolkit and NVIDIALibraries package to have access to the GPU backend")
-        [:CPU]
-    end
-end
-
 #set default backend to CPU
 global backend = :CPU
-global backendList = availableBackends()
+global backendList = [:CPU]
 
 
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
@@ -43,8 +24,7 @@ function requestCostFunctions()
 end
 
 function setBackend(b::Symbol)
-    list = availableBackends()
-    if in(b, list)
+    if in(b, backendList)
         global backend = b
     else
         println(string("Selected backend: ", b, " is not available."))
@@ -92,20 +72,17 @@ function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, num
     writedlm(string(deviceName, "_", trainName, "_trainingBenchmark.csv"), [header; body], ',')
 end
         
-export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions,
-availableBackends, setBackend, getBackend, benchmarkDevice, backendList
+export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList
 
 if in(:GPU, backendList)
     export switch_device, devlist, current_device
 end
 
 function __init__()
-    
-    if in(:GPU, backendList)
-        #initialize cuda driver api
-        cuInit(0)
-
-        try
+    try
+        run(`nvcc --version`)
+        installList = Pkg.installed()
+        if haskey(installList, "NVIDIALibraries")
             #get device list and set default device to 0
             deviceNum = cuDeviceGetCount()
             global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
@@ -129,11 +106,17 @@ function __init__()
             
             #make error kernels available in global scope
             create_errorfunction_dicts(costfunc_md) 
-        catch msg
-            println("Could not initialize cuda drivers and compile kernels due to $msg")
-            println("Removing GPU from available backends")
-            global backendList = [:CPU]
+
+            println("Available backends are: CPU, GPU")
+            #add GPU to backendList after successful initialization
+            push!(backendList, :GPU)
+        else
+            println("GPU backend not currently available.  Install NVIDIALibraries package to have access to it with instructions here: https://github.com/Blackbody-Research/NVIDIALibraries.jl")
+            println("Available backends are: CPU")
         end
+    catch msg
+        println("Could not initialize cuda drivers and compile kernels due to $msg")
+        println("Available backends are: CPU.  Install the Cuda Toolkit and NVIDIALibraries package to have access to the GPU backend")
     end
 
     function f()

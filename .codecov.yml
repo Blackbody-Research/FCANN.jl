@@ -1,1 +1,8 @@
+coverage:
+  ignore:
+    - "src/cuda/*"
+  status:
+    patch: false
+    project: false
+    changes: false
 comment: false

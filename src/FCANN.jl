@@ -105,29 +105,35 @@ function __init__()
         #initialize cuda driver api
         cuInit(0)
 
-        #get device list and set default device to 0
-        deviceNum = cuDeviceGetCount()
-        global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
-        global current_device = devlist[1]
+        try
+            #get device list and set default device to 0
+            deviceNum = cuDeviceGetCount()
+            global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
+            global current_device = devlist[1]
 
-        #set device for kernel and variable loading to default device
-        cudaSetDevice(current_device)
+            #set device for kernel and variable loading to default device
+            cudaSetDevice(current_device)
 
-        #create primary context handle on default device
-        # global ctx = cuDevicePrimaryCtxRetain(current_device)
+            #create primary context handle on default device
+            # global ctx = cuDevicePrimaryCtxRetain(current_device)
 
-        #create cublas handle to reference for calls on the default device
-        global cublas_handle = cublasCreate_v2()
+            #create cublas handle to reference for calls on the default device
+            global cublas_handle = cublasCreate_v2()
 
-        (adamax_md, costfunc_md) = cu_module_load()
-        # eval(cu_module_load)
+            (adamax_md, costfunc_md) = cu_module_load()
+            # eval(cu_module_load)
 
-        #create adamax and costfunction kernels in global scope
-        create_kernels(adamax_md, adamax_kernel_names)
-        create_kernels(costfunc_md, costfunc_kernel_names)
-        
-        #make error kernels available in global scope
-        create_errorfunction_dicts(costfunc_md) 
+            #create adamax and costfunction kernels in global scope
+            create_kernels(adamax_md, adamax_kernel_names)
+            create_kernels(costfunc_md, costfunc_kernel_names)
+            
+            #make error kernels available in global scope
+            create_errorfunction_dicts(costfunc_md) 
+        catch msg
+            println("Could not initialize cuda drivers and compile kernels due to $msg")
+            println("Removing GPU from available backends")
+            global backendList = [:CPU]
+        end
     end
 
     function f()

@@ -5,7 +5,7 @@ include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
 using Distributed
 
 if in(:GPU, backendList)
-	include("ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl")
+	include("cuda/ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl")
 end
 
 

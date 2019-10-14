@@ -1,358 +1,365 @@
-using CUDAdrv
+using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
-devlist = collect(devices())
+@using_nvidialib_settings
 
-#assign each worker a device ensuring it is a value in devlist
-#allows parallel workers to operate on multiple devices if they exist
+costfunc_kernel_names = ("fill_cols", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "tanhActivation")
 
-dev = myid()%length(devlist) 
-println(string("Assigning device ", dev, " to worker ", myid(), " based on this node having ", length(devlist), " devices"))
-	
-ctx = CuContext(CuDevice(dev))
+function cu_module_load()
+	#------use nvcc to compile .ptx files from .cu kernels and load module------------
+    filepath = joinpath(@__DIR__, "NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.cu")
+    cost_md = if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+        cuModuleLoad("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+    else
+        run(`nvcc -ptx $filepath`)
+        cuModuleLoad("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+    end
 
-using CUBLAS
-
-filepath = joinpath(@__DIR__, "NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.cu")
-
-cost_md = if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-	CuModuleFile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-else
-	run(`nvcc -ptx $filepath`)
-	CuModuleFile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+    filepath = joinpath(@__DIR__, "ADAMAX_INTRINSIC_KERNELS.cu")
+    adamax_md = if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
+        cuModuleLoad("ADAMAX_INTRINSIC_KERNELS.ptx")
+    else
+        run(`nvcc -ptx $filepath`)
+        cuModuleLoad("ADAMAX_INTRINSIC_KERNELS.ptx")
+    end
+    #------------------------------------------------------------------------
+    (adamax_md, cost_md)
 end
 
-##TO DO: redo threads, blockers, kernels, and launches to work in 1D
-#set up NN kernels
-fill_cols = CuFunction(cost_md, "fill_cols")
-finish_delt = CuFunction(cost_md, "finish_delta")
-elMul = CuFunction(cost_md, "elMul")
-cudaTanhGrad = CuFunction(cost_md, "tanhGradient")
-cudaTanhGradDropout = CuFunction(cost_md, "tanhGradientDropout")
-cudaTanh = CuFunction(cost_md, "tanhActivation")
+function create_kernels(md, knames)
+#create module kernels in global scope
+	for kname in knames
+         @eval global $(Symbol(kname)) = cuModuleGetFunction($md, $kname)
+    end
+end
 
-#note K suffix stands for kernel to distinguish from names in non cuda cost functions
-sqErrK = CuFunction(cost_md, "sqErr")
-absErrK = CuFunction(cost_md, "absErr")
-normLogErrK = CuFunction(cost_md, "normLogErr")
-sqErrDerivK = CuFunction(cost_md, "sqErrDeriv")
-absErrDerivK = CuFunction(cost_md, "absErrDeriv")
-normLogDerivK = CuFunction(cost_md, "normLogDeriv")
-cauchyLogErrK = CuFunction(cost_md, "cauchyLogErr")
-cauchyLogDerivK = CuFunction(cost_md, "cauchyLogDeriv")
+function create_errorfunction_dicts(cost_md)
+	err_kernel_list = map(kname -> cuModuleGetFunction(cost_md, kname), costFuncNames)
+    err_deriv_kernel_list = map(kname -> cuModuleGetFunction(cost_md, string(kname, "Deriv")), costFuncNames)
 
-#names, functions, and function derivatives must all be in order here
-costKernelList = [absErrK, sqErrK, normLogErrK, cauchyLogErrK]
-costKernelDerivsList = [absErrDerivK, sqErrDerivK, normLogDerivK, cauchyLogDerivK]
+    #make error kernels available in global scope
+    global costFuncKs = Dict(zip(costFuncNames, err_kernel_list))
+    global costFuncDerivKs = Dict(zip(costFuncNames, err_deriv_kernel_list))
+end
 
-costFuncKs = Dict(zip(costFuncNames, costKernelList))
-costFuncDerivKs = Dict(zip(costFuncNames, costKernelDerivsList))
+function switch_device(d::Int64)
+	if current_device == devlist[d]
+		println("Already using device $(devlist[d])")
+	else
+		println("Switching from $current_device to $(devlist[d])")
+		#destroy existing cublas_handle
+		cublasDestroy_v2(cublas_handle)
 
-kernels = (fill_cols, finish_delt, elMul, cudaTanhGrad, cudaTanhGradDropout)
-kernelsNOGRAD = (fill_cols, finish_delt, elMul, cudaTanh)
+		#set cuda device for kernel launches and cublas handles to a new device d
+	    cudaSetDevice(devlist[d])
 
-#----------regular kernels----------
-#kernel 1 = fill_cols
-#kernel 2 = finish_delt
-#kernel 3 = elMul
-#kernel 4 = cudaTanhGrad
-#kernel 5 = cudaTanhGradDropout
+	    #create cublas handle to reference for calls on the new device
+	    global cublas_handle = cublasCreate_v2()
+	    global current_device = devlist[d]
 
-#---------no grad kernels-----------
-#kernel 1 = fill_cols
-#kernel 2 = finish_delt
-#kernel 3 = elMul
-#kernel 4 = cudaTanh
+	    #------load ptx modules in new context------------
+        (adamax_md, cost_md) = cu_module_load()
+        # cost_md = cuModuleLoad("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")        
+        # adamax_md = cuModuleLoad("ADAMAX_INTRINSIC_KERNELS.ptx")
+       
+        #----------use cuda driver api to create cuFunction pointers-------------
+        #create adamax train and cost function kernels in global scope
+   		create_kernels(adamax_md, adamax_kernel_names)
+   		create_kernels(cost_md, costfunc_kernel_names)
+        
+        # #create error function and derivatives kernel lists
+        # err_kernel_list = map(kname -> cuModuleGetFunction(cost_md, kname), costFuncNames)
+        # err_deriv_kernel_list = map(kname -> cuModuleGetFunction(cost_md, string(kname, "Deriv")), costFuncNames)
 
-#2D thread block size for GPU
-K = 32
-threads = CuDim((K, K))
+        # #make error kernels available in global scope
+        # global costFuncKs = Dict(zip(costFuncNames, err_kernel_list))
+        # global costFuncDerivKs = Dict(zip(costFuncNames, err_deriv_kernel_list))
+
+        #make error kernels available in global scope
+        create_errorfunction_dicts(cost_md) 
+	end
+	println("Current device set to $(devlist[d])")
+	return current_device
+end
 
 function getTypes(x)
     if isbits(x)
         typeof(x)
-    else
-        Ptr{eltype(x)}
+    elseif typeof(x) <: NVIDIALibraries.DeviceArray.CUDAArray
+       Ptr{x.element_type}
     end
 end
 
-function run_kernel(kernel::CuFunction, N::Int64, M::Int64, inputs...)
-	blocks = CuDim((ceil(Int, N/K), ceil(Int, M/K)))
-    cudacall(kernel, blocks, threads, (Int64, Int64, getTypes.(inputs)...), N, M, inputs...)
+function run_kernel(kernel::CUfunction, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL))
+	K = 16
+	threads = Cuint.((K, K))
+	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
+    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs..., stream = stream)
 end
 
-function predict(d_Thetas, d_biases, d_X, m, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+function kernelTests()
+	println("Testing cudaTanh kernel launch")
+	N = 10
+	M = 10
+	run_kernel(cudaTanh, N, M, cuda_allocate(rand(Float32, 10, 10)))
+	println("Test success")
+
+	println("Testing elSq kernel launch")
+	N = 10
+	M = 10
+	run_kernel(elSq, N, M, cuda_allocate(rand(Float32, 10, 10)))
+	println("Test success")
+end
+
+function device_allocate(host_array::Vector{Array{Float32, N}}, scale = 1.0f0) where N
+	l = length(host_array)
+	device_array = Vector{CUDAArray}(undef, l)
+	for (i, a) in enumerate(host_array)
+		device_array[i] = cuda_allocate(scale .* host_array[i])
+	end
+	return device_array
+end
+
+function device_copy(orig::Vector{CUDAArray})
+	l = length(orig)
+	new = Vector{CUDAArray}(undef, l)
+	for i in 1:l
+		new[i] = cuda_allocate(host_allocate(orig[i]))
+	end
+end
+
+device_copy(orig::CUDAArray) = cuda_allocate(host_allocate(orig))
+
+function host_allocate(device_array::CUDAArray)
+	T = device_array.element_type
+	s = device_array.size
+	host_array = Array{T, length(s)}(undef, s...)
+	memcpy!(host_array, device_array)
+	return host_array
+end
+
+function host_allocate(device_array::Vector{CUDAArray})
+	l = length(device_array)
+	host_array = Vector{Array{device_array[1].element_type, length(device_array[1].size)}}(undef, l)
+	for (i, d_a) in enumerate(device_array)
+		host_array[i] = host_allocate(device_array[i])
+	end
+	return host_array
+end
+
+function forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+#modifies d_a with forward activations
+	num_hidden = length(hidden_layers)
+	m = d_X.size[1]
+
+	if num_hidden > 0
+		for i = 1:num_hidden
+			run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
+		end
+	end
+
+	run_kernel(fill_cols, m, d_a[end].size[2], d_a[end], d_biases[end])
+
+	cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+
+	if num_hidden > 0
+
+		run_kernel(tanhActivation, m, hidden_layers[1], d_a[1])
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])	
+				run_kernel(tanhActivation, m, hidden_layers[i], d_a[i])	
+			end
+		end
+		cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+	end
+	cuCtxSynchronize()
+end
+
+function nnCostFunctionNOGRAD(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr")
+
+	@assert d_a[end].size[1] == d_y.size[1]
+
+	if occursin("Log", costFunc)
+		@assert d_a[end].size[2] == 2*d_y.size[2]
+	else
+		@assert d_a[end].size[2] == d_y.size[2]
+	end
+
+	#define size of output data separately from output layer
+	n = d_y.size[2]
+	
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+	#launch across output data size rather than output layer size
+	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_y)
+	cuCtxSynchronize()
+	#changed from absolute sum to regular sum because the actual error values are stored in d_a[end]
+	tmp_out = host_allocate(d_a[end]) 
+	@fastmath sum(tmp_out)/m
+end
+
+function form_activations(d_Thetas::Vector{CUDAArray}, m::Int64)
+	l = length(d_Thetas)
+	d_a = Vector{CUDAArray}(undef, l)
+
+	for i = 1:l
+		d_a[i] = cuda_allocate(Array{Float32}(undef, m, d_Thetas[i].size[1]))
+	end
+
+	return d_a
+end
+
+function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
 	l = length(d_Thetas)
 	num_hidden = l - 1
+	m = d_X.size[1]
 
-	#dropout scale factor
-	F = 1.0f0 - D
+	d_a = form_activations(d_Thetas, m)
+	
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
 
-	d_a = Array{CuArray{Float32, 2}}(l)
-	if num_hidden > 0
-		for i = 1:l-1
-			d_a[i] = CuArray{Float32}(m, hidden_layers[i])
-		end
-	end
-	d_a[l] = CuArray{Float32}(m, output_layer_size)
-
-	if num_hidden > 0
-		for i = 1:num_hidden
-			run_kernel(kernelsNOGRAD[1], m, hidden_layers[i], d_a[i], d_biases[i])
-			#CUDArt.launch(kernelsNOGRAD[1], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_biases[i]))
-		end
-	end
-
-	#println(string("biases 3", round(float64(to_host(d_biases[3])), 6)))
-	run_kernel(kernelsNOGRAD[1], m, output_layer_size, d_a[end], d_biases[end])
-	#CUDArt.launch(kernelsNOGRAD[1], blocks(m, output_layer_size), threads, (m, output_layer_size, d_a[end], d_biases[end]))
-
-	CUBLAS.gemm!('N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
-
-	if num_hidden > 0
-		run_kernel(kernelsNOGRAD[4], m, hidden_layers[1], d_a[1])
-		#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1])) 
-
-
-		if num_hidden > 1
-			for i = 2:num_hidden
-				CUBLAS.gemm!('N', 'T', F, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
-				run_kernel(kernelsNOGRAD[4], m, hidden_layers[i], d_a[i])
-				#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i])) 
-			end
-		end
-
-		CUBLAS.gemm!('N', 'T', F, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
-	end
-	synchronize()
-	return d_a[end]
+	return (d_a[end], host_allocate(d_a[end]))
 end
 
-function nnCostFunction(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CuArray{Float32, 1}, d_a::Array{CuArray{Float32, 2}, 1}, d_tanh_grad_z::Array{CuArray{Float32, 2}, 1}, d_deltas::Array{CuArray{Float32, 2}, 1}, d_Theta_grads::Array{CuArray{Float32, 2}, 1}, d_bias_grads::Array{CuArray{Float32, 1}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0; costFunc = "absErr")
+function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network
+#m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
+#hidden_layers = hidden layer vector
+	l = length(d_Thetas)
+	num_hidden = l - 1
+	m = size(batches[1], 1)
+	#dropout scale factor
+	# F = 1.0f0 - D
+
+	d_a = form_activations(d_Thetas, m)
+
+	out = mapreduce(vcat, batches) do X
+		d_X = cuda_allocate(collect(X))
+
+		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+		return host_allocate(d_a[end])
+	end
+	(cuda_allocate(out), out)
+end
+
+function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network
+#m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
+#hidden_layers = hidden layer vector
+	l = length(multiParams[1][1])
+	num_hidden = l - 1
+
+	#dropout scale factor
+	# F = 1.0f0 - D
+	m = d_X.size[1]
+
+	d_a = form_activations(multiParams[1][1], m)
+
+	[begin
+		d_Thetas = params[1]
+		d_biases = params[2]
+
+		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+		host_allocate(d_a[end])
+	end
+	for params in multiParams]
+end
+
+function predictMultiBatches(multiParams, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network
+#m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
+#hidden_layers = hidden layer vector
+	l = length(multiParams[1][1])
+	num_hidden = l - 1
+	m = size(batches[1], 1)
+	d_a = form_activations(multiParams[1][1], m)
+
+	outputs = map(batches) do X
+		d_X = cuda_allocate(collect(X))
+		[begin
+			d_Thetas = params[1]
+			d_biases = params[2]
+			forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+			host_allocate(d_a[end])
+		end
+		for params in multiParams]
+	end
+	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
+end
+
+function nnCostFunction(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::NVIDIALibraries.DeviceArray.CUDAArray, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_tanh_grad_z::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_deltas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_Theta_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_bias_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr")
 
 	num_hidden = length(hidden_layers)
 
-	if contains(costFunc, "Log")
-		assert(length(d_a[end]) == 2*length(d_y))
+	# kernelTests()
+
+	@assert d_a[end].size[1] == d_y.size[1]
+
+	if occursin("Log", costFunc)
+		@assert d_a[end].size[2] == 2*d_y.size[2]
 	else
-		assert(length(d_a[end]) == length(d_y))
+		@assert d_a[end].size[2] == d_y.size[2]
 	end
 
 	#define size of output data separately from output layer
-	n = size(d_y, 2)
-
+	n = d_y.size[2]
 
 	if num_hidden > 0
 		if lambda > 0.0f0
-			CUBLAS.blascopy!(input_layer_size*hidden_layers[1], d_Thetas[1], 1, d_Theta_grads[1], 1)
-			if num_hidden > 1
-				for i = 2:num_hidden
-					CUBLAS.blascopy!(hidden_layers[i-1]*hidden_layers[i], d_Thetas[i],1, d_Theta_grads[i],1)
-				end
+			for i in 1:length(d_Thetas)
+				memcpy!(d_Theta_grads[i], d_Thetas[i])
 			end
-			CUBLAS.blascopy!(hidden_layers[num_hidden]*output_layer_size, d_Thetas[end],1, d_Theta_grads[end],1)
 		end
-
 
 		for i = 1:num_hidden
-			run_kernel(kernels[1], m, hidden_layers[i], d_a[i], d_biases[i])
-			#CUDArt.launch(kernels[1], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_biases[i]))
+			run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
 		end
 	end
-
-	#println(string("biases 3", round(float64(to_host(d_biases[3])), 6)))
-
-	run_kernel(kernels[1], m, output_layer_size, d_a[end], d_biases[end])
-	#CUDArt.launch(kernels[1], blocks(m, output_layer_size), threads, (m, output_layer_size, d_a[end], d_biases[end]))
-
-
-	CUBLAS.gemm!('N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
-
+	run_kernel(fill_cols, m, output_layer_size, d_a[end], d_biases[end])
+	cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 	if num_hidden > 0
 
 		if D == 0.0f0
-			run_kernel(kernels[4], m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
-			#CUDArt.launch(kernels[4], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])) 
+			run_kernel(tanhGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
 		else
-			run_kernel(kernels[5], m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
-			#CUDArt.launch(kernels[5], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)) 
+			run_kernel(tanhGradientDropout, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
 		end
-
 
 		if num_hidden > 1
 			for i = 2:num_hidden
-				CUBLAS.gemm!('N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
 				if D == 0.0f0
-					run_kernel(kernels[4], m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
-					#CUDArt.launch(kernels[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])) 
+					run_kernel(tanhGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
 				else
-					run_kernel(kernels[5], m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					run_kernel(tanhGradientDropout, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
 				end
 			end
 		end
 
-		CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
 
 	#launch across output data size rather than output layer size
 	run_kernel(costFuncDerivKs[costFunc], m, n, d_a[end], d_y, d_deltas[end])
 
-	#run_kernel(kernels[2], m, output_layer_size, d_a[end], d_y, d_deltas[end])
-	#CUDArt.launch(kernels[2], blocks(m, 1), threads, (m, output_layer_size, d_a[end], d_y, d_deltas[end]))
-
-
 	i = num_hidden
 	while i >= 1
-		#CUDArt.launch(kernels[3], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_deltas[i], CUBLAS.gemm('N', 'N', d_deltas[i+1], d_Thetas[i+1]), d_tanh_grad_z[i]))
-		gemm!('N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) #do part 1 of line 1 in place
-		run_kernel(kernels[3], m, hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
-		#CUDArt.launch(kernels[3], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])) #do part 2 of line 1 in place
+		cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) 
+		run_kernel(elMul, m, hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
 		i = i - 1
 	end
 
-	CUBLAS.gemm!('T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
-
-
-	CUBLAS.gemv!('T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
-	#d_bias_grads[1] = CUBLAS.gemv('T', 1.0f0/m, d_deltas[1], d_ones)
+	cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
 
 	if num_hidden > 0
 		for i = 2:num_hidden+1
-			CUBLAS.gemm!('T', 'N', 1.0f0/m, d_deltas[i], d_a[i-1], lambda/m, d_Theta_grads[i])
-			#d_bias_grads[i] = CUBLAS.gemv('T', 1.0f0/m, d_deltas[i], d_ones)
-			CUBLAS.gemv!('T', 1.0f0/m, d_deltas[i], d_ones, 0.0f0, d_bias_grads[i])
+			cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[i], d_a[i-1], lambda/m, d_Theta_grads[i])
+			cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[i], d_ones, 0.0f0, d_bias_grads[i])
 		end
 	end
-	synchronize()
+	cuCtxSynchronize()
 end
-
-
-function nnCostFunctionNOGRAD(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CuArray{Float32, 2}, 1}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, D = 0.0f0; costFunc = "absErr")
-
-	if contains(costFunc, "Log")
-		assert(length(d_a[end]) == 2*length(d_y))
-	else
-		assert(length(d_a[end]) == length(d_y))
-	end
-
-	#define size of output data separately from output layer
-	n = size(d_y, 2)
-
-	#dropout scale factor
-	F = (1.0f0 - D)
-
-	num_hidden = length(hidden_layers)
-
-	if num_hidden > 0
-		for i = 1:num_hidden
-			run_kernel(kernelsNOGRAD[1], m, hidden_layers[i], d_a[i], d_biases[i])
-			#CUDArt.launch(kernelsNOGRAD[1], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_biases[i]))
-		end
-	end
-
-	#println(string("biases 3", round(float64(to_host(d_biases[3])), 6)))
-
-	run_kernel(kernelsNOGRAD[1], m, output_layer_size, d_a[end], d_biases[end])
-	#CUDArt.launch(kernelsNOGRAD[1], blocks(m, output_layer_size), threads, (m, output_layer_size, d_a[end], d_biases[end]))
-
-
-	CUBLAS.gemm!('N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
-
-	if num_hidden > 0
-
-		run_kernel(kernelsNOGRAD[4], m, hidden_layers[1], d_a[1])
-		#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1])) 
-
-
-		if num_hidden > 1
-			for i = 2:num_hidden
-				CUBLAS.gemm!('N', 'T', F, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
-				run_kernel(kernelsNOGRAD[4], m, hidden_layers[i], d_a[i])
-				#CUDArt.launch(kernelsNOGRAD[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i])) 
-			end
-		end
-
-		CUBLAS.gemm!('N', 'T', F, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
-	end
-
-	#launch across output data size rather than output layer size
-	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_y)
-
-	#CUBLAS.axpy!(output_layer_size*m, -1.0f0, d_y, 1, d_a[end], 1)
-
-	#changed from absolute sum to regular sum because the actual error values are stored in d_a[end]
-	@fastmath sum(Array{Float32, 2}(d_a[end]))/m
-	#CUBLAS.asum(d_a[end])/m
-end
-
-# function nnCostFunctionAdv(d_Thetas::Array{CuArray{Float32, 2}, 1}, d_biases::Array{CuArray{Float32, 1}, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Array{Int64, 1}, m::Int64, d_ones::CuArray{Float32, 1}, d_a::Array{CuArray{Float32, 2}, 1}, d_tanh_grad_z::Array{CuArray{Float32, 2}, 1}, d_deltas::Array{CuArray{Float32, 2}, 1}, d_Theta_grads::Array{CuArray{Float32, 2}, 1}, d_bias_grads::Array{CuArray{Float32, 1}, 1}, d_advX::CuArray{Float32, 2}, d_X::CuArray{Float32, 2}, d_y::CuArray{Float32, 2},lambda::Float32, blocks::Function, threads::Tuple{Int64, Int64}, kernels)
-
-# num_hidden = length(hidden_layers)
-
-
-# if lambda > 0.0f0
-# CUBLAS.blascopy!(input_layer_size*hidden_layers[1], d_Thetas[1], 1, d_Theta_grads[1], 1)
-# if num_hidden > 1
-# 	for i = 2:num_hidden
-# 		CUBLAS.blascopy!(hidden_layers[i-1]*hidden_layers[i], d_Thetas[i],1, d_Theta_grads[i],1)
-# 	end
-# end
-# CUBLAS.blascopy!(hidden_layers[num_hidden], d_Thetas[end],1, d_Theta_grads[end],1)
-# end
-
-
-# for i = 1:num_hidden
-# 	CUDArt.launch(kernels[1], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_biases[i]))
-# end
-
-# #println(string("biases 3", round(float64(to_host(d_biases[3])), 6)))
-
-# CUDArt.launch(kernels[1], blocks(m, output_layer_size), threads, (m, output_layer_size, d_a[end], d_biases[end]))
-
-
-# CUBLAS.gemm!('N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
-
-
-# CUDArt.launch(kernels[4], blocks(m, hidden_layers[1]), threads, (m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])) 
-
-
-# if num_hidden > 1
-# 	for i = 2:num_hidden
-# 		CUBLAS.gemm!('N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
-		
-# 		CUDArt.launch(kernels[4], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])) 
-# 	end
-# end
-
-# CUBLAS.gemm!('N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
-
-# CUDArt.launch(kernels[2], blocks(m, 1), threads, (m, output_layer_size, d_a[end], d_y, d_deltas[end]))
-
-
-# i = num_hidden
-# while i >= 1
-# 	#CUDArt.launch(kernels[3], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_deltas[i], CUBLAS.gemm('N', 'N', d_deltas[i+1], d_Thetas[i+1]), d_tanh_grad_z[i]))
-# 	gemm!('N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) #do part 1 of line 1 in place
-# 	CUDArt.launch(kernels[3], blocks(m, hidden_layers[i]), threads, (m, hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])) #do part 2 of line 1 in place
-# 	i = i - 1
-# end
-
-# CUBLAS.gemm!('N', 'N', 1.0f0/m, d_deltas[1], d_Thetas[1], 0.0f0, d_advX)
-# CUDArt.launch(kernels[5], blocks(m, input_layer_size), threads, (m, input_layer_size, d_X, d_advX))
-
-# CUBLAS.gemm!('T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
-
-
-# CUBLAS.gemv!('T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
-# #d_bias_grads[1] = CUBLAS.gemv('T', 1.0f0/m, d_deltas[1], d_ones)
-
-
-# for i = 2:num_hidden+1
-# 	CUBLAS.gemm!('T', 'N', 1.0f0/m, d_deltas[i], d_a[i-1], lambda/m, d_Theta_grads[i])
-# 	#d_bias_grads[i] = CUBLAS.gemv('T', 1.0f0/m, d_deltas[i], d_ones)
-# 	CUBLAS.gemv!('T', 1.0f0/m, d_deltas[i], d_ones, 0.0f0, d_bias_grads[i])
-# end
-
-# end

@@ -1,5 +1,8 @@
 using FCANN
-using Base.Test
+using Test
+using Random
+using DelimitedFiles
+using Distributed
 
 include("initTests.jl")
 

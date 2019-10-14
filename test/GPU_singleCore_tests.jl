@@ -8,7 +8,7 @@ else
     println("Testing numerical gradient vs backpropagation")
     println("---------------------------------------------")
     println("Lambda = 0, no hidden layers")
-    err = checkNumGrad(0.0f0, hidden_layers=[])
+    err = checkNumGrad(0.0f0, hidden_layers=Vector{Int64}())
     @test (err < 0.015)
 
     println("Lambda = 0")
@@ -32,13 +32,13 @@ else
     println()
 
     println("Norm Log Likelihood Cost Function")
-    err = checkNumGrad(costFunc = "normLog")
+    err = checkNumGrad(costFunc = "normLogErr")
     @test(err < 0.015)
     println("TEST PASSED")
     println()
 
     println("Cauchy Log Likelihood Cost Function")
-    err = checkNumGrad(costFunc = "cauchyLog")
+    err = checkNumGrad(costFunc = "cauchyLogErr")
     @test(err < 0.015)
     println("TEST PASSED")
     println()
@@ -56,8 +56,10 @@ else
     println("TEST PASSED")
     println()
 
+    name = "test"
+
     println("Training with 0 hidden layers")
-    record, T, B = fullTrain(name, 150, 1024, [], 0.0f0, Inf, 0.001f0, 0.1f0, 1,writeFiles=false)
+    record, T, B = fullTrain(name, 150, 1024, Vector{Int64}(), 0.0f0, Inf, 0.001f0, 0.1f0, 1,writeFiles=false)
     @test(record[end] < record[1])
     println("TEST PASSED")
     println()
@@ -77,22 +79,53 @@ else
 
     M = 10
 
-    # filename = string(name, "_10_input_", [], "_hidden_2_output_0.0_L2_Inf_maxNorm_0.001_alpha_ADAMAX", backend, "_absErr")
-    # rm(string("1_costRecord_", filename, ".csv"))
-    # rm(string("1_timeRecord_", filename, ".csv"))
-    # rm(string("1_performance_", filename, ".csv"))
-    # rm(string("1_params_", filename, ".bin"))
-
-    filename = string(name, "_10_input_", hidden, "_hidden_2_output_0.0_L2_Inf_maxNorm_0.0001_alpha_ADAMAX", backend, "_absErr")
-    rm(string("1_costRecord_", filename, ".csv"))
-    rm(string("1_timeRecord_", filename, ".csv"))
-    rm(string("1_performance_", filename, ".csv"))
-    rm(string("1_predictionScatterTrain_", filename, ".csv"))
-    rm(string("1_predictionScatterTest_", filename, ".csv"))
+    filename = string(name, "_10_input_10X2_hidden_2_output_0.0001_alpha_0.1_decay_ADAMAX_absErr")
+    for str in ("costRecord", "timeRecord", "performance", "predScatTrain", "predScatTest")
+        rm("1_$(str)_$filename.csv")
+    end
     rm(string("1_params_", filename, ".bin"))
 
-    # rm(string("2_costRecord_", filename, ".csv"))
-    # rm(string("2_timeRecord_", filename, ".csv"))
-    # rm(string("2_performance_", filename, ".csv"))
-    # rm(string("2_params_", filename, ".bin"))
+    println("Testing multiTrain")
+    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1)
+    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2)
+    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, costFunc = "normLogErr")
+    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2, costFunc = "normLogErr")
+    println("TEST PASSED")
+    println()
+
+    println("Testing evalMulti")
+    evalMulti(name, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, IDList = [1, 2])
+    evalMulti(name, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, IDList = [1, 2], costFunc = "normLogErr")
+    println("TEST PASSED")
+    println()
+
+    filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.002_alpha_0.1_decay_1.0_maxNorm_ADAMAX_absErr")
+
+    rm(string("1_multiParams_", filename, ".bin"))
+    rm(string("1_multiPerformance_", filename, ".csv"))
+    rm(string("1_multiPredScatTrain_", filename, ".csv"))
+    rm(string("1_multiPredScatTest_", filename, ".csv"))
+    rm(string("2_multiParams_", filename, ".bin"))
+    rm(string("2_multiPerformance_", filename, ".csv"))
+    rm(string("2_multiPredScatTrain_", filename, ".csv"))
+    rm(string("2_multiPredScatTest_", filename, ".csv"))
+    rm(string("fullMultiParams_", filename, ".bin"))
+    rm(string("fullMultiPerformance_", filename, ".csv"))
+    rm(string("multiPredScatTrain_", filename, ".csv"))
+    rm(string("multiPredScatTest_", filename, ".csv"))
+
+    filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.002_alpha_0.1_decay_1.0_maxNorm_ADAMAX_normLogErr")
+
+    rm(string("1_multiPerformance_", filename, ".csv"))
+    rm(string("1_multiPredScatTrain_", filename, ".csv"))
+    rm(string("1_multiPredScatTest_", filename, ".csv"))
+    rm(string("1_multiParams_", filename, ".bin"))
+    rm(string("2_multiPerformance_", filename, ".csv"))
+    rm(string("2_multiPredScatTrain_", filename, ".csv"))
+    rm(string("2_multiPredScatTest_", filename, ".csv"))
+    rm(string("2_multiParams_", filename, ".bin"))
+    rm(string("fullMultiPerformance_", filename, ".csv"))
+    rm(string("multiPredScatTrain_", filename, ".csv"))
+    rm(string("multiPredScatTest_", filename, ".csv"))
+    rm(string("fullMultiParams_", filename, ".bin"))  
 end

@@ -1,15 +1,16 @@
 # FCANN
 [![Build Status](https://travis-ci.org/Blackbody-Research/FCANN.jl.svg?branch=master)](https://travis-ci.org/Blackbody-Research/FCANN.jl)
 [![codecov.io](https://codecov.io/gh/Blackbody-Research/FCANN.jl/branch/master/graphs/badge.svg?)](http://codecov.io/gh/Blackbody-Research/FCANN.jl)
+[![Coverage Status](https://coveralls.io/repos/github/Blackbody-Research/FCANN.jl/badge.svg?branch=master)](https://coveralls.io/github/Blackbody-Research/FCANN.jl?branch=master)
 
 Simple module for **F**ully **C**onnected **A**rtificial **N**eural **N**etworks.  Minimum functionality for changing error functions.  Current output task is fixed at regression (floating point value output) but in the future the option to define a network for classification will be added.
 
 ## Installation
 
-Within Julia, execute
+Within Julia REPL enter Pkg mode by typing ']' then execute
 
-```julia
-Pkg.clone("https://github.com/Blackbody-Research/FCANN.jl")
+```
+add https://github.com/Blackbody-Research/FCANN.jl.git
 ```
 
 Ensure packaging has been installed properly by running ```Pkg.test("FCANN")``` 
@@ -22,7 +23,7 @@ To start using the package type ```using FCANN```.  Unless otherwise stated, all
 
 ### Network Setup
 
-The following examples cover preliminary and auxilliary functions to working with data and network parameters.
+The following examples cover preliminary and auxiliary functions to working with data and network parameters.
 
 #### Data Formatting
 
@@ -64,7 +65,7 @@ Since networks can get very large, there are functions to save a network to disk
 writeParams([(T0, B0)], "testParams.bin")
 ```
 
-Note that the parameters must be passed in a tuple inside of a vector with the thetas followed by the biases.  This write function can accomodate ensemble networks which contain multiple full networks of the same architecture.  In this case the array passed to writeParams would contain more than one tuple.
+Note that the parameters must be passed in a tuple inside of a vector with the thetas followed by the biases.  This write function can accommodate ensemble networks which contain multiple full networks of the same architecture.  In this case the array passed to writeParams would contain more than one tuple.
 
 ```julia
 #Read parameters from disk
@@ -110,10 +111,10 @@ A helper function wraps some of the above code in a manner that allows easier lo
 
 ``` julia
 #write data to disk with the name "ex"
-writecsv("Xtrain_ex.csv", Xtrain)
-writecsv("Xtest_ex.csv", Xtest)
-writecsv("ytrain_ex.csv", ytrain)
-writecsv("ytest_ex.csv", ytest)
+writedlm("Xtrain_ex.csv", Xtrain, ',')
+writedlm("Xtest_ex.csv", Xtest, ',')
+writedlm("ytrain_ex.csv", ytrain, ',')
+writedlm("ytest_ex.csv", ytest, ',')
 
 #define training parameters
 alpha = 0.002f0
@@ -143,7 +144,7 @@ addprocs(6) #add 6 parallel workers
 @everywhere using FCANN #initialize package on all workers
 
 #Define which networks should be trained
-hiddenList = [[], [1], [2, 2], [10, 5, 2]]
+hiddenList = [Vector{Int64}(), [1], [2, 2], [10, 5, 2]]
 
 #Run training in parallel
 archEval("ex", N, batchSize, hiddenList)
@@ -152,10 +153,10 @@ archEval("ex", N, batchSize, hiddenList)
 A single file will be generated named ```archEval_ex_10_input_2_output_ADAMAXCPU.csv``` that contains a table of errors for each architecture.  Note that one of the networks was simply an empty array.  In this case the model will contain no hidden layers and will simply be a linear model.
 
 ### Working with backends
-After running ```using FCANN```, the package will be ready to use with the CPU backend active.  If you have both CUDAdrv.jl and CUBLAS.jl packages successfully installed, then the GPU backend will also be available.  To activate the GPU backend, run ```setBackend(:GPU)``` and to switch back to the CPU backend run ```setBackend(:CPU)```.
+After running ```using FCANN```, the package will be ready to use with the CPU backend active.  If you have both the Cuda Toolkit and the NVIDIALibraries.jl package successfully installed, then the GPU backend will also be available.  To activate the GPU backend, run ```setBackend(:GPU)``` and to switch back to the CPU backend run ```setBackend(:CPU)```.
 
 The two possible backends are defined as symbols: ```:CPU``` or ```:GPU```  
-- Check available backends with ```availableBackends()```, which will return an array of either one element ```[:CPU]``` or two elements ```[:CPU, :GPU]``` if the optional cuda packages listed above are installed.
+- Check available backends with ```availableBackends()```, which will return an array of either one element ```[:CPU]``` or two elements ```[:CPU, :GPU]``` if the optional cuda requirements listed above are installed.
 - Check current active backend with ```getBackend()```.
 - Set a new active backend with ```setBackend(b)``` where b is one of the two symbols listed above.  Note that if you enter an unavailable backend then a message will verify the previously active backend is still active.
 
@@ -167,7 +168,7 @@ Initialization functions such as creating parameters and reading/writing test da
 
 ## Notes
 
-One may see the available error function strings by calling ```requestCostFunctions()``` after initializing the package.  Currently there are only two options: "absErr" and "sqErr" with "absErr" as the default.
+One may see the available error function strings by calling ```requestCostFunctions()``` after initializing the package.  Currently there are only four options: "absErr", "sqErr", "normLogErr", and "cauchyLogErr" with "absErr" as the default.
 
 The error function is defined during the training process but the saved files will specify which error function was used.  The network parameters themselves do not contain that information outside of the file name.  
 
@@ -177,8 +178,9 @@ The final output layer does not apply any transformation function in line with a
 
 ## Future Plans
 
-- Add additional error functions
 - Add switching between regression and classification
+- Add alternative training procedures like stochastic weight averaging
+- Add additional network architectures like resNet that can have skip connections between layers
 
 ## License
 FCANN.jl is released under the [GPLv3 license](./LICENSE.md).

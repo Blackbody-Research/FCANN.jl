@@ -1,5 +1,6 @@
-using Base.LinAlg.BLAS
-import Base.BLAS: gemv!
+# using Base.LinAlg.BLAS
+using LinearAlgebra.BLAS
+# import Base.BLAS: gemv!
 
 #-----------------Types of Cost Functions---------------------------------
 function absErr(a, y)
@@ -19,29 +20,31 @@ function sqErrDeriv(a, y)
 end
 
 #the exponential of a2 is the sigma parameter, this ensures it is always positive
-function normLogLikelihoodErr(a1, a2, y)
+function normLogErr(a1, a2, y)
 	0.5f0*exp(2*a2)*a1^2 - exp(2*a2)*a1*y + 0.5f0*exp(2*a2)*y*y - a2 + 0.9189385332
 	#0.5f0*(a2^2)*(a1-y)^2 - log(abs.(a2)) + 0.9189385332f0
 end
 
-function normLogLikelihoodDeriv(a1, a2, y)
+function normLogErrDeriv(a1, a2, y)
 	((a1 - y)*exp(2*a2), exp(2*a2)*(y-a1)^2 - 1)
 end 
 
-#the exponential of a2 is the scale parameter, this ensures it is always positive
-function cauchyLogLikelihoodErr(a1, a2, y)
+#the exponential of a2 is the inverse of the scale parameter, this ensures it is always positive
+#exp(a2)=-1/b where b is the scale parameter => b = -1/exp(a2) and => log(exp(a2)/2) = log(-1/2b)
+#-abs(x-u)/b - log(2b) = -abs(x-u)*exp(a2)+log(0.5*exp(a2))
+function cauchyLogErr(a1, a2, y)
 	exp(a2)*abs(a1-y) - log(0.5f0*exp(a2))
 end
 
-function cauchyLogLikelihoodDeriv(a1, a2, y)
+function cauchyLogErrDeriv(a1, a2, y)
 	(exp(a2)*ifelse(a1 > y, 1.0f0, ifelse(a1 < y, -1.0f0, 0.0f0)), exp(a2)*abs(a1-y) - 1)
 end
 
 
 #names, functions, and function derivatives must all be in order here
-costFuncList = [absErr, sqErr, normLogLikelihoodErr, cauchyLogLikelihoodErr]
-costFuncDerivsList = [absErrDeriv, sqErrDeriv, normLogLikelihoodDeriv, cauchyLogLikelihoodDeriv]
-costFuncNames = ["absErr", "sqErr", "normLog", "cauchyLog"]
+costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr")
+costFuncList = eval.(Symbol.(costFuncNames))
+costFuncDerivsList = eval.(Symbol.(map(a -> "$(a)Deriv", costFuncNames)))
 #--------------------------------------------------------------------------
 
 function calcJ(m, n, delta, lambda, Thetas)
@@ -153,8 +156,9 @@ end
 
 function tanhGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32}, D::Float32)
 	l = length(z)
+	F = 1.0f0/(1.0f0 - D) #added scaling factor so dropout trained network can be treated normally during inference
 	@inbounds for i = 1:l
-		tanh_grad_z[i] = Float32(rand() > D)
+		tanh_grad_z[i] = Float32(rand() > D)*F
 	end
 
 	@inbounds @simd for i = 1:l	
@@ -171,25 +175,58 @@ function tanhActivation!(z::Matrix{Float32})
 		@inbounds z[i] = 1.7159f0*fast_tanh(2.0f0*z[i]/3.0f0)
 	end
 end
-	
-function predict(Thetas, biases, X, D = 0.0f0)
+
+function form_activations(Thetas::Vector{Matrix{Float32}}, m::Int64)
+	l = length(Thetas)
+	a = Array{Matrix{Float32}}(undef, l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(undef, m, size(Thetas[i], 1))
+	end
+
+	return a
+end
+
+function form_tanh_grads(hidden_layers::AbstractVector{Int64}, m::Int64)
+	num_hidden = length(hidden_layers)
+	tanh_grad_z = Array{Matrix{Float32}, 1}(undef, num_hidden)
+	if num_hidden > 0
+		for i in 1:num_hidden
+			tanh_grad_z[i] = Matrix{Float32}(undef, m, hidden_layers[i])
+		end
+	end
+	return tanh_grad_z
+end
+
+function predict(Thetas, biases, X, resLayers::Int64 = 0)
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
-#that had dropout applied to them are scaled by (1-D)
-
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
 	# Useful values
 	m = size(X, 1)
 	l = length(Thetas)
 	n = size(Thetas[end], 1)
+	
+	if resLayers != 0
+		num_hidden = l - 1
+	
+		h = [length(B) for B in biases]
+		hidden_layers = if num_hidden == 0
+			[]
+		else
+			h[1:end-1]
+		end
+		@assert resLayers > 1 "Residual layer size must be at least 2"
+		@assert num_hidden > 2 "Must have at least three hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
 
 	#dropout scale factor
-	F = (1.0f0 - D)
+	# F = (1.0f0 - D)
 
-	a = Array{Matrix{Float32}}(l)
-
-	for i = 1:l
-		a[i] = Array{Float32}(m, size(Thetas[i], 1))
-	end
+	a = form_activations(Thetas, m)
 
 	#a[1] = X * Thetas[1]' .+ biases[1]'
 	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
@@ -207,23 +244,200 @@ function predict(Thetas, biases, X, D = 0.0f0)
 
 		if (l-1) > 1
 			for i = 2:l-1
-				gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && ((i - 1) % resLayers) == 0
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
 				tanhActivation!(a[i])
 			end
 		end
 
-		gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+	return a[end]
+end
+
+function predictBatches(Thetas, biases, batches, resLayers::Int64 = 0)
+#PREDICT Predict the value of an input given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(batches[1], 1)
+	l = length(Thetas)
+	n = size(Thetas[end], 1)
+
+
+
+	if resLayers != 0
+		num_hidden = l - 1
+	
+		h = [length(B) for B in biases]
+		hidden_layers = if num_hidden == 0
+			[]
+		else
+			h[1:end-1]
+		end
+		@assert resLayers > 1 "Residual layer size must be at least 2"
+		@assert num_hidden > 2 "Must have at least three hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
 	end
 
-	return a[end]
+	#dropout scale factor
+	# F = (1.0f0 - D)
 
+	a = Array{Matrix{Float32}}(undef, l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(undef, m, size(Thetas[i], 1))
+	end
+
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
+
+	mapreduce(vcat, batches) do X
+		for ii = 1:l
+			for i = 1:length(biases[ii])
+				a[ii][:, i] = fill(biases[ii][i], m)
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+		if l > 1
+			tanhActivation!(a[1])
+
+			if (l-1) > 1
+				for i = 2:l-1
+					gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+					if (resLayers != 0) && ((i - 1) % resLayers) == 0
+						#calculate residual skip every resLayers layers past the first hidden layer
+						axpy!(1.0f0, a[i-resLayers], a[i])
+					end
+					tanhActivation!(a[i])
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+		end
+		return copy(a[end])
+	end
+end
+
+function predictMulti(multiParams, X, D = 0.0f0)
+#PREDICT Predict the value of an input given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(X, 1)
+	l = length(multiParams[1][1])
+	n = size(multiParams[1][1][end], 1)
+
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	a = Array{Matrix{Float32}}(undef, l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(undef, m, size(multiParams[1][1][i], 1))
+	end
+
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
+	[begin
+		Thetas = params[1]
+		biases = params[2]
+		for ii = 1:l
+			for i = 1:length(biases[ii])
+				a[ii][:, i] = fill(biases[ii][i], m)
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+		if l > 1
+			tanhActivation!(a[1])
+
+			if (l-1) > 1
+				for i = 2:l-1
+					gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+					tanhActivation!(a[i])
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+		end
+		copy(a[end])
+	end
+	for params in multiParams]
+end
+
+function predictMultiBatches(multiParams, batches, D = 0.0f0)
+#PREDICT Predict the value of an input in batches given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(batches[1], 1)
+	l = length(multiParams[1][1])
+	n = size(multiParams[1][1][end], 1)
+
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	a = Array{Matrix{Float32}}(undef, l)
+
+	for i = 1:l
+		a[i] = Array{Float32}(undef, m, size(multiParams[1][1][i], 1))
+	end
+
+	#a[1] = X * Thetas[1]' .+ biases[1]'
+	#applyBias!(a[1], X*Thetas[1]', biases[1], m, length(biases[1]))
+	[begin
+		mapreduce(vcat, batches) do X
+			Thetas = params[1]
+			biases = params[2]
+			for ii = 1:l
+				for i = 1:length(biases[ii])
+					a[ii][:, i] = fill(biases[ii][i], m)
+				end
+			end
+
+			gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+			if l > 1
+				tanhActivation!(a[1])
+
+				if (l-1) > 1
+					for i = 2:l-1
+						gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+						tanhActivation!(a[i])
+					end
+				end
+
+				gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+			end
+			return copy(a[end])
+		end
+	end
+	for params in multiParams]
 end
 
 
 
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr")
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
 
 	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert resLayers > 1 "Residual layer size must be at least 2"
+		@assert num_hidden > 2 "Must have at least three hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
 
 
 	#Setup some useful variables
@@ -249,6 +463,10 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 		if num_hidden > 1
 			for i = 2:num_hidden
 				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
 				if D == 0.0f0
 					tanhGradient!(a[i], tanh_grad_z[i])
 				else
@@ -263,41 +481,51 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#mean abs error cost function
 	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], y, m, n)
 
+	# println("deltas[end] CPU is $(deltas[end])")
+
 
 	i = num_hidden
-	if num_hidden > 0
-		while i >= 1
-			#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+	
+	while i >= 1
+		gemm!('T', 'N', 1.0f0/m, deltas[i+1], a[i], lambda/m, Theta_grads[i+1])
+		gemv!('T', 1.0f0/m, deltas[i+1], onesVec, 0.0f0, Bias_grads[i+1])
+		#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+		if (resLayers != 0) && ((i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0))
+			#replace deltas[i] with deltas[i+resLayers]
+			# scal!(length(deltas[i]), 0.0f0, deltas[i], 1)
+			# axpy!(1.0f0, deltas[i+resLayers], deltas[i]) 
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			#propagate derivative back to deltas from the original input to the residual layers
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 1.0f0, deltas[i])
+			# gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i])
+		else
 			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
-			finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
-			i = i - 1
 		end
+		finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
+		i = i - 1
 	end
+
 
 	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
-
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
-
-	if num_hidden > 0
-		for i = 2:num_hidden+1
-			gemm!('T', 'N', 1.0f0/m, deltas[i], a[i-1], lambda/m, Theta_grads[i])
-			gemv!('T', 1.0f0/m, deltas[i], onesVec, 0.0f0, Bias_grads[i]) #calculate below line in place
-			#Bias_grads[i] = (ones(Float32, 1, m)*deltas[i]/m)[:]
-		end
-	end
-
 end
 
-function nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, y, lambda, a, D = 0.0f0; costFunc = "absErr")
+function nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, y, lambda, a, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
 
 	num_hidden = length(hidden_layers)
 
+	if resLayers != 0
+		@assert resLayers > 1 "Residual layer size must be at least 2"
+		@assert num_hidden > 2 "Must have at least three hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
 
 	#Setup some useful variables
 	m = size(X, 1)
 	n = size(y, 2)
-	F = 1.0f0 - D
+	# F = 1.0f0 - D
 
 	fillAs!(a, biases, m)
 
@@ -309,13 +537,135 @@ function nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X
 
 		if num_hidden > 1
 			for i = 2:num_hidden
-				gemm!('N', 'T', F, a[i-1], Thetas[i], 1.0f0, a[i])
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && ((i - 1) % resLayers) == 0
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
 				tanhActivation!(a[i])
 			end
 		end
 
-		gemm!('N', 'T', F, a[end-1], Thetas[end], 1.0f0, a[end])
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
 	end
+
+	#mean abs error cost function
+	calcFinalOut!(costFuncs[costFunc], a[end], y, m, n)
+
+	J = calcJ(m, n, a[end], lambda, Thetas)
+
+end
+
+function nnCostFunctionRes(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers = 2)
+
+	num_hidden = length(hidden_layers)
+	@assert resLayers > 1 "Residual layer size must be at least 2"
+	@assert num_hidden > 2 "Must have at least three hidden layers"
+	@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers ($num_hidden) is not a multiple of the number of residual layers ($resLayers)"
+	H = hidden_layers[1]
+
+	@assert prod(hidden_layers .== H) "hidden layers do not share a dimension" 
+
+
+	#Setup some useful variables
+	m = size(X, 1)
+	n = size(y, 2)
+	         
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+
+	fillAs!(a, biases, m)
+
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+
+	if D == 0.0f0
+		tanhGradient!(a[1], tanh_grad_z[1])
+	else
+		tanhGradient!(a[1], tanh_grad_z[1], D)
+	end
+
+	for i = 2:num_hidden
+		gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+		if ((i - 1) % resLayers) == 0
+			#calculate residual skip every resLayers layers past the first hidden layer
+			axpy!(1.0f0, a[i-resLayers], a[i])
+		end
+		if D == 0.0f0
+			tanhGradient!(a[i], tanh_grad_z[i])
+		else
+			tanhGradient!(a[i], tanh_grad_z[i], D)
+		end
+	end	
+
+	gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+
+
+	#mean abs error cost function
+	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], y, m, n)
+
+
+	i = num_hidden
+	
+	while i >= 1
+		gemm!('T', 'N', 1.0f0/m, deltas[i+1], a[i], lambda/m, Theta_grads[i+1])
+		gemv!('T', 1.0f0/m, deltas[i+1], onesVec, 0.0f0, Bias_grads[i+1])
+		
+		#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+		if (i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0)
+			#replace deltas[i] with deltas[i+resLayers]
+			# scal!(length(deltas[i]), 0.0f0, deltas[i], 1)
+			# axpy!(1.0f0, deltas[i+resLayers], deltas[i]) 
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			#propagate derivative back to deltas from the original input to the residual layers
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 1.0f0, deltas[i])
+			# gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i])
+		else
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
+		end
+		finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
+		i = i - 1
+	end
+	
+	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
+
+end
+
+function nnCostFunctionResNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, y, lambda, a, D = 0.0f0; costFunc = "absErr", resLayers = 2)
+#creates residual layers within the existing hidden layers applying the residual addition every 2 layers by default, for convenience only valid
+#for hidden layers of the form [A, A, A, ...] where all A's are the same integer
+
+	num_hidden = length(hidden_layers)
+	@assert resLayers > 1 "Residual layer size must be at least 2"
+	@assert num_hidden > 2 "Must have at least three hidden layers"
+	@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers ($num_hidden) is not a multiple of the number of residual layers ($resLayers)"
+	H = hidden_layers[1]
+
+	@assert prod(hidden_layers .== H) "hidden layers do not share a dimension" 
+	#Setup some useful variables
+	m = size(X, 1)
+	n = size(y, 2)
+	# F = 1.0f0 - D
+
+	fillAs!(a, biases, m)
+
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	tanhActivation!(a[1])
+
+	for i = 2:num_hidden
+		gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+		if ((i - 1) % resLayers) == 0
+			#calculate residual skip every resLayers layers past the first hidden layer
+			axpy!(1.0f0, a[i-resLayers], a[i])
+		end
+		tanhActivation!(a[i])
+	end
+	
+	gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
 
 	#mean abs error cost function
 	calcFinalOut!(costFuncs[costFunc], a[end], y, m, n)

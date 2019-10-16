@@ -42,9 +42,9 @@ function checkNumGrad(lambda = 0.0f0; hidden_layers=[5, 5], costFunc = "absErr",
     eval(Symbol("checkNumGrad", backend))(lambda; hidden_layers = hidden_layers, costFunc = costFunc, input_layer_size = input_layer_size, n = n, m = m)
 end
 
-function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0)
+function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
     batchSizes = [512, 1024, 2048, 4096, 8192]
-    Ns = [32, 64, 128, 256, 512, 1024, 2048]
+    Ns = filter(a -> (a >= minN) && (a <= maxN), [32, 64, 128, 256, 512, 1024, 2048])
     (_,_,_, cpuname, gpuname) = testTrain(1, [1], 1, 1024, 1, writeFile = false)
      deviceName = if gpuname == ""
         cpuname
@@ -60,19 +60,57 @@ function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, num
     out = [begin
        (GFLOPS, parGFLOPS, t, cpuname, gpuname) = testTrain(N, [N, N], 2, B, 20; multi = multi, writeFile = false, numThreads = numThreads, costFunc = costFunc, dropout = dropout)
        # println(string("Done with neurons = ", N, " batch size = ", B))
-       [N B GFLOPS parGFLOPS] 
+       [N B GFLOPS parGFLOPS t] 
     end
     for N in Ns for B in batchSizes]
 
-    header = ["Neurons" "Batch Size" "GFLOPS"]
-    body = mapreduce(a -> a[1, [1 2 (multi ? 4 : 3)]], vcat, out)
+    header = ["Neurons" "Batch Size" "GFLOPS" "Time Per Epoch"]
+    body = mapreduce(a -> a[1, [1 2 (multi ? 4 : 3) 5]], vcat, out)
+
+    trainName = (dropout == 0) ? costFunc : string(dropout, "_dropout_", costFunc)
+    threadStr = if (getBackend() == :CPU) 
+        (numThreads == 0) ? "" : "_$(numThreads)BLASthreads"
+    else
+        ""
+    end  
+
+    multiStr = if (nprocs() > 1) && multi
+        "$(nworkers())xParallel"
+    else
+        ""
+    end
+
+    writedlm(string(deviceName, "_", trainName, "$(threadStr)_$(multiStr)trainingBenchmark.csv"), [header; body], ',')
+end
+
+function benchmarkCPUThreads(;costFunc = "absErr", dropout = 0.0f0, Ns = [16, 32, 64, 128, 256])
+    setBackend(:CPU)
+    batchSizes = 2 .^(5:12)
+    (_,_,_, cpuname, gpuname) = testTrain(1, [1], 1, 1024, 1, writeFile = false)
+     
+    dropoutStr = dropout == 0.0 ? "" : " with a dropout rate of $dropout"
+
+    println("Benchmarking device $cpuname with a cost function $costFunc $dropoutStr")
+
+    threads = round.(Int64, 2 .^(0:log2(Sys.CPU_THREADS)))
+
+    out = [begin
+       GFLOPS = map(numThreads -> testTrain(N, [N, N], 2, B, 20; writeFile = false, numThreads = numThreads, costFunc = costFunc, dropout = dropout)[1], threads)
+       # println(string("Done with neurons = ", N, " batch size = ", B))
+       [N B GFLOPS'] 
+    end
+    for N in Ns for B in batchSizes]
+
+    header = ["Neurons" "Batch Size" ["GFLOPS $a threads" for a in threads']]
+    body = reduce(vcat, out)
 
     trainName = (dropout == 0) ? costFunc : string(dropout, "_dropout_", costFunc)
 
-    writedlm(string(deviceName, "_", trainName, "_trainingBenchmark.csv"), [header; body], ',')
+
+    writedlm(string(cpuname, "_", trainName, "_BLASthreadBenchmark.csv"), [header; body], ',')
 end
         
-export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device
+export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads
 
 function __init__()
     installList = Pkg.installed()

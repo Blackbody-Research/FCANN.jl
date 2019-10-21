@@ -113,10 +113,13 @@ end
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads
 
 function __init__()
-    installList = Pkg.installed()
-    if haskey(installList, "NVIDIALibraries")
+    # installList = Pkg.installed()
+    # if haskey(installList, "NVIDIALibraries")
         try
             run(`nvcc --version`)
+
+            println("Importing appropriate cuda libraries for installed version")
+            @using_nvidialib_settings
             
             #initialize cuda driver
             cuInit(0)
@@ -152,9 +155,9 @@ function __init__()
             println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
         end
-    else
-        println("Available backends are: CPU")
-    end
+    # else
+        # println("Available backends are: CPU")
+    # end
 
     function f()
         if in(:GPU, backendList)

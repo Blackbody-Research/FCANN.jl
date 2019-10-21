@@ -1,8 +1,5 @@
 using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
-println("Importing appropriate cuda libraries for installed version")
-@using_nvidialib_settings
-
 costfunc_kernel_names = ("fill_cols", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "tanhActivation")
 
 function cu_module_load()

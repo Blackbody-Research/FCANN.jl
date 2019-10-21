@@ -42,6 +42,13 @@ matrix:
       julia: 1.0
     - os: linux
       julia: nightly
+    - os: linux
+      arch: x86
+      julia: 1.0
+    - os: linux
+      arch: arm64
+      julia: 1.0
+
   # osx builds
     - os: osx
       julia: 1.0
@@ -56,7 +63,7 @@ install:
       then
         chmod +x .travis.linux;
         ./.travis.linux; 
-        julia -e 'using Pkg; Pkg.add(PackageSpec(url = "https://github.com/Blackbody-Research/NVIDIALibraries.jl"))';
+        # julia -e 'using Pkg; Pkg.add(PackageSpec(url = "https://github.com/Blackbody-Research/NVIDIALibraries.jl"))';
       fi;
     fi
 

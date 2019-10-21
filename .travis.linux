@@ -24,7 +24,7 @@ sudo dpkg -i cuda.deb
 sudo apt-get update
 sudo apt-get install -y ${components[$CUDA]}
 export PATH=/usr/local/cuda-$CUDA/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda-$CUDA/lib64:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-$CUDA/lib64
 
 nvcc --version
 # nvidia-smi

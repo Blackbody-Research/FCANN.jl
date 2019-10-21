@@ -15,25 +15,26 @@ env:
 matrix: 
   allow_failures:
     - julia: nightly
+    - arch: x86
 
   include:
   # linux builds
-    # - env: CUDA=8.0
-    #   os: linux
-    #   dist: xenial
-    #   julia: 1
-    # - env: CUDA=9.0
-    #   os: linux
-    #   dist: xenialz
-    #   julia: 1
-    # - env: CUDA=9.1
-    #   os: linux
-    #   dist: xenial
-    #   julia: 1
-    # - env: CUDA=9.2
-    #   os: linux
-    #   dist: xenial
-    #   julia: 1
+    - env: CUDA=8.0
+      os: linux
+      dist: xenial
+      julia: 1
+    - env: CUDA=9.0
+      os: linux
+      dist: xenialz
+      julia: 1
+    - env: CUDA=9.1
+      os: linux
+      dist: xenial
+      julia: 1
+    - env: CUDA=9.2
+      os: linux
+      dist: xenial
+      julia: 1
     - env: CUDA=10.0
       os: linux
       dist: xenial

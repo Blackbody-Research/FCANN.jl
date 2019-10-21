@@ -16,7 +16,16 @@ global backendList = [:CPU]
 #get cuda toolkit versions if any
 println("Checking for cuda toolkit versions")
 cuda_versions = try
-    get_cuda_toolkit_versions()
+    filter(v -> v <= VersionNumber(10), if Sys.islinux()
+        map(VersionNumber,
+            map((function(name::String)
+                return name[6:end]
+            end), 
+                collect(i for i in readdir("/usr/local/")
+                    if occursin("cuda-", i))))
+    else
+        get_cuda_toolkit_versions()
+    end)
 catch
     []
 end

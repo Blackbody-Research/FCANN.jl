@@ -135,7 +135,7 @@ function __init__()
         println("Available backends are: CPU")
     else
         println("CUDA version $(cuda_versions[end]) installed, attempting to load GPU backend functions")
-        println("Using the following cuda settings: $(get_nvlib_settings()) saved to $(joinpath(pwd(), "nvlib_julia.conf")).")
+        println("Using the following cuda settings: $(NVIDIALibraries.get_nvlib_settings()) saved to $(joinpath(pwd(), "nvlib_julia.conf")).")
         if length(cuda_versions) > 1
             println("Using the latest available version of the cuda toolkit installed by default.  To switch to an earlier cuda version, edit config file above with one of the installed versions: $(cuda_versions)")
         end 

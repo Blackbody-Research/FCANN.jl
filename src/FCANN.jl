@@ -7,11 +7,19 @@ using LinearAlgebra
 using Printf
 using Random
 using Pkg
+using NVIDIALibraries
 
 #set default backend to CPU
 global backend = :CPU
 global backendList = [:CPU]
 
+#get cuda toolkit versions if any
+println("Checking for cuda toolkit versions")
+cuda_versions = try
+    get_cuda_toolkit_versions()
+catch
+    []
+end
 
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
 
@@ -113,15 +121,24 @@ end
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads
 
 function __init__()
-    # installList = Pkg.installed()
-    # if haskey(installList, "NVIDIALibraries")
-        try
-            run(`nvcc --version`)
+    if isempty(cuda_versions)
+        println("No cuda toolkit appears to be installed.  If this sytem has an NVIDIA GPU, install the cuda toolkit and add nvcc to the system path to use the GPU backend.")
+        println("Available backends are: CPU")
+    else
+        println("CUDA version $(v[end]) installed, attempting to load GPU backend functions")
+        println("Using the following cuda settings: $(get_nvlib_settings()) saved to $(joinpath(pwd(), "nvlib_julia.conf")).")
+        if length(cuda_versions) > 1
+            println("Using the latest available version of the cuda toolkit installed by default.  To switch to an earlier cuda version, edit config file above with one of the installed versions: $(cuda_versions)")
+        end 
+        
+        try 
+            
 
-            println("Importing appropriate cuda libraries for installed version")
-            @using_nvidialib_settings
+            println("Checking nvcc compiler in system path")
+            run(`nvcc --version`)
             
             #initialize cuda driver
+            println("Attempting to initialize cuda device")
             cuInit(0)
 
             #get device list and set default device to 0
@@ -148,6 +165,9 @@ function __init__()
             #make error kernels available in global scope
             create_errorfunction_dicts(costfunc_md) 
 
+            #verify that cost function works
+            checkNumGradGPU()
+
             println("Available backends are: CPU, GPU")
             #add GPU to backendList after successful initialization
             push!(backendList, :GPU)
@@ -155,8 +175,12 @@ function __init__()
             println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
         end
+    end
+
     # else
-        # println("Available backends are: CPU")
+    #     println("NVIDIALibraries is not currently installed so cuda functions will not be initialized")
+    #     println("If you have an Nvidia GPU, install the Cuda Toolkit and the NVIDIALibraries package from https://github.com/Blackbody-Research/NVIDIALibraries.jl to have the GPU backend available")
+    #     println("Available backends are: CPU")
     # end
 
     function f()

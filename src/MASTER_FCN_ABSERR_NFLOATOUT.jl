@@ -1827,7 +1827,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 
     println("saving results to file")
 	writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
-
+	return fullMultiPerformance
 end
 
 function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)
@@ -2061,6 +2061,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 		
 	println("saving results to file")	
 	writedlm(string("fullMultiPerformance_", filename, ".csv"), [header; fullMultiPerformance])		
+	return fullMultiPerformance
 end
 
 function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0)
@@ -2239,6 +2240,7 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	else
 		writedlm(string("evalLayers_", filename), [header; body])
 	end
+	return body
 end
 
 #train a network with a variable number of layers for a given target number
@@ -2332,6 +2334,7 @@ function smartEvalLayers(name, (X, Y, Xtest, Ytest), N, batchSize, Plist; tau = 
 	else
 		writedlm(string("evalLayers_", filename), [header; body], ',')
 	end
+	return body
 end
 
 function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0.01f0, c0 = 1.0f0, num = 16, dropout = 0.0f0, printProg = false, costFunc="absErr", binInput = false)
@@ -2539,4 +2542,5 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 	else
 		writedlm(string("multiMaxNormAutoReg_", filename, ".csv"), [header; body])		
 	end
+	return body
 end

@@ -85,7 +85,8 @@ script:
 
 after_success:
   - julia -e 'using Pkg;
-              cd(Pkg.dir("FCANN"));
+              import FCANN;
+              cd(joinpath(dirname(pathof(FCANN)), ".."));
               Pkg.add("Coverage");
               include("process_src_coverage.jl");
               Codecov.submit(process_folder2());

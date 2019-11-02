@@ -175,7 +175,7 @@ function __init__()
             create_errorfunction_dicts(costfunc_md) 
 
             #verify that cost function works
-            checkNumGradGPU()
+            checkNumGradGPU(1.0f0)
 
             println("Available backends are: CPU, GPU")
             #add GPU to backendList after successful initialization

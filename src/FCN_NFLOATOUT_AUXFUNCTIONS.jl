@@ -226,7 +226,7 @@ function readBinArray(filename::String)
 	#get length of params array
 	N = read(f, Int64)
 	M = read(f, Int64)
-	println(string("Got the following array dimensions: ", N, " rows ", M, " columns"))
+	# println(string("Got the following array dimensions: ", N, " rows ", M, " columns"))
 	out =read!(f, Array{Float32}(undef, N, M)) #read(f, Float32, N, M)
 end
 

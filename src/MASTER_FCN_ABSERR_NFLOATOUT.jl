@@ -3,10 +3,10 @@
 #is also part of the ADAMAX algorithm
 using Distributed
 
-include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
+@everywhere include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
 
 if !isempty(cuda_versions)
-	include(joinpath("cuda", "ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl"))
+	@everywhere include(joinpath("cuda", "ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl"))
 end
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash

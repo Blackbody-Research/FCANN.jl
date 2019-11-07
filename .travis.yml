@@ -16,6 +16,7 @@ matrix:
   allow_failures:
     - julia: nightly
     - arch: x86
+    - arch: arm64
 
   include:
   # linux builds

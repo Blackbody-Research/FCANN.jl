@@ -439,12 +439,13 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 		error("parameters incompatible with output data for sq/absErr cost function")
 	end
 
-
-	println()
-	printstyled(color = :green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
-	println()
-	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
-	println("-------------------------------------------------------------------")
+	if printAnything
+		println()
+		printstyled(color = :green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+		println("-------------------------------------------------------------------")
+	end
 	
 	#total number of examples in dataset
 	if batchSize > m
@@ -519,8 +520,10 @@ function ADAMAXTrainNNGPU(input_data, output_data, batchSize, T0, B0, numEpochs,
 
 	currentOut = calcout_batches(d_Thetas, d_Biases)
 	
-	printstyled(stdout, string("Initial cost is ", currentOut), color = :red, bold=true)
-	println()
+	if printAnything
+		printstyled(stdout, string("Initial cost is ", currentOut), color = :red, bold=true)
+		println
+	end
 	#println(string("Initial cost is ", currentOut))
 
 	#step rate and decay term for rms prop
@@ -664,11 +667,13 @@ function ADAMAXTrainNNGPU(input_data, output_data, input_test, output_test, batc
 	end
 
 
-	println()
-	printstyled(color = :green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
-	println()
-	println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
-	println("-------------------------------------------------------------------")
+	if printAnything
+		println()
+		printstyled(color = :green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
+		println()
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+		println("-------------------------------------------------------------------")
+	end
 	
 	#total number of examples in dataset
 	if batchSize > m
@@ -750,8 +755,10 @@ function ADAMAXTrainNNGPU(input_data, output_data, input_test, output_test, batc
 	currentOut = calcout_batches(d_Thetas, d_Biases)
 	testout = calcout_test(d_Thetas, d_Biases)
 	
-	printstyled(stdout, string("Initial cost is ", currentOut), color = :red, bold=true)
-	println()
+	if printAnything
+		printstyled(stdout, string("Initial cost is ", currentOut), color = :red, bold=true)
+		println
+	end
 	#println(string("Initial cost is ", currentOut))
 
 	#step rate and decay term for rms prop

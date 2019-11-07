@@ -3,10 +3,10 @@
 #is also part of the ADAMAX algorithm
 using Distributed
 
-@everywhere include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
+include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
 
 if !isempty(cuda_versions)
-	@everywhere include(joinpath("cuda", "ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl"))
+	include(joinpath("cuda", "ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl"))
 end
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash
@@ -15,8 +15,8 @@ function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "
 	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 end
 
-function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr")
-	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc)
+function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0)
+	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc, resLayers=resLayers)
 end
 
 #form file suffix string based on training parameters, ignore those that do not impact training
@@ -1649,7 +1649,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	(record, T, B, Jtrain, outTrain, bestCost)
 end
 
-function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false)
+function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false, writefiles = true)
 	println("reading and converting training data")
 	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
@@ -1721,7 +1721,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	end
 	GC.gc()
 	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
-	writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
+	writefiles && writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
 	
 	println("Calculating training set outputs")
 	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
@@ -1736,8 +1736,8 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	end
 	
 	println("Writing prediction scatters to file")
-	writedlm(string(ID, "_multiPredScatTrain_", filename, ".csv"), [header; [Y outTrain errEstTrain]])
-	writedlm(string(ID, "_multiPredScatTest_", filename, ".csv"), [header; [Ytest outTest errEstTest]])
+	writefiles && writedlm(string(ID, "_multiPredScatTrain_", filename, ".csv"), [header; [Y outTrain errEstTrain]])
+	writefiles && writedlm(string(ID, "_multiPredScatTest_", filename, ".csv"), [header; [Ytest outTest errEstTest]])
 
 	header = if costFunc2 == costFunc
 		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est"]
@@ -1826,8 +1826,188 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 
 
     println("saving results to file")
-	writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
-	return fullMultiPerformance
+	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
+	return (fullMultiPerformance, bootstrapOut)
+end
+
+function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false) where U <: Matrix{Float32}
+
+	X, Xtest = if isempty(sampleCols)
+		(Xraw, Xtestraw)
+	else
+		(Xraw[:, sampleCols], Xtestraw[:, sampleCols])
+	end
+
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " " => "")
+	else
+		replace(string(sampleCols, "_"), " " => "")
+	end
+
+	(N, M) = size(X)
+	O = size(Y, 2)
+
+	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	swastr = swa ? "SWA" : ""
+	
+	h_name = if isempty(hidden)
+		0
+	elseif hidden == hidden[1]*ones(Int64, length(hidden))
+		string(hidden[1], "X", length(hidden))
+	else
+		string(hidden)
+	end
+
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, digits = 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX$(swastr)_", costFunc)
+
+	bootstrapOut = pmap(1:num) do foo
+		#BLAS.set_num_threads(Sys.CPU_THREADS)
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
+		else
+			BLAS.set_num_threads(0)
+		end
+
+		if ID == 1
+            Random.seed!(1234 + foo - 1)
+        else
+            Random.seed!(ID)
+            Random.seed!(1234+rand(UInt32)+foo)
+        end
+  
+		T0, B0 = if occursin("Log", costFunc)
+			initializeparams_saxe(M, hidden, 2*O, reslayers)
+		else
+			initializeparams_saxe(M, hidden, O, reslayers)
+		end		
+		if ID == 1
+            Random.seed!(1234 + foo - 1)
+        else
+               Random.seed!(ID)
+            Random.seed!(1234+rand(UInt32)+foo)
+        end	
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch) = eval(Symbol("ADAMAX$(swastr)TrainNN", backend))(X, Y, Xtest, Ytest, batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
+		(T, B)
+	end
+	GC.gc()
+	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
+	writefiles && writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
+	
+	printanything && println("Calculating training set outputs")
+	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+    GC.gc()
+    printanything && println("Calculating test set outputs")
+    (bootstrapOutTest, outTest, errTest, errEstTest) = calcMultiOut(Xtest, Ytest, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers) #pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+	
+	header = if occursin("Log", costFunc)
+		[reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]
+	else
+		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
+	end
+	
+	printanything && println("Writing prediction scatters to file")
+	writefiles && writedlm(string(ID, "_multiPredScatTrain_", filename, ".csv"), [header; [Y outTrain errEstTrain]])
+	writefiles && writedlm(string(ID, "_multiPredScatTest_", filename, ".csv"), [header; [Ytest outTest errEstTest]])
+
+	header = if costFunc2 == costFunc
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est"]
+	else
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Test ", costFunc, " Error") "Test Error Est" string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
+	end
+
+	printanything && println("Calculating performance vs number of networks")
+	d_y = if backend == :GPU
+		cuda_allocate(Y)
+	else
+		[]
+	end
+
+	d_ytest = if backend == :GPU
+		cuda_allocate(Ytest)
+	else
+		[]
+	end
+    	
+	bootstrapOutTrain2 = if occursin("Log", costFunc)
+		println("Calculating training non inverted ranges")
+		[[a[:, 1:O] exp.(-a[:, O+1:2*O])] for a in bootstrapOutTrain]
+	else
+		[]
+	end
+
+	bootstrapOutTest2 = if occursin("Log", costFunc)
+		println("Calculating test non inverted ranges")
+		[[a[:, 1:O] exp.(-a[:, O+1:2*O])] for a in bootstrapOutTest]
+	else
+		[]
+	end
+
+    fullMultiPerformance = mapreduce(vcat, 1:length(bootstrapOutTrain)) do i
+        #calculate average network output     
+        line = if occursin("Log", costFunc)
+            # combinedOutputTrainPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTrain[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTrain2[1:i]]))]  
+            combinedOutputTrainPre = [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain[1:i])/i sqrt.(mapreduce(a -> a[:, O+1:2*O].^2, +, bootstrapOutTrain2[1:i])/i)]
+            combinedOutputTrain = [combinedOutputTrainPre[:, 1:O] log.(1 ./combinedOutputTrainPre[:, O+1:2*O])]
+            # errorEstTrain = mean(reduce(+, [abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]) for a in bootstrapOutTrain2])/i)
+
+            errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
+      
+            Jtrain = if backend == :GPU
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+		
+			# combinedOutputTestPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTest[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTest2[1:i]]))] 
+            combinedOutputTestPre = [mapreduce(a -> a[:, 1:O], +, bootstrapOutTest[1:i])/i sqrt.(mapreduce(a -> a[:, O+1:2*O].^2, +, bootstrapOutTest2[1:i])/i)]
+            combinedOutputTest = [combinedOutputTestPre[:, 1:O] log.(1 ./combinedOutputTestPre[:, O+1:2*O])]
+            # errorEstTest = mean(reduce(+, [abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]) for a in bootstrapOutTest2])/i)
+            errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
+            
+            Jtest= if backend == :GPU
+            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
+            end
+
+            [i Jtrain[1] errorEstTrain Jtest[1] errorEstTest Jtrain[2] Jtest[2]]
+        else
+            combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
+            errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
+            Jtrain = if backend == :GPU
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+
+			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
+            errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
+            Jtest= if backend == :GPU
+            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
+            end
+
+            [i Jtrain errorEstTrain Jtest errorEstTest]
+        end
+        printanything && println(string("Done with networks 1 to ", i, " out of ", length(bootstrapOutTrain)))
+        line
+    end 
+    testerrs = fullMultiPerformance[:, 4]
+    (besterr, bestind) = findmin(testerrs)
+    println("Completed training networks with parameters: $numEpochs epochs, $(length(hidden)) layers of size $(isempty(hidden) ? 0 : hidden[1]), $c maxnorm, $R decay rate, $alpha alpha, $dropout dropout, and $reslayers reslayer size")
+    println("Best test error is $besterr using $bestind networks")
+
+    printanything && println("saving results to file")
+	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
+	return (fullMultiPerformance, bootstrapOut)
 end
 
 function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)

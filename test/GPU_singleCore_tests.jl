@@ -25,6 +25,12 @@ else
     println("TEST PASSED")
     println()
 
+    println("Lambda = 1.0, resLayers = 1")
+    err = checkNumGrad(1.0f0, resLayers=1)
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
     println("Squared Error Cost Function")
     err = checkNumGrad(costFunc = "sqErr")
     @test(err < 0.015)
@@ -86,6 +92,7 @@ else
     rm(string("1_params_", filename, ".bin"))
 
     println("Testing multiTrain")
+    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
     multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1)
     multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2)
     multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, costFunc = "normLogErr")

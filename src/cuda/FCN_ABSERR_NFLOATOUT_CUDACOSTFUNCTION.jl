@@ -146,10 +146,37 @@ function host_allocate(device_array::Vector{CUDAArray})
 	return host_array
 end
 
-function forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+function cublasSaxpy(handle::cublasHandle_t, alpha::Float32, x::CUDAArray, y::CUDAArray)::Nothing
+    @assert ((x.element_type == Float32) &&
+            (y.element_type == Float32))
+   
+    local m::Cint = x.size[1]
+    local n::Cint = x.size[2]
+    local num = Cint(m*n)
+
+    # get increments for x and y
+    local incx::Cint = 1
+    local incy::Cint = 1
+
+    # check if dimensions are wrong
+    if (n != y.size[2]) || (m != y.size[1])
+    	throw(DimentionMismatch("The dimensions of x, $((m, n)) does nto equal the dimensions of y $((y.size[1], y.size[2]))"))
+    end
+    tmp = [alpha]
+    local result::cublasStatus_t = cublasSaxpy_v2(handle, num, pointer(tmp), Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy)
+    @assert (result == cudaSuccess) ("cublasSgemv() error: " * cublasGetErrorName(result))
+end
+
+function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64=0)
 #modifies d_a with forward activations
 	num_hidden = length(hidden_layers)
 	m = d_X.size[1]
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
 
 	if num_hidden > 0
 		for i = 1:num_hidden
@@ -168,6 +195,10 @@ function forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
 		if num_hidden > 1
 			for i = 2:num_hidden
 				cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])	
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
 				run_kernel(tanhActivation, m, hidden_layers[i], d_a[i])	
 			end
 		end
@@ -176,7 +207,7 @@ function forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
 	cuCtxSynchronize()
 end
 
-function nnCostFunctionNOGRAD(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
 
 	@assert d_a[end].size[1] == d_y.size[1]
 
@@ -189,7 +220,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAAr
 	#define size of output data separately from output layer
 	n = d_y.size[2]
 	
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 	#launch across output data size rather than output layer size
 	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_y)
 	cuCtxSynchronize()
@@ -219,12 +250,12 @@ function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, h
 
 	d_a = form_activations(d_Thetas, m)
 	
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 
 	return (d_a[end], host_allocate(d_a[end]))
 end
 
-function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0, resLayers::Int64 = 0)
+function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -239,13 +270,13 @@ function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_la
 	out = mapreduce(vcat, batches) do X
 		d_X = cuda_allocate(collect(X))
 
-		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 		return host_allocate(d_a[end])
 	end
 	(cuda_allocate(out), out)
 end
 
-function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -262,13 +293,13 @@ function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hid
 		d_Thetas = params[1]
 		d_biases = params[2]
 
-		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 		host_allocate(d_a[end])
 	end
 	for params in multiParams]
 end
 
-function predictMultiBatches(multiParams, batches, input_layer_size, output_layer_size, hidden_layers, D = 0.0f0)
+function predictMultiBatches(multiParams, batches, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64=0)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -282,7 +313,7 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 		[begin
 			d_Thetas = params[1]
 			d_biases = params[2]
-			forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X)
+			forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 			host_allocate(d_a[end])
 		end
 		for params in multiParams]
@@ -290,9 +321,15 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
 end
 
-function nnCostFunction(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_biases::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::NVIDIALibraries.DeviceArray.CUDAArray, d_a::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_tanh_grad_z::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_deltas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_Theta_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_bias_grads::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1}, d_X::NVIDIALibraries.DeviceArray.CUDAArray, d_y::NVIDIALibraries.DeviceArray.CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
 
 	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
 
 	# kernelTests()
 
@@ -331,6 +368,10 @@ function nnCostFunction(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1
 		if num_hidden > 1
 			for i = 2:num_hidden
 				cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
 				if D == 0.0f0
 					run_kernel(tanhGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
 				else
@@ -347,19 +388,21 @@ function nnCostFunction(d_Thetas::Array{NVIDIALibraries.DeviceArray.CUDAArray, 1
 
 	i = num_hidden
 	while i >= 1
-		cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) 
+		cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[i+1], d_ones, 0.0f0, d_bias_grads[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden-resLayers)) && (((i+resLayers-1)%resLayers)==0))
+			#replace d_deltas[i] with d_deltas[i+resLayers]
+			memcpy!(d_deltas[i], d_deltas[i+resLayers])
+			cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+		else
+			cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) 
+		end
+
 		run_kernel(elMul, m, hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
 		i = i - 1
 	end
 
 	cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
 	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
-
-	if num_hidden > 0
-		for i = 2:num_hidden+1
-			cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[i], d_a[i-1], lambda/m, d_Theta_grads[i])
-			cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[i], d_ones, 0.0f0, d_bias_grads[i])
-		end
-	end
 	cuCtxSynchronize()
 end

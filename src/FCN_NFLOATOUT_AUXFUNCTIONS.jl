@@ -43,25 +43,59 @@ end
 return map(Float32, nn_params)
 end
 
-function initializeParams(input_layer_size, hidden_layers, output_layer_size)
+function makeorthonormalrand(n::Integer, m::Integer)
+	if min(n, m) == 1
+		randn(n, m)
+	else
+		Q = rand(Haar(1), max(n, m))
+		Q = Q[1:n, 1:m]
+		Q .* sqrt(max(n, m)) #rescale to 1 variance because var(Q)=1/max(n, m)
+	end
+end
+
+function initializeParams(input_layer_size, hidden_layers, output_layer_size, reslayers=0)
 	num_hidden = length(hidden_layers)
+	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1)
 	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
 	Biases = Array{Vector{Float32}}(undef, num_hidden+1)
 	if num_hidden > 0
-		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) * input_layer_size^(-.5f0))
-		Biases[1] = map(Float32, randn(hidden_layers[1]) * input_layer_size^(-.5f0))
+		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) .* (scale*input_layer_size)^(-.5f0))
+		Biases[1] = map(Float32, randn(hidden_layers[1]) .* (scale*input_layer_size)^(-.5f0))
 		
 		if num_hidden > 1
-			for i = 2:num_hidden
-				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) * hidden_layers[i-1]^(-.5f0))
-				Biases[i] = map(Float32, randn(hidden_layers[i]) * hidden_layers[i-1]^(-.5f0))
+			for i in 2:num_hidden
+				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) .* (scale*hidden_layers[i-1])^(-.5f0))
+				Biases[i] = map(Float32, randn(hidden_layers[i]) .* (scale*hidden_layers[i-1])^(-.5f0))
 			end
 		end
-		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) * hidden_layers[num_hidden]^(-.5f0))
-		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) * hidden_layers[num_hidden]^(-.5f0))
+		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) .* (scale*hidden_layers[num_hidden])^(-.5f0))
+		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) .* (scale*hidden_layers[num_hidden])^(-.5f0))
 	else
 		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^(-.5f0)
 		Biases[1] = randn(Float32, output_layer_size)*input_layer_size^(-0.5f0)
+	end
+	return Thetas, Biases
+end
+
+function initializeparams_saxe(input_layer_size, hidden_layers, output_layer_size, reslayers=0)
+	num_hidden = length(hidden_layers)
+	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1) + 1
+	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
+	Biases = Array{Vector{Float32}}(undef, num_hidden+1)
+	if num_hidden > 0
+		Thetas[1] = map(Float32, makeorthonormalrand(hidden_layers[1], input_layer_size) .* (scale*input_layer_size)^(-.5f0))
+		Biases[1] = zeros(Float32, hidden_layers[1])
+			if num_hidden > 1
+				for i in 2:num_hidden
+					Thetas[i] = map(Float32, makeorthonormalrand(hidden_layers[i], hidden_layers[i-1]) .* (scale*hidden_layers[i-1])^(-.5f0))
+					Biases[i] = zeros(Float32, hidden_layers[i])
+				end
+			end
+		Thetas[num_hidden+1] = map(Float32, makeorthonormalrand(output_layer_size, hidden_layers[num_hidden]) .* (scale*hidden_layers[num_hidden])^(-.5f0))
+		Biases[num_hidden+1] = zeros(Float32, output_layer_size)
+	else
+		Thetas[1] = Float32.(makeorthonormalrand(output_layer_size, input_layer_size)*input_layer_size^(-.5f0))
+		Biases[1] = zeros(Float32, output_layer_size)
 	end
 	return Thetas, Biases
 end

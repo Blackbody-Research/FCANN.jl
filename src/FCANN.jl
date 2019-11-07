@@ -8,6 +8,7 @@ using Printf
 using Random
 using Pkg
 using NVIDIALibraries
+using RandomMatrices
 
 #set default backend to CPU
 global backend = :CPU
@@ -55,8 +56,8 @@ function getBackend()
     backend
 end
 
-function checkNumGrad(lambda = 0.0f0; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100) 
-    eval(Symbol("checkNumGrad", backend))(lambda; hidden_layers = hidden_layers, costFunc = costFunc, input_layer_size = input_layer_size, n = n, m = m)
+function checkNumGrad(lambda = 0.0f0; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0) 
+    eval(Symbol("checkNumGrad", backend))(lambda; hidden_layers = hidden_layers, costFunc = costFunc, input_layer_size = input_layer_size, n = n, m = m, resLayers=resLayers)
 end
 
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
@@ -127,7 +128,7 @@ function benchmarkCPUThreads(;costFunc = "absErr", dropout = 0.0f0, Ns = [16, 32
     writedlm(string(cpuname, "_", trainName, "_BLASthreadBenchmark.csv"), [header; body], ',')
 end
         
-export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads
+export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput
 
 function __init__()
     if isempty(cuda_versions)

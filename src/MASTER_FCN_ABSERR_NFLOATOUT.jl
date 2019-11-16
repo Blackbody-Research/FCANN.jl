@@ -514,11 +514,11 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 end
 
 
-function autoTuneParams(X, Y, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0, costFunc = "absErr", resLayers = resLayers)
-	M = size(X, 2)
-	O = size(Y, 2)
+function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0, costFunc = "absErr", resLayers = resLayers, printProg=false, printanything=false)
+	M = size(inputs[1], 2)
+	O = size(inputs[2], 2)
 
-	trainFunc(N, a, r) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = a, R = r, costFunc = costFunc, resLayers = resLayers)
+	trainFunc(N, a, r) = eval(Symbol("ADAMAXTrainNN", backend))(inputs..., batchSize, T0, B0, N, M, hidden, lambda, c, alpha = a, R = r, costFunc = costFunc, resLayers = resLayers, printProgress=printProg, printAnything=printanything)
 
 	Random.seed!(1234)
 	# c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, 1, M, hidden, lambda, c, alpha = 0.0f0, costFunc = costFunc)[3]
@@ -2244,11 +2244,16 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 	return fullMultiPerformance
 end
 
-function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0)
+function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false)
 	#generate training set with m examples
 	m = 102400
 	X = randn(Float32, m, M)
-	Y = randn(Float32, m, O)
+	params1 = randn(Float32, M, O)
+	params2 = randn(Float32, M, O)
+	Y = (X*params1) .+ (X*params2) .^2 .+ randn(Float32, m, O)
+
+	Xtest = randn(Float32, 1024, M)
+	ytest = (Xtest*params1) .+ (Xtest*params2) .^2
 
 	#if multi is true, run training tasks across workers
 	num = if multi & (backend == :CPU)
@@ -2256,6 +2261,8 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	else
 		1
 	end
+
+	swastr = swa ? "SWA" : ""
 
 	numBatches = ceil(Int, m/batchSize)
 	
@@ -2270,7 +2277,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end	
 	out = pmap(1:num) do _
 		BLAS.set_num_threads(numThreads)
-		eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout)
+		eval(Symbol("ADAMAX$(swastr)TrainNN", backend))(X, Y, Xtest, ytest, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers)
 	end
 	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]
@@ -2319,7 +2326,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 		writedlm(filename, [header; [1:N timeRecord[2:end] GFLOPS_per_epoch num*GFLOPS_per_epoch]])
 	end
 	
-	return (median(GFLOPS_per_epoch), median(GFLOPS_per_epoch*num), median(time_per_epoch), replace(cpu_name, ' ' => '_'), replace(gpu_name, ' ' => '_'))
+	return (median(GFLOPS_per_epoch), median(GFLOPS_per_epoch*num), median(time_per_epoch), replace(cpu_name, ' ' => '_'), replace(gpu_name, ' ' => '_'), out)
 end
 
 #train a network with a variable number of layers for a given target number
@@ -2393,7 +2400,7 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 
 		println("beginning training")
 		Random.seed!(1234)
-		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(X, Y, batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams((X, Y), batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()
@@ -2487,7 +2494,7 @@ function smartEvalLayers(name, (X, Y, Xtest, Ytest), N, batchSize, Plist; tau = 
 
 		println("beginning training")
 		Random.seed!(1234)
-		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(X, Y, batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams((X, Y), batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()

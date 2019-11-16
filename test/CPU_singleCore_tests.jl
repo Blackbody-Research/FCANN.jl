@@ -58,7 +58,7 @@ println()
 #full train test with data read and output
 function writeTestData(name, M, O)
     for p1 = ("X", "y"), p2 = ("train", "test")
-        l = (p2 == "train") ? 100000 : 10000
+        l = (p2 == "train") ? 10000 : 1000
         N = (p1 == "X") ? M : O
         writedlm(string(p1, p2, "_", name, ".csv"), rand(Float32, l, N))
     end
@@ -66,7 +66,7 @@ end
 
 function writeBinData(name, M, O)
     for p1 = ("X", "y"), p2 = ("train", "test")
-        l = (p2 == "train") ? 100000 : 10000
+        l = (p2 == "train") ? 10000 : 1000
         N = (p1 == "X") ? M : O
         writeArray(rand(Float32, l, N), string(p1, p2, "_", name, ".bin"))
     end
@@ -108,7 +108,7 @@ println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers and 1 residual layer")
-record, T, B = fullTrain(name, 10, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, resLayers=1)
+record, T, B = fullTrain(name, 10, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, resLayers=1, writeFiles=false)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()

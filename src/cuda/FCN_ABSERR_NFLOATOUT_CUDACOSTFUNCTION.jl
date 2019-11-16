@@ -94,6 +94,7 @@ function run_kernel(kernel::CUfunction, N::Int64, M::Int64, inputs...; stream = 
 	threads = Cuint.((K, K))
 	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
     cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs..., stream = stream)
+    cuCtxSynchronize()
 end
 
 function kernelTests()
@@ -149,9 +150,20 @@ end
 function cublasSaxpy(handle::cublasHandle_t, alpha::Float32, x::CUDAArray, y::CUDAArray)::Nothing
     @assert ((x.element_type == Float32) &&
             (y.element_type == Float32))
-   
+   	
+   	dims = length(x.size)
     local m::Cint = x.size[1]
-    local n::Cint = x.size[2]
+
+    local n::Cint
+
+    if dims > 1
+    	n = x.size[2]
+    	n2 = y.size[2]
+    else
+    	n = 1
+    	n2 = 1
+    end
+
     local num = Cint(m*n)
 
     # get increments for x and y
@@ -159,12 +171,30 @@ function cublasSaxpy(handle::cublasHandle_t, alpha::Float32, x::CUDAArray, y::CU
     local incy::Cint = 1
 
     # check if dimensions are wrong
-    if (n != y.size[2]) || (m != y.size[1])
-    	throw(DimentionMismatch("The dimensions of x, $((m, n)) does nto equal the dimensions of y $((y.size[1], y.size[2]))"))
+    if (n != n2) || (m != y.size[1])
+    	throw(DimentionMismatch("The dimensions of x, $((m, n)) does nto equal the dimensions of y $((y.size[1], n2))"))
     end
     tmp = [alpha]
     local result::cublasStatus_t = cublasSaxpy_v2(handle, num, pointer(tmp), Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy)
-    @assert (result == cudaSuccess) ("cublasSgemv() error: " * cublasGetErrorName(result))
+    @assert (result == cudaSuccess) ("cublasSaxpy() error: " * cublasGetErrorName(result))
+end
+
+function cublasSscal(handle::cublasHandle_t, alpha::Float32, x::CUDAArray)::Nothing
+    @assert (x.element_type == Float32)
+    
+    dims = length(x.size)
+    local m::Cint = x.size[1]
+    local n::Cint
+    n = (dims > 1) ? x.size[2] : 1
+
+    local num = Cint(m*n)
+
+    # get increments for x and y
+    local incx::Cint = 1
+
+    tmp = [alpha]
+    local result::cublasStatus_t = cublasSscal_v2(handle, num, pointer(tmp), Ptr{Float32}(x.ptr), incx)
+    @assert (result == cudaSuccess) ("cublasSscal() error: " * cublasGetErrorName(result))
 end
 
 function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64=0)

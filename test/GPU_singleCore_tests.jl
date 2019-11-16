@@ -53,8 +53,8 @@ else
     #basic test train with 1 input, 1 output, 1 neuron
     println("Testing simple ANN training version 1")
     println("-------------------------------------")
-    M = 100
-    hidden = [100, 100]
+    M = 10
+    hidden = [10, 10]
     O = 2
     batchSize = 1024
     N = 150
@@ -92,11 +92,12 @@ else
     rm(string("1_params_", filename, ".bin"))
 
     println("Testing multiTrain")
-    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
-    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1)
-    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2)
-    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, costFunc = "normLogErr")
-    multiTrain(name, 200, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2, costFunc = "normLogErr")
+    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
+    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
+    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1)
+    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2)
+    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, costFunc = "normLogErr")
+    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2, costFunc = "normLogErr")
     println("TEST PASSED")
     println()
 

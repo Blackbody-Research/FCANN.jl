@@ -314,7 +314,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 end
 
 
-function updateM!(beta1, mT, mB, TG, BG)
+function updateM_old!(beta1, mT, mB, TG, BG)
 	b2 = 1.0f0 - beta1
 	for i = 1:length(TG)
 		@simd for ii = 1:length(TG[i])
@@ -324,6 +324,14 @@ function updateM!(beta1, mT, mB, TG, BG)
 		@simd for ii = 1:length(BG[i])
 			@inbounds mB[i][ii] = beta1*mB[i][ii] + b2*BG[i][ii]
 		end
+	end
+end
+
+function updateM!(beta1, mT, mB, TG, BG)
+	b2 = 1.0f0 - beta1
+	for i in eachindex(TG)
+		axpby!(b2, TG[i], beta1, mT[i])
+		axpby!(b2, BG[i], beta1, mB[i])
 	end
 end
 
@@ -350,7 +358,7 @@ function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t)
 	end
 end
 
-function updateParams!(alpha, T, B, TG, BG)
+function updateParams_old!(alpha, T, B, TG, BG)
 	for i = 1:length(T)
 		@simd for ii = 1:length(T[i])
 			@inbounds T[i][ii] = T[i][ii] - alpha*TG[i][ii]
@@ -361,7 +369,14 @@ function updateParams!(alpha, T, B, TG, BG)
 	end
 end
 
-function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
+function updateParams!(alpha, T, B, TG, BG)
+	for i in eachindex(T)
+		axpy!(-alpha, TG[i], T[i])
+		axpy!(-alpha, BG[i], B[i])
+	end
+end
+
+function updateEst_old!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
 	for i = 1:length(T)
 		(N, M) = size(T[i])
 		scale = 1.0f0/(1.0f0 - beta2^t)
@@ -378,16 +393,23 @@ function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
 	end
 end
 
-function updateAvg!(nModels, T, B, T_avg, B_avg)
-	F = 1/(nModels+1)
+function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
+	scale = 1.0f0/(1.0f0 - beta2^t)
+	b2 = 1.0f0 - beta2
 	for i = 1:length(T)
-		(N, M) = size(T[i])
-		@simd for ii = 1:length(T[i])
-			@inbounds T_avg[i][ii] = F*(nModels*T_avg[i][ii] + T[i][ii])
-		end
-		@simd for ii = 1:length(B[i])
-			@inbounds B_avg[i][ii] = F*(nModels*B_avg[i][ii] + B[i][ii])
-		end
+		axpby!(b2, T[i], beta2, T_avg[i])
+		T_est[i] .= scale .* T_avg[i] 
+		axpby!(b2, B[i], beta2, B_avg[i])
+		B_est[i] .= scale .* B_avg[i] 
+	end
+end
+
+function updateAvg!(nModels, T, B, T_avg, B_avg)
+	F = Float32(1/(nModels+1))
+	a = Float32(nModels*F) 
+	for i = eachindex(T)
+		axpby!(F, T[i], a, T_avg[i])
+		axpby!(F, B[i], a, B_avg[i])
 	end
 end
 
@@ -457,7 +479,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
+function ADAMAXTrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -832,7 +854,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, input_test, output_test, batc
 				bestCost = currentOut
 				bestCostTest = testout
 				tfail = 0
-			else
+			elseif epoch > 100
 				tfail += 1
 			end
 
@@ -905,7 +927,7 @@ function ADAMAXTrainNNCPU(input_data, output_data, input_test, output_test, batc
 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch, bestCostTest, costRecordTest, lastepoch
 end
 
-function ADAMAXSWATrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.001f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, patience = 3)
+function ADAMAXSWATrainNNCPU(input_data, output_data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.001f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, patience = 10, tol=Inf)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -958,47 +980,29 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, batchSize, T0, B0, N, inpu
 		
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
-
-	tanh_grad_zBATCH = Array{Matrix{Float32}}(undef, num_hidden)
-	for i = 1:num_hidden
-		tanh_grad_zBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
-	end
 	
-	aBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
-	for i = 1:num_hidden
-		aBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
-	end
-	aBATCH[end] = Array{Float32}(undef, batchSize, n2)
-	deltasBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
-
-	for i = 1:length(deltasBATCH)
-		deltasBATCH[i] = similar(aBATCH[i])
-	end
-
-	Theta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
-		Theta_grads[i] = similar(T0[i])
-	end
-
-
-	Bias_grads = similar(B0)
-	for i = 1:length(B0)
-		Bias_grads[i] = similar(B0[i])
-	end
-
+	tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
+	aBATCH = form_activations(T0, batchSize)
+	deltasBATCH = form_activations(T0, batchSize)
+	Theta_grads = deepcopy(T0) 
+	Bias_grads = deepcopy(B0)
 	onesVecBATCH = ones(Float32, batchSize)
-
 	numLayers = length(T0)
 
 
 
 	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
-	currentOut = 0.0f0 
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
-	end
-	currentOut = currentOut/numBatches
 
+	function calcout_batches(T, B)
+		currentOut = 0.0f0 
+		for i = 1:numBatches
+			currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+		end
+		currentOut = currentOut/numBatches
+	end
+
+	currentOut = calcout_batches(T0, B0)
+	
 	if printAnything
 		printstyled(stdout, string("Initial cost is ", currentOut), bold=true, color=:red)
 		println()
@@ -1073,30 +1077,24 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, batchSize, T0, B0, N, inpu
 		end
 		
 		if epoch > 100
-			updateAvg!(nModels, Thetas, Biases, T_est, B_est)
 			nModels += 1
+			updateAvg!(nModels, Thetas, Biases, T_est, B_est)
 		end
 
 		if epoch%period == 0
-			currentOut = 0.0f0
-			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc, resLayers = resLayers)
-			end
-			currentOut = currentOut/numBatches
-			
+			currentOut = calcout_batches(T_est, B_est)
 			costRecord[iter + 1] = currentOut
 			
 			if currentOut < bestCost
 				updateBest!(bestThetas, bestBiases, T_est, B_est)
 				bestCost = currentOut
 				tfail = 0
-			else
+			elseif epoch > 100
 				tfail += 1
 			end
 			
 			iter += 1
 		end
-
 	
 		currentTime = time()
 		#print status every 5 seconds
@@ -1124,11 +1122,7 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, batchSize, T0, B0, N, inpu
 	end
 	lastepoch = epoch-1
 
-	currentOut = 0.0f0
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc, resLayers = resLayers)
-	end
-	currentOut = currentOut/numBatches
+	currentOut = calcout_batches(T_est, B_est)
 
 	if currentOut < bestCost
 		bestCost = currentOut
@@ -1158,7 +1152,7 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, batchSize, T0, B0, N, inpu
 	return bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch
 end		
 
-function ADAMAXSWATrainNNCPU(input_data, output_data, input_test, output_test, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.001f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, patience = 3)
+function ADAMAXSWATrainNNCPU(input_data, output_data, input_test, output_test, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.001f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, patience = 10, tol=Inf)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -1213,48 +1207,28 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, input_test, output_test, b
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
 
-	tanh_grad_zBATCH = Array{Matrix{Float32}}(undef, num_hidden)
-	for i = 1:num_hidden
-		tanh_grad_zBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
-	end
 	
-	aBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
-	aTEST = Array{Matrix{Float32}}(undef, num_hidden+1)
-	for i = 1:num_hidden
-		aBATCH[i] = Array{Float32}(undef, batchSize, hidden_layers[i])
-		aTEST[i] = Array{Float32}(undef, mtest, hidden_layers[i])
-	end
-	aBATCH[end] = Array{Float32}(undef, batchSize, n2)
-	aTEST[end] = Array{Float32}(undef, mtest, n2)
-	deltasBATCH = Array{Matrix{Float32}}(undef, num_hidden+1)
-
-	for i = 1:length(deltasBATCH)
-		deltasBATCH[i] = similar(aBATCH[i])
-	end
-
-	Theta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
-		Theta_grads[i] = similar(T0[i])
-	end
-
-
-	Bias_grads = similar(B0)
-	for i = 1:length(B0)
-		Bias_grads[i] = similar(B0[i])
-	end
-
+	tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
+	aBATCH = form_activations(T0, batchSize)
+	deltasBATCH = form_activations(T0, batchSize)
+	Theta_grads = deepcopy(T0) 
+	Bias_grads = deepcopy(B0)
 	onesVecBATCH = ones(Float32, batchSize)
-
 	numLayers = length(T0)
 
-
+	aTEST = form_activations(T0, mtest)
 
 	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
-	currentOut = 0.0f0 
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+
+	function calcout_batches(T, B)
+		currentOut = 0.0f0 
+		for i = 1:numBatches
+			currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+		end
+		currentOut = currentOut/numBatches
 	end
-	currentOut = currentOut/numBatches
+
+	currentOut = calcout_batches(T0, B0)
 
 	testout = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, input_test, output_test, lambda, aTEST, dropout, costFunc=costFunc, resLayers = resLayers)
 
@@ -1335,16 +1309,12 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, input_test, output_test, b
 		end
 		
 		if epoch > 100
-			updateAvg!(nModels, Thetas, Biases, T_est, B_est)
 			nModels += 1
+			updateAvg!(nModels, Thetas, Biases, T_est, B_est)
 		end
 
 		if epoch%period == 0
-			currentOut = 0.0f0
-			for i = 1:numBatches
-				currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc, resLayers = resLayers)
-			end
-			currentOut = currentOut/numBatches
+			currentOut = calcout_batches(T_est, B_est)
 			testout = nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, input_test, output_test, lambda, aTEST, dropout, costFunc=costFunc, resLayers = resLayers)
 			
 			costRecord[iter + 1] = currentOut
@@ -1355,7 +1325,7 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, input_test, output_test, b
 				bestCost = currentOut
 				bestCostTest = testout
 				tfail = 0
-			else
+			elseif epoch > 100
 				tfail += 1
 			end
 			
@@ -1382,18 +1352,14 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, input_test, output_test, b
 			hoursLeft = floor(timeRemainingEst/(60*60))
 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
 			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, digits=1)
-			println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, digits=8)))
+			println(string("On epoch ", epoch, " out of ", numEpochs, " best train and test cost is ", (round(bestCost, sigdigits=5), round(bestCostTest, sigdigits=5))))
 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
 		end
 		epoch += 1
 	end
 	lastepoch = epoch-1
 
-	currentOut = 0.0f0
-	for i = 1:numBatches
-		currentOut += nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], lambda, aBATCH, 0.0f0, costFunc=costFunc, resLayers = resLayers)
-	end
-	currentOut = currentOut/numBatches
+	currentOut = calcout_batches(T_est, B_est)
 	testout = nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, input_test, output_test, lambda, aTEST, dropout, costFunc=costFunc, resLayers = resLayers)
 
 	if testout < bestCostTest
@@ -1414,7 +1380,7 @@ function ADAMAXSWATrainNNCPU(input_data, output_data, input_test, output_test, b
 		println()
 		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout, ", residual layer size = ", resLayers))
 	
-		printstyled(stdout, string("Training Results: Cost reduced from ", costRecord[1], "to ", bestCost, " after ", round(Int64, timeRecord[lastepoch]), " seconds and ", lastepoch, " epochs"), bold=true, color=:red)
+	printstyled(stdout, string("Training Results: Cost reduced from ", costRecordTest[1], "to ", bestCostTest, " after ", round(Int64, timeRecord[lastepoch+1]), " seconds and ", lastepoch, " epochs"), bold=true, color=:red)
 		println()	
 		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
 	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))

@@ -104,7 +104,7 @@ would be a network with two hidden layers each with 4 neurons.  The input and ou
 determined by the size of the training and test set.  
 
 """
-function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "absErr", binInput = false)
+function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "absErr", binInput = false, reslayers = 0)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = if binInput
 		readBinInput(name)
@@ -139,14 +139,14 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 		println("initializing network parameters")
 		Random.seed!(1234)
 		T0, B0 = if occursin("Log", costFunc)
-			initializeParams(M, hidden, 2*O)
+			initializeparams_saxe(M, hidden, 2*O)
 		else
-			initializeParams(M, hidden, O)
+			initializeparams_saxe(M, hidden, O)
 		end	
 
 		println("beginning training")
 		Random.seed!(1234)
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc)
+		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc, resLayers=reslayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
 		GC.gc()
@@ -229,7 +229,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 	end
 end
 
-function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, costFunc = "absErr", binInput = false)
+function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, costFunc = "absErr", binInput = false, reslayers=0)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = if binInput
 		readBinInput(name)
@@ -273,7 +273,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		end	
 		println("beginning training")
 		Random.seed!(1234)
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X[:, cols], Y, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc)
+		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(((X[:, cols], Y), (Xtest[:, cols], Ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc, resLayers=reslayers)
 
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X[:, cols], Y, T, B, costFunc = costFunc)
@@ -366,7 +366,7 @@ end
 
 #train a network with a variable number of layers for a given target number
 #of parameters.
-function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha = .002f0, R = 0.1f0, printProg = false, costFunc = "absErr", binInput = false)
+function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha = .002f0, R = 0.1f0, printProg = false, costFunc = "absErr", binInput = false, reslayers=0)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = if binInput
 		readBinInput(name)
@@ -422,14 +422,14 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 		println("initializing network parameters")
 		Random.seed!(1234)
 		T0, B0 = if occursin("Log", costFunc)
-			initializeParams(M, hidden[2], 2*O)
+			initializeparams_saxe(M, hidden[2], 2*O)
 		else
-			initializeParams(M, hidden[2], O)
+			initializeparams_saxe(M, hidden[2], O)
 		end	
 
 		println("beginning training")
 		Random.seed!(1234)
-		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden[2], 0.0f0, Inf, alpha=alpha, R = R, printProgress = printProg, costFunc = costFunc)
+		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden[2], 0.0f0, Inf, alpha=alpha, R = R, printProgress = printProg, costFunc = costFunc, resLayers=reslayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
 		GC.gc()
@@ -515,10 +515,10 @@ end
 
 
 function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lambda = 0.0f0, c = Inf, dropout = 0.0f0, costFunc = "absErr", resLayers = resLayers, printProg=false, printanything=false)
-	M = size(inputs[1], 2)
-	O = size(inputs[2], 2)
+	M = size(inputs[1][1], 2)
+	O = size(inputs[1][2], 2)
 
-	trainFunc(N, a, r) = eval(Symbol("ADAMAXTrainNN", backend))(inputs..., batchSize, T0, B0, N, M, hidden, lambda, c, alpha = a, R = r, costFunc = costFunc, resLayers = resLayers, printProgress=printProg, printAnything=printanything)
+	trainFunc(N, a, r) = eval(Symbol("ADAMAXTrainNN", backend))(inputs, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = a, R = r, costFunc = costFunc, resLayers = resLayers, printProgress=printProg, printAnything=printanything)
 
 	Random.seed!(1234)
 	# c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, 1, M, hidden, lambda, c, alpha = 0.0f0, costFunc = costFunc)[3]
@@ -1481,7 +1481,7 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false)
 	println("reading and converting training data")
 	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
@@ -1528,9 +1528,9 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 		println("initializing network parameters")
 		Random.seed!(1234)
 		if occursin("Log", costFunc)
-			initializeParams(M, hidden, 2*O)
+			initializeparams_saxe(M, hidden, 2*O)
 		else
-			initializeParams(M, hidden, O)
+			initializeparams_saxe(M, hidden, O)
 		end	
 	else
 		println("reading previous session parameters")
@@ -1543,7 +1543,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	# BLAS.set_num_threads(0)
 
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	GC.gc()
@@ -1595,7 +1595,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 		string(hidden)
 	end
 
-	trainSym = SWA ? Symbol("ADAMAXSWATrainNN", backend) : Symbol("ADAMAXTrainNN", backend)
+	trainSym = Symbol("ADAMAXTrainNN", backend)
 
 	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout, resLayers), SWA ? "ADAMAXSWA_" : "ADAMAX_", costFunc)
 	
@@ -1605,9 +1605,9 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 		println(string("initializing network parameters for ", M, " input ", O, " output ", hidden, " hidden network"))
 		Random.seed!(1234)
 		if occursin("Log", costFunc)
-			initializeParams(M, hidden, 2*O)
+			initializeparams_saxe(M, hidden, 2*O)
 		else
-			initializeParams(M, hidden, O)
+			initializeparams_saxe(M, hidden, O)
 		end	
 	else
 		println("reading previous session parameters")
@@ -1617,7 +1617,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	#BLAS.set_num_threads(Sys.CPU_THREADS)	
 	# BLAS.set_num_threads(0)	
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(trainSym)(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = SWA)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	
@@ -1649,7 +1649,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	(record, T, B, Jtrain, outTrain, bestCost)
 end
 
-function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false, writefiles = true)
+function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, costFunc = "absErr", binInput = false, writefiles = true, printanything=true, swa = false, reslayers=0, toltest=Inf)
 	println("reading and converting training data")
 	Xraw, Xtestraw, Y, Ytest = if binInput
 		readBinInput(name)
@@ -1706,9 +1706,9 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
         end
   
 		T0, B0 = if occursin("Log", costFunc)
-			initializeParams(M, hidden, 2*O)
+			initializeparams_saxe(M, hidden, 2*O)
 		else
-			initializeParams(M, hidden, O)
+			initializeparams_saxe(M, hidden, O)
 		end		
 		if ID == 1
             Random.seed!(1234 + foo - 1)
@@ -1716,7 +1716,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
                Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, costFunc = costFunc)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, costFunc = costFunc, printAnything=printanything, resLayers=reslayers, swa = swa, tol=toltest)
 		(T, B)
 	end
 	GC.gc()
@@ -1893,7 +1893,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
                Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch) = eval(Symbol("ADAMAX$(swastr)TrainNN", backend))(X, Y, Xtest, Ytest, batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
 		(T, B)
 	end
 	GC.gc()
@@ -2004,6 +2004,151 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
     (besterr, bestind) = findmin(testerrs)
     println("Completed training networks with parameters: $numEpochs epochs, $(length(hidden)) layers of size $(isempty(hidden) ? 0 : hidden[1]), $c maxnorm, $R decay rate, $alpha alpha, $dropout dropout, and $reslayers reslayer size")
     println("Best test error is $besterr using $bestind networks")
+
+    printanything && println("saving results to file")
+	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
+	return (fullMultiPerformance, bootstrapOut)
+end
+
+function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false) where U <: Matrix{Float32}
+
+	X = if isempty(sampleCols)
+		Xraw
+	else
+		Xraw[:, sampleCols]
+	end
+
+	colNames = if isempty(sampleCols)
+		""
+	elseif length(sampleCols) > 10
+		replace(string(sampleCols[1:3], "_", sampleCols[end-2:end], "_"), " " => "")
+	else
+		replace(string(sampleCols, "_"), " " => "")
+	end
+
+	(N, M) = size(X)
+	O = size(Y, 2)
+
+	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	swastr = swa ? "SWA" : ""
+	
+	h_name = if isempty(hidden)
+		0
+	elseif hidden == hidden[1]*ones(Int64, length(hidden))
+		string(hidden[1], "X", length(hidden))
+	else
+		string(hidden)
+	end
+
+	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, digits = 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX$(swastr)_", costFunc)
+
+	bootstrapOut = pmap(1:num) do foo
+		#BLAS.set_num_threads(Sys.CPU_THREADS)
+		if (nprocs() > 1) & (backend == :CPU)
+			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
+		else
+			BLAS.set_num_threads(0)
+		end
+
+		if ID == 1
+            Random.seed!(1234 + foo - 1)
+        else
+            Random.seed!(ID)
+            Random.seed!(1234+rand(UInt32)+foo)
+        end
+  
+		T0, B0 = if occursin("Log", costFunc)
+			initializeparams_saxe(M, hidden, 2*O, reslayers)
+		else
+			initializeparams_saxe(M, hidden, O, reslayers)
+		end		
+		if ID == 1
+            Random.seed!(1234 + foo - 1)
+        else
+               Random.seed!(ID)
+            Random.seed!(1234+rand(UInt32)+foo)
+        end	
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y),), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
+		(T, B)
+	end
+	GC.gc()
+	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
+	writefiles && writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
+	
+	printanything && println("Calculating training set outputs")
+	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+    GC.gc()
+	
+	header = if occursin("Log", costFunc)
+		[reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]
+	else
+		header = [reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Error Est ", s), 1:O), 1, O)]
+	end
+	
+	printanything && println("Writing prediction scatters to file")
+	writefiles && writedlm(string(ID, "_multiPredScatTrain_", filename, ".csv"), [header; [Y outTrain errEstTrain]])
+
+	header = if costFunc2 == costFunc
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est"]
+	else
+		["Num Networks" string("Train ", costFunc, " Error") "Training Error Est" string("Train ", costFunc2, " Error")]
+	end
+
+	printanything && println("Calculating performance vs number of networks")
+	d_y = if backend == :GPU
+		cuda_allocate(Y)
+	else
+		[]
+	end
+    	
+	bootstrapOutTrain2 = if occursin("Log", costFunc)
+		println("Calculating training non inverted ranges")
+		[[a[:, 1:O] exp.(-a[:, O+1:2*O])] for a in bootstrapOutTrain]
+	else
+		[]
+	end
+
+    fullMultiPerformance = mapreduce(vcat, 1:length(bootstrapOutTrain)) do i
+        #calculate average network output     
+        line = if occursin("Log", costFunc)
+            # combinedOutputTrainPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTrain[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTrain2[1:i]]))]  
+            combinedOutputTrainPre = [mapreduce(a -> a[:, 1:O], +, bootstrapOutTrain[1:i])/i sqrt.(mapreduce(a -> a[:, O+1:2*O].^2, +, bootstrapOutTrain2[1:i])/i)]
+            combinedOutputTrain = [combinedOutputTrainPre[:, 1:O] log.(1 ./combinedOutputTrainPre[:, O+1:2*O])]
+            # errorEstTrain = mean(reduce(+, [abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]) for a in bootstrapOutTrain2])/i)
+
+            errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
+      
+            Jtrain = if backend == :GPU
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+		
+
+            [i Jtrain[1] errorEstTrain Jtrain[2]]
+        else
+            combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
+            errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
+            Jtrain = if backend == :GPU
+            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
+            else
+            	calcError(combinedOutputTrain, Y, costFunc = costFunc)
+            end
+
+            [i Jtrain errorEstTrain]
+        end
+        printanything && println(string("Done with networks 1 to ", i, " out of ", length(bootstrapOutTrain)))
+        line
+    end 
+    errs = fullMultiPerformance[:, 2]
+    (besterr, bestind) = findmin(errs)
+    println("Completed training networks with parameters: $numEpochs epochs, $(length(hidden)) layers of size $(isempty(hidden) ? 0 : hidden[1]), $c maxnorm, $R decay rate, $alpha alpha, $dropout dropout, and $reslayers reslayer size")
+    println("Best error is $besterr using $bestind networks")
 
     printanything && println("saving results to file")
 	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
@@ -2277,7 +2422,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end	
 	out = pmap(1:num) do _
 		BLAS.set_num_threads(numThreads)
-		eval(Symbol("ADAMAX$(swastr)TrainNN", backend))(X, Y, Xtest, ytest, batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers)
+		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa)
 	end
 	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]
@@ -2393,14 +2538,14 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 		println("initializing network parameters")
 		Random.seed!(1234)
 		T0, B0 = if occursin("Log", costFunc)
-			initializeParams(M, hidden[2], 2*O)
+			initializeparams_saxe(M, hidden[2], 2*O)
 		else
-			initializeParams(M, hidden[2], O)
+			initializeparams_saxe(M, hidden[2], O)
 		end	
 
 		println("beginning training")
 		Random.seed!(1234)
-		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams((X, Y), batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(((X, Y),), batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()
@@ -2487,14 +2632,14 @@ function smartEvalLayers(name, (X, Y, Xtest, Ytest), N, batchSize, Plist; tau = 
 		println("initializing network parameters")
 		Random.seed!(1234)
 		T0, B0 = if occursin("Log", costFunc)
-			initializeParams(M, hidden[2], 2*O)
+			initializeparams_saxe(M, hidden[2], 2*O)
 		else
-			initializeParams(M, hidden[2], O)
+			initializeparams_saxe(M, hidden[2], O)
 		end	
 
 		println("beginning training")
 		Random.seed!(1234)
-		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams((X, Y), batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+		alpha, R, (T, B, bestCost, record, timeRecord, GFLOPS), success = autoTuneParams(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, hidden[2], tau = tau, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 		GC.gc()

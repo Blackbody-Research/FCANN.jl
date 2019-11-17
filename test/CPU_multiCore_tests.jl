@@ -38,6 +38,7 @@ rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_100_epochs_smartPa
 println("Testing multiTrain")
 multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
 multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
+multiTrain(name, Xtrain, ytrain, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
 for v1 = (1, 2), costFunc = ("absErr", "normLogErr")
 	multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, v1, costFunc = costFunc)
 end

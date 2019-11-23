@@ -1481,12 +1481,16 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false)
-	println("reading and converting training data")
-	Xraw, Xtestraw, Y, Ytest = if binInput
-		readBinInput(name)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = ())
+	printanything && println("reading and converting training data")
+	(Xraw, Xtestraw, Y, Ytest) = if isempty(inputdata)
+		if binInput
+			readBinInput(name)
+		else
+			readInput(name)
+		end
 	else
-		readInput(name)
+		inputdata
 	end
 
 	X, Xtest = if isempty(sampleCols)
@@ -1522,28 +1526,31 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 
 	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout, resLayers), "ADAMAX_", costFunc)
 	
-	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
+	printanything && println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
-	(T0, B0) = if isempty(startID)
-		println("initializing network parameters")
-		Random.seed!(1234)
-		if occursin("Log", costFunc)
-			initializeparams_saxe(M, hidden, 2*O)
+	(T0, B0) = if isempty(initparams) 
+		if isempty(startID)
+			printanything && println("initializing network parameters")
+			Random.seed!(1234)
+			if occursin("Log", costFunc)
+				initializeparams_saxe(M, hidden, 2*O)
+			else
+				initializeparams_saxe(M, hidden, O)
+			end	
 		else
-			initializeparams_saxe(M, hidden, O)
-		end	
+			printanything && println("reading previous session parameters")
+			readBinParams(string(startID, "_params_", filename, ".bin"))[1]
+		end
 	else
-		println("reading previous session parameters")
-		readBinParams(string(startID, "_params_", filename, ".bin"))[1]
+		initparams
 	end
-
 	
 	#BLAS.set_num_threads(Sys.CPU_THREADS)	
 	#BLAS.set_num_threads(5)	
-	# BLAS.set_num_threads(0)
+	BLAS.set_num_threads(blasthreads)
 
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa)
+	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	GC.gc()
@@ -1573,10 +1580,10 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 		writeParams([(T, B)], string(ID, "_params_", filename, ".bin"))
 	end
 
-	(record, T, B, Jtrain, outTrain, bestCost)
+	(record, T, B, Jtrain, outTrain, bestCost, Jtest, outTest, bestCostTest, bestresultepoch)
 end
 
-function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = resLayers, SWA = false)
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = resLayers, swa = false, printanything=true, initparams=())
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -1597,27 +1604,31 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 
 	trainSym = Symbol("ADAMAXTrainNN", backend)
 
-	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout, resLayers), SWA ? "ADAMAXSWA_" : "ADAMAX_", costFunc)
+	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout, resLayers), swa ? "ADAMAXSWA_" : "ADAMAX_", costFunc)
 	
-	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
+	printanything && println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
 	
-	(T0, B0) = if isempty(startID)
-		println(string("initializing network parameters for ", M, " input ", O, " output ", hidden, " hidden network"))
-		Random.seed!(1234)
-		if occursin("Log", costFunc)
-			initializeparams_saxe(M, hidden, 2*O)
+	(T0, B0) = if isempty(initparams) 
+		if isempty(startID)
+			printanything && println("initializing network parameters")
+			Random.seed!(1234)
+			if occursin("Log", costFunc)
+				initializeparams_saxe(M, hidden, 2*O)
+			else
+				initializeparams_saxe(M, hidden, O)
+			end	
 		else
-			initializeparams_saxe(M, hidden, O)
-		end	
+			printanything && println("reading previous session parameters")
+			readBinParams(string(startID, "_params_", filename, ".bin"))[1]
+		end
 	else
-		println("reading previous session parameters")
-		readBinParams(string(startID, "_params_", filename, ".bin"))[1]
+		initparams
 	end
 	
 	#BLAS.set_num_threads(Sys.CPU_THREADS)	
 	# BLAS.set_num_threads(0)	
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = SWA)
+	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	
@@ -1830,7 +1841,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	return (fullMultiPerformance, bootstrapOut)
 end
 
-function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false) where U <: Matrix{Float32}
+function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0) where U <: Matrix{Float32}
 
 	X, Xtest = if isempty(sampleCols)
 		(Xraw, Xtestraw)
@@ -1869,10 +1880,11 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
 	bootstrapOut = pmap(1:num) do foo
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
+		printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
 		if (nprocs() > 1) & (backend == :CPU)
-			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
+			BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS/4)), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
 		else
-			BLAS.set_num_threads(0)
+			BLAS.set_num_threads(blasthreads)
 		end
 
 		if ID == 1
@@ -1882,18 +1894,23 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             Random.seed!(1234+rand(UInt32)+foo)
         end
   
-		T0, B0 = if occursin("Log", costFunc)
-			initializeparams_saxe(M, hidden, 2*O, reslayers)
+		T0, B0 = if isempty(multiparams)
+			if occursin("Log", costFunc)
+				initializeparams_saxe(M, hidden, 2*O, reslayers)
+			else
+				initializeparams_saxe(M, hidden, O, reslayers)
+			end		
 		else
-			initializeparams_saxe(M, hidden, O, reslayers)
-		end		
+			multiparams[foo]
+		end
+
 		if ID == 1
             Random.seed!(1234 + foo - 1)
         else
-               Random.seed!(ID)
+            Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
 		(T, B)
 	end
 	GC.gc()
@@ -2010,7 +2027,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	return (fullMultiPerformance, bootstrapOut)
 end
 
-function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false) where U <: Matrix{Float32}
+function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0) where U <: Matrix{Float32}
 
 	X = if isempty(sampleCols)
 		Xraw
@@ -2048,11 +2065,12 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, digits = 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX$(swastr)_", costFunc)
 
 	bootstrapOut = pmap(1:num) do foo
+		printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
 		if (nprocs() > 1) & (backend == :CPU)
-			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
+			BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS)/4), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
 		else
-			BLAS.set_num_threads(0)
+			BLAS.set_num_threads(blasthreads)
 		end
 
 		if ID == 1
@@ -2062,11 +2080,16 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
             Random.seed!(1234+rand(UInt32)+foo)
         end
   
-		T0, B0 = if occursin("Log", costFunc)
-			initializeparams_saxe(M, hidden, 2*O, reslayers)
+		T0, B0 = if isempty(multiparams)
+			if occursin("Log", costFunc)
+				initializeparams_saxe(M, hidden, 2*O, reslayers)
+			else
+				initializeparams_saxe(M, hidden, O, reslayers)
+			end		
 		else
-			initializeparams_saxe(M, hidden, O, reslayers)
-		end		
+			multiparams[foo]
+		end
+
 		if ID == 1
             Random.seed!(1234 + foo - 1)
         else

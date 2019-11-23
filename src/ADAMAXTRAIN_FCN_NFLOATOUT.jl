@@ -139,6 +139,18 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 end
 
+function calcOutputCPU!(input_data, output_data, T, B, a; costFunc = "absErr", resLayers = 0)
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+			
+	predict!(T, B, input_data, a, resLayers)
+	errs = calcError(a[end], output_data, costFunc = costFunc)
+	return errs
+end
+
 function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
 #calculate network output given input data and a set of network parameters.
 	#Setup some useful variables
@@ -236,6 +248,220 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	GC.gc()
 	return (multiOut, out, errs, outErrEst)
 end
+
+function calcMultiOutCPU!(input_data, output_data, multiParams, a, multiOut; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
+	#calculate network output given input data and a set of network parameters.
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = size(output_data, 2)
+
+	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	predictMulti!(multiParams, input_data, a, multiOut, resLayers)
+
+	out = if occursin("Log", costFunc)
+		out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+		out2 = log.(1 ./sqrt.(mapreduce(a -> exp.(-2*a[:, n+1:2*n]), +, multiOut)/length(multiOut)))
+		[out1 out2]
+	else
+		mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+	end
+
+	outErrEst = if occursin("Log", costFunc)
+		mapreduce(a -> abs.([a[:, 1:n] exp.(-a[:, n+1:2*n])] .- [out[:, 1:n] exp.(-out[:, n+1:2*n])]), +, multiOut)/length(multiOut)
+	else
+		mapreduce(a -> abs.(a .- out), +, multiOut)/length(multiOut)
+	end
+
+	errs = calcError(out, output_data, costFunc = costFunc)
+	GC.gc()
+	return (out, errs, outErrEst)
+end
+
+function errshufflecols(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a::Vector{Matrix{Float32}}, v, inds; rng=1, reslayers=0, costFunc = "sqErr")
+	Random.seed!(rng)
+
+	for ind in inds
+		if ind != 0
+			#fill v with column to shuffle
+			v .= view(input_data, :, ind)
+			shuffle!(v)
+			view(input_data_copy, :, ind) .= v
+		end
+	end
+
+	errs = calcOutputCPU!(input_data_copy, output_data, T, B, a, costFunc=costFunc, resLayers = reslayers)
+	
+	#restore input_data_copy to initial state
+	for ind in inds
+		if ind != 0
+			view(input_data_copy, :, ind) .= view(input_data, :, ind)
+		end
+	end
+
+	return errs
+end
+
+function errshufflecols(multiparams, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a::Vector{Matrix{Float32}}, multiout::Vector{Matrix{Float32}}, v, inds; rng=1, reslayers=0, costFunc = "sqErr")
+	Random.seed!(rng)
+
+	for ind in inds
+		if ind != 0
+			#fill v with column to shuffle
+			v .= view(input_data, :, ind)
+			shuffle!(v)
+			view(input_data_copy, :, ind) .= v
+		end
+	end
+
+	(_, errs, _) = calcMultiOutCPU!(input_data_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers = reslayers)
+	
+	#restore input_data_copy to initial state
+	for ind in inds
+		if ind != 0
+			view(input_data_copy, :, ind) .= view(input_data, :, ind)
+		end
+	end
+
+	return errs
+end
+
+function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[])
+	(m, n) = size(input_data)
+	a = form_activations(T, m)
+	v = Vector{Float32}(undef, m)
+	input_copy = copy(input_data)
+
+	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers)
+	shuffleind = setdiff(1:n, fixedshuffle)
+	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
+	shuffle_cols = Vector{Vector{Int64}}(undef, length(shuffleind))
+	println()
+	println()
+	for (i, c) in enumerate(shuffleind)
+		err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		shuffle_errs[i] = err
+		shuffle_cols[i] = [c; fixedshuffle]
+		print("\33[2K\033[A\r")
+		print("\33[2K\033[A\r")
+		println("Finished evaluating shuffled column $c: number $i of $(length(shuffleind))")
+		println("with an error change of $(100*(err/NNerr -1))%")
+	end
+	if !isempty(fixedshuffle)
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+	else
+		fixederr = NNerr
+	end
+	featureimpact = 100 .*(shuffle_errs ./ NNerr .- 1)
+	sortinds = reverse(sortperm(featureimpact))
+	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
+end
+
+function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, candidatecols::Vector{Int64}; reslayers=0, costFunc="sqErr", num=10)
+	(m, n) = size(input_data)
+	a = form_activations(T, m)
+	v = Vector{Float32}(undef, m)
+	input_copy = copy(input_data)
+
+	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers)
+	# shuffleind = setdiff(1:n, fixedshuffle)
+	shuffle_errs = Vector{Float64}(undef, length(candidatecols))
+	shuffle_cols = Vector{Vector{Int64}}(undef, length(candidatecols))
+	println()
+	println()
+	for (i, c) in enumerate(candidatecols)
+		shufflecols = setdiff(candidatecols, c)
+		err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		shuffle_errs[i] = err
+		shuffle_cols[i] = shufflecols
+		print("\33[2K\033[A\r")
+		print("\33[2K\033[A\r")
+		println("Finished evaluating shuffled column $c: number $i of $(length(candidatecols))") 
+		println("with an error change of $(100*(err/NNerr -1))%")
+	end
+	if !isempty(candidatecols)
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+	else
+		fixederr = NNerr
+	end
+	featureimpact = 100 .*(shuffle_errs ./ NNerr .- 1)
+	sortinds = reverse(sortperm(featureimpact))
+	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
+end
+
+
+function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[]) where U <: Tuple
+	(m, n) = size(input_data)
+	a = form_activations(multiparams[1][1], m)
+	v = Vector{Float32}(undef, m)
+	input_copy = copy(input_data)
+
+	multiout = [copy(a[end]) for i in eachindex(multiparams)]
+	(_, NNerr, _) = calcMultiOutCPU!(input_data, output_data, multiparams, a, multiout, costFunc= costFunc, resLayers=reslayers)
+
+	shuffleind = setdiff(1:n, fixedshuffle)
+	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
+	shuffle_cols = Vector{Vector{Int64}}(undef, length(shuffleind))
+	println()
+	println()
+	for (i, c) in enumerate(shuffleind)
+		err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		shuffle_errs[i] = err
+		shuffle_cols[i] = [c; fixedshuffle]
+		print("\33[2K\033[A\r")
+		print("\33[2K\033[A\r")
+		println("Finished evaluating shuffled column $c: $i of $(length(shuffleind))") 
+		println("with an error change of $(100*(err/NNerr -1))%")
+	end
+	if !isempty(fixedshuffle)
+		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+	else
+		fixederr=NNerr
+	end
+	featureimpact = 100 .*(shuffle_errs ./ NNerr .- 1)
+	sortinds = reverse(sortperm(featureimpact))
+	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
+end
+
+function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, candidatecols::Vector{Int64}; reslayers=0, costFunc="sqErr", num=10) where U <: Tuple
+	(m, n) = size(input_data)
+	a = form_activations(multiparams[1][1], m)
+	v = Vector{Float32}(undef, m)
+	input_copy = copy(input_data)
+
+	multiout = [copy(a[end]) for i in eachindex(multiparams)]
+	(_, NNerr, _) = calcMultiOutCPU!(input_data, output_data, multiparams, a, multiout, costFunc= costFunc, resLayers=reslayers)
+
+	# shuffleind = setdiff(1:n, fixedshuffle)
+	shuffle_errs = Vector{Float64}(undef, length(candidatecols))
+	shuffle_cols = Vector{Vector{Int64}}(undef, length(candidatecols))
+	println()
+	println()
+	for (i, c) in enumerate(candidatecols)
+		shufflecols = setdiff(candidatecols, c)
+		err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		shuffle_errs[i] = err
+		shuffle_cols[i] = shufflecols
+		print("\33[2K\033[A\r")
+		print("\33[2K\033[A\r")
+		println("Finished evaluating shuffled column $c: $i of $(length(candidatecols))") 
+		println("with an error change of $(100*(err/NNerr -1))%")
+	end
+	if !isempty(candidatecols)
+		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+	else
+		fixederr = NNerr
+	end
+
+	featureimpact = 100 .*(shuffle_errs ./ NNerr .- 1)
+	sortinds = reverse(sortperm(featureimpact))
+	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
+end
+
 
 function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLayers = 0, m = 1000, input_layer_size = 3, n = 2, e = 1f-3)
 	Random.seed!(1234)
@@ -621,9 +847,10 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	epoch = 1
 	eta = alpha
 	F = (1.0f0 - R)
-	G = alpha*R
+	G = alpha*F
 	tfail = 0
 	tolpass = true
+	bestresultepoch = 0
 
 	t = 1
 	while (epoch <= N) && (tfail <= patience) && tolpass
@@ -671,10 +898,11 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 				costRecordTest[iter + 1] = testout
 			end
 			
-			if (testset && (testout < bestCostTest)) || (currentOut < bestCost)
+			if (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
 				updateBest!(bestThetas, bestBiases, T_est, B_est)
 				bestCost = currentOut
 				testset && (bestCostTest = testout)
+				bestresultepoch = epoch
 				tfail = 0
 			elseif epoch > 100
 				tfail += 1
@@ -724,9 +952,10 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	currentOut = calcout_batches(T_est, B_est)
 	testset && (testout = nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, input_test, output_test, lambda, aTEST, dropout, costFunc=costFunc, resLayers = resLayers))
 
-	if (testset && (testout < bestCostTest)) || (currentOut < bestCost)
+	if (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
 		bestCost = currentOut
 		testset && (bestCostTest = testout)
+		bestresultepoch = lastepoch
 		updateBest!(bestThetas, bestBiases, T_est, B_est)
 	end
 	
@@ -751,9 +980,9 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	end
 
 	testresults = if testset
-		(bestCostTest, costRecordTest, lastepoch)
+		(bestCostTest, costRecordTest, lastepoch, bestresultepoch)
 	else
-		()
+		(bestresultepoch,)
 	end
 
 	return (bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch, testresults...)

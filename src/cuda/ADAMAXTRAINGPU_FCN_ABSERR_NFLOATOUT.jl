@@ -482,21 +482,13 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		println()
 		printstyled(color = :green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
 		println()
-		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R))
+		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R, ", residual size = ", resLayers))
 		println("-------------------------------------------------------------------")
 	end
 	
 	#total number of examples in dataset
 	if batchSize > m
 		error("Your batchsize is larger than the total number of examples.")
-	end
-
-	if printAnything
-		println()
-		printstyled(color = :green, stdout, "Beginning training with the following parameters:", bold=true)
-		println()
-		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", numEpochs, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
-		println("-------------------------------------------------------------------")
 	end
 
 	numBatches = round(Int, ceil(m/batchSize))
@@ -605,10 +597,11 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	epoch = 1
 	eta = alpha
 	F = (1.0f0-R)
-	G = alpha*R
+	G = alpha*F
 	t = 1.0f0
 	tfail = 0
 	tolpass=true
+	bestresultepoch = 0
 
 	while (epoch <= numEpochs) && (tfail <= patience) && tolpass
 		#run through an epoch in batches with randomized order
@@ -641,10 +634,11 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 				costRecordTest[iter+1] = testout
 			end
 			
-			if (testset && (testout < bestCostTest)) || (currentOut < bestCost)
+			if (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
 				GPU2Host((bestThetas, bestBiases), (d_Theta_est, d_Bias_est))
 				bestCost = currentOut
 				testset && (bestCostTest = testout)
+				bestresultepoch = epoch
 				tfail = 0
 			else
 				tfail += 1
@@ -694,9 +688,10 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	currentOut = calcout_batches(d_Theta_est, d_Bias_est)
 	testset && (testout = calcout_test(d_Theta_est, d_Bias_est))
 
-	if (testset && (testout < bestCostTest)) || (currentOut < bestCost)
+	if (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
 		bestCost = currentOut
 		testset && (bestCostTest = testout)
+		bestresultepoch = lastepoch
 		GPU2Host((bestThetas, bestBiases), (d_Theta_est, d_Bias_est))
 	end
 
@@ -721,9 +716,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	end
 
 	testresults = if testset
-		(bestCostTest, costRecordTest, lastepoch)
+		(bestCostTest, costRecordTest, lastepoch, bestresultepoch)
 	else
-		()
+		(bestresultepoch,)
 	end
 
     return (bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch, testresults...)

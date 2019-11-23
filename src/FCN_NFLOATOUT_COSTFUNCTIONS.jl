@@ -278,6 +278,28 @@ function predict(Thetas, biases, X::Matrix{Float32}, resLayers::Int64 = 0)
 	return a[end]
 end
 
+function predict!(Thetas, biases, X::Matrix{Float32}, a::Vector{Matrix{Float32}}, resLayers::Int64 = 0)
+#PREDICT Predict the value of an input given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(X, 1)
+	l = length(Thetas)
+	num_hidden = l-1
+	
+	h = [length(B) for B in biases]
+	hidden_layers = if num_hidden==0
+		Vector{Int64}()
+	else
+		h[1:l-1]
+	end
+	#dropout scale factor
+	# F = (1.0f0 - D)
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
+end
+
 function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0)
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
@@ -329,6 +351,31 @@ function predictMulti(multiParams, X::Matrix{Float32}, resLayers::Int64 = 0)
 		copy(a[end])
 	end
 	for params in multiParams]
+end
+
+function predictMulti!(multiParams, X::Matrix{Float32}, a, outputs, resLayers::Int64 = 0)
+#PREDICT Predict the value of an input given a trained neural network trained with dropout
+#factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
+#that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
+#that applies scaling during training so the network can be used with the same functions
+	# Useful values
+	m = size(X, 1)
+	l = length(multiParams[1][1])
+	num_hidden = l-1
+
+	h = [length(B) for B in multiParams[1][2]]
+	hidden_layers = if num_hidden==0
+		Vector{Int64}()
+	else
+		h[1:l-1]
+	end
+
+	for (i, params) in enumerate(multiParams)
+		Thetas = params[1]
+		biases = params[2]
+		forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
+		outputs[i] .= a[end]
+	end
 end
 
 function predictMultiBatches(multiParams, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0)

@@ -32,6 +32,7 @@ catch
 end
 
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
+include("column_selection_anneal.jl")
 
 function requestCostFunctions()
     @assert (length(costFuncList) == length(costFuncNames))

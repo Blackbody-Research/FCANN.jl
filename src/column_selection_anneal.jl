@@ -597,10 +597,10 @@ function run_stationary_steps(model, input_data, output_data, input_data_copy, a
 			printcheck = false
 		end
 		if printiter && printcheck
-			print("\u001b[$(lines)F") #move cursor to beginning of lines lines+1 lines up
+			print("\u001b[$(lines+4)F") #move cursor to beginning of lines lines+1 lines up
 			print("\u001b[2K") #clear entire line
 			println("Reducing temperature from #$(i-1):$(round(initialtemp, sigdigits = 3)) to #$i:$(round(newtemp, sigdigits = 3)) with thresh:$(round(thresh, digits = 3))")
-			print("\u001b[$(lines)E") #move cursor to beginning of lines lines+1 lines down
+			print("\u001b[$(lines+4)E") #move cursor to beginning of lines lines+1 lines down
 		end
 		tsteps = fill(newtemp, m)
 		initialtemp = newtemp
@@ -626,13 +626,13 @@ function run_stationary_steps(model, input_data, output_data, input_data_copy, a
 			printcheck = false
 		end
 		if printiter && printcheck
-			print("\u001b[$(lines+1)F") #move cursor to beginning of lines lines+1 lines up
+			print("\u001b[$(lines+4)F") #move cursor to beginning of lines lines+1 lines up
 			print("\u001b[2K") #clear entire line
 			println("Confirming local minimum at a temperature of 0.0")
-			print("\u001b[$(lines+1)E") #move cursor to beginning of lines lines+1 lines down
+			print("\u001b[$(lines+4)E") #move cursor to beginning of lines lines+1 lines down
 		end
 		tsteps = fill(0.0, round(Int64, n*log(n)))
-		(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord, tsteps, printstep = printiter&&printcheck, updateinterval = updateinterval, calibrate = false)
+		(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord, tsteps, printstep = printiter, updateinterval = updateinterval, calibrate = false)
 		ar = calc_accept_rate(costsequence)
 		push!(fulltemprecord, (0.0, mean(costsequence), ar))
 		colscheck = length(unique(costsequence)) > 1 #verify that sequence is still fluctuating
@@ -683,7 +683,7 @@ function run_quasistatic_anneal_process(model, input_data, output_data; seed = 1
 
 		seed = rand(UInt32)
 
-		startingcols = newerr_record[end][1]
+		startingcols = newerr_record[end][2]
 		temps = [a[1] for a in temprecord]
 		ARs = [a[3] for a in temprecord]
 		avgerrs = [a[2] for a in temprecord]

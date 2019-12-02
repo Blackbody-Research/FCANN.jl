@@ -1583,7 +1583,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	(record, T, B, Jtrain, outTrain, bestCost, Jtest, outTest, bestCostTest, bestresultepoch)
 end
 
-function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = resLayers, swa = false, printanything=true, initparams=())
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = resLayers, swa = false, printanything=true, initparams=(), ignorebest=false)
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -1628,7 +1628,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	#BLAS.set_num_threads(Sys.CPU_THREADS)	
 	# BLAS.set_num_threads(0)	
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything)
+	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything, ignorebest=ignorebest)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	
@@ -1712,7 +1712,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 		if ID == 1
             Random.seed!(1234 + foo - 1)
         else
-               Random.seed!(ID)
+            Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end
   
@@ -2027,7 +2027,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	return (fullMultiPerformance, bootstrapOut)
 end
 
-function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0) where U <: Matrix{Float32}
+function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0, ignorebest=false) where U <: Matrix{Float32}
 
 	X = if isempty(sampleCols)
 		Xraw
@@ -2093,10 +2093,10 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 		if ID == 1
             Random.seed!(1234 + foo - 1)
         else
-               Random.seed!(ID)
+            Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y),), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y),), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, ignorebest=ignorebest)
 		(T, B)
 	end
 	GC.gc()

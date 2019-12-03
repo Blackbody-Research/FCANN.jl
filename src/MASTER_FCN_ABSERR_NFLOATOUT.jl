@@ -1878,7 +1878,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
 	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, digits = 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX$(swastr)_", costFunc)
 
-	bootstrapOut = pmap(1:num) do foo
+	multiOut = pmap(1:num) do foo
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
 		printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
 		if (nprocs() > 1) & (backend == :CPU)
@@ -1911,9 +1911,10 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             Random.seed!(1234+rand(UInt32)+foo)
         end	
 		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
-		(T, B)
 	end
 	GC.gc()
+	bootstrapOut = [(a[1], a[2]) for a in multiOut]
+	resultepochs = [a[10] for a in multiOut]
 	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
 	writefiles && writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
 	
@@ -2024,7 +2025,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
     printanything && println("saving results to file")
 	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
-	return (fullMultiPerformance, bootstrapOut)
+	return (fullMultiPerformance, bootstrapOut, resultepochs)
 end
 
 function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0, ignorebest=false) where U <: Matrix{Float32}

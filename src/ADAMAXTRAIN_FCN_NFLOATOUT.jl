@@ -391,18 +391,32 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 	# shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(candidatecols))
 	shuffle_cols = Vector{Vector{Int64}}(undef, length(candidatecols))
+	if num == 1
+		for ind in candidatecols
+			v .= view(input_data, :, ind)
+			shuffle!(MersenneTwister(1), v)
+			view(input_copy, :, ind) .= v
+		end
+	end
 	println()
 	println()
 	tlast = time()
 	for (i, c) in enumerate(candidatecols)
 		shufflecols = setdiff(candidatecols, c)
-		err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		if num == 1
+			v .= view(input_copy, :, c)
+			view(input_copy, :, c) .= view(input_data, :, c)
+			err = calcOutputCPU!(input_copy, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers)
+			view(input_copy, :, c) .= v
+		else
+			err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = shufflecols
 		if (i == 1) || (time()-tlast > 2)
 			print("\33[2K\033[A\r")
 			print("\33[2K\033[A\r")
-			println("Finished evaluating shuffled column $c: number $i of $(length(candidatecols))")
+			println("Finished evaluating unshuffled column $c: number $i of $(length(candidatecols))")
 			println("with an error change of $(100*(err/NNerr -1))%")
 			tlast = time()
 		end
@@ -430,11 +444,22 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 	shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
 	shuffle_cols = Vector{Vector{Int64}}(undef, length(shuffleind))
+	if num == 1
+		for ind in fixedshuffle
+			v .= view(input_data, :, ind)
+			shuffle!(MersenneTwister(1), v)
+			view(input_copy, :, ind) .= v
+		end
+	end
 	println()
 	println()
 	tlast = time()
 	for (i, c) in enumerate(shuffleind)
-		err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		if num == 1
+			err = errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c], rng=1, reslayers=reslayers, costFunc=costFunc)
+		else
+			err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = [c; fixedshuffle]
 		if (i == 1) || (time()-tlast > 2)
@@ -445,8 +470,13 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 			tlast = time()
 		end
 	end
+	if num == 1
+		for ind in fixedshuffle
+			view(input_copy, :, ind) .= view(input_data, :, ind)
+		end
+	end
 	if !isempty(fixedshuffle)
-		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
 	else
 		fixederr=NNerr
 	end
@@ -467,24 +497,38 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 	# shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(candidatecols))
 	shuffle_cols = Vector{Vector{Int64}}(undef, length(candidatecols))
+	if num == 1
+		for ind in candidatecols
+			v .= view(input_data, :, ind)
+			shuffle!(MersenneTwister(1), v)
+			view(input_copy, :, ind) .= v
+		end
+	end
 	println()
 	println()
 	tlast = time()
 	for (i, c) in enumerate(candidatecols)
 		shufflecols = setdiff(candidatecols, c)
-		err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		if num == 1
+			v .= view(input_copy, :, c)
+			view(input_copy, :, c) .= view(input_data, :, c)
+			err = calcMultiOutCPU!(input_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers=reslayers)
+			view(input_copy, :, c) .= v
+		else
+			err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = shufflecols
 		if (i == 1) || (time()-tlast > 2)
 			print("\33[2K\033[A\r")
 			print("\33[2K\033[A\r")
-			println("Finished evaluating shuffled column $c: number $i of $(length(candidatecols))")
+			println("Finished evaluating unshuffled column $c: number $i of $(length(candidatecols))")
 			println("with an error change of $(100*(err/NNerr -1))%")
 			tlast = time()
 		end
 	end
 	if !isempty(candidatecols)
-		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
 	else
 		fixederr = NNerr
 	end

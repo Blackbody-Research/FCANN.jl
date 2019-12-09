@@ -512,12 +512,12 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 		if num == 1
 			v .= view(input_copy, :, c)
 			view(input_copy, :, c) .= view(input_data, :, c)
-			err = calcMultiOutCPU!(input_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers=reslayers)
+			_, err, _ = calcMultiOutCPU!(input_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers=reslayers)
 			view(input_copy, :, c) .= v
 		else
 			err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
 		end
-		shuffle_errs[i] = err
+		shuffle_errs[i] = Float64(err)
 		shuffle_cols[i] = shufflecols
 		if (i == 1) || (time()-tlast > 2)
 			print("\33[2K\033[A\r")
@@ -781,7 +781,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false)
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -929,7 +929,7 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	bestresultepoch = 0
 
 	t = 1
-	while (epoch <= N) && (tfail <= patience) && tolpass
+	while (epoch <= minepoch) || ((epoch <= N) && (tfail <= patience) && tolpass)
 	#while epoch <= N
 		#run through an epoch in batches with randomized order
 		for batch in randperm(numBatches)
@@ -974,13 +974,13 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 				costRecordTest[iter + 1] = testout
 			end
 			
-			if ignorebest || (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
+			if (epoch <= minepoch) || ignorebest || (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
 				updateBest!(bestThetas, bestBiases, T_est, B_est)
 				bestCost = currentOut
 				testset && (bestCostTest = testout)
 				bestresultepoch = epoch
 				tfail = 0
-			elseif epoch > 100
+			else
 				tfail += 1
 			end
 

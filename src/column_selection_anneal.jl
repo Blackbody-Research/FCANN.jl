@@ -8,6 +8,8 @@ function maketimestr(t::AbstractFloat)
 	"$hours:$minutes:$(secstr[1:min(4, length(secstr))])"
 end
 
+roundstr(num) = round(num, sigdigits=5)
+
 function printcolsvec(origcolsvec, colsvec, switchind, acc)
 	nmax = length(digits(length(colsvec))) #maximum number of digits for indicator column
 	emax = 30
@@ -80,20 +82,24 @@ function extract_record(err_record)
 	(besterr, errdelt, bestcols) 
 end
 
-function run_temp_calibrate(model, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a, v; seed = 1, colsrecord::RecordType{T} = RecordType{T}(), printiter = true, updateinterval = 2.0, chi = 0.9) where T <: AbstractFloat
-
+function run_temp_calibrate(model, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a, v; seed = 1, colsrecord::RecordType{T} = RecordType{T}(), printiter = true, updateinterval = 2.0, chi = 0.9, multiout=Vector{Matrix{Float32}}()) where T <: AbstractFloat
 	Random.seed!(seed)
 	
 	n = size(input_data, 2)
 
 	initialcols = Set{Int64}()
 
-	err = calcOutputCPU!(input_data, output_data, model[1], model[2], a, costFunc=model[4], resLayers = model[3])
+	if length(model) == 4
+		err = calcOutputCPU!(input_data, output_data, model[1], model[2], a, costFunc=model[4], resLayers = model[3])
+	elseif length(model) == 3
+		_,err,_ = calcMultiOutCPU!(input_data, output_data, model[1], a, multiout, costFunc=model[3], resLayers = model[2])
+	else
+		error("model input is not a valid format")
+	end
 
 
 	println("Beginning temperature calibration with a target select rate of $chi")
-		
-	println("Got error of: $err with no shuffled columns")
+	println("Got error of: $(roundstr(err)) with no shuffled columns")
 	println("--------------------------------------------------------------------")
 	println("Setting up $n columns for step updates")
 	
@@ -112,10 +118,10 @@ function run_temp_calibrate(model, input_data::Matrix{Float32}, output_data::Mat
 	end
 
 	push!(colsrecord, initialcols => err)
-	calibrate_gibbs_temp(model, input_data, output_data, input_data_copy, a, v, initialcols, colsrecord, err; printstep = printiter, updateinterval = updateinterval, chi = chi)
+	calibrate_gibbs_temp(model, input_data, output_data, input_data_copy, a, v, initialcols, colsrecord, err; printstep = printiter, updateinterval = updateinterval, chi = chi, multiout=multiout)
 end
 
-function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a, v, currentcols, colsrecord::RecordType{T}, currenterr; printstep = true, updateinterval = 2.0, chi = 0.9) where T <: AbstractFloat where N
+function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a, v, currentcols, colsrecord::RecordType{T}, currenterr; printstep = true, updateinterval = 2.0, chi = 0.9, multiout=Vector{Matrix{Float32}}()) where T <: AbstractFloat where N
 	
 	##########Set up initial values and print first iteration##############################
 	t_stepstart = time()
@@ -146,7 +152,14 @@ function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::M
 	else
 		union(currentcols, changeind)
 	end
-	(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, currenterr, threshold, T0; rng=1, reslayers=model[3], costFunc = model[4])
+
+	if length(model) == 4
+		(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, currenterr, threshold, T0; rng=1, reslayers=model[3], costFunc = model[4])
+	elseif length(model) == 3
+		(newerr, acc) = evalnewcol(model[1], input_data, output_data, input_data_copy, a, multiout, v, currentcols, changeind, currenterr, threshold, T0; rng=1, reslayers=model[2], costFunc = model[3])
+	else
+		error("model is not a valid format")
+	end
 
 	origcolsvec = [in(c, currentcols) for c in 1:n]
 	colsvec = [in(c, newcols) for c in 1:n]
@@ -159,7 +172,7 @@ function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::M
 	end
 	printcolsvec(origcolsvec, colsvec, changeind, acc)
 	println()
-	println("Current error of $currenterr after first step of calibration")
+	println("Current error of $(roundstr(currenterr)) after first step of calibration")
 
 	###############################Purge record if insufficient memory#######
 	keycheck = haskey(colsrecord, newcols)
@@ -242,7 +255,13 @@ function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::M
 				end
 			end
 		else
-			(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, currenterr, threshold, tsteps[i], reslayers=model[3], costFunc = model[4])
+			if length(model) == 4
+				(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, currenterr, threshold, tsteps[i]; rng=1, reslayers=model[3], costFunc = model[4])
+			elseif length(model) == 3
+				(newerr, acc) = evalnewcol(model[1], input_data, output_data, input_data_copy, a, multiout, v, currentcols, changeind, currenterr, threshold, tsteps[i]; rng=1, reslayers=model[2], costFunc = model[3])
+			else
+				error("model is not a valid format")
+			end
 			push!(colsrecord, newcols => newerr)
 		end
 
@@ -277,8 +296,8 @@ function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::M
 			colsvec = [in(c, newcols) for c in 1:n]
 			printcolsvec(origcolsvec, colsvec, changeind, acc)
 			println()
-			println("Current error: $currenterr, accept rate:  $accept_rate, dictionary hit rate: $dicthitrate")
-			println("Current temperature = $(tsteps[i+1]) after $i steps of calibration out of $m")
+			println("Current error: $(roundstr(currenterr)), accept rate:  $(roundstr(accept_rate)), dictionary hit rate: $(roundstr(dicthitrate))")
+			println("Current temperature = $(roundstr(tsteps[i+1])) after $i steps of calibration out of $m")
 		end
 
 		#in second half try resetting values to get more accurate calibration
@@ -346,7 +365,41 @@ function evalnewcol(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, inpu
 	return errs, (acc >= threshold)
 end
 
-function run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord::RecordType, tsteps; printstep = true, updateinterval = 2.0, accept_rate = 0.0, dicthitrate = 0.0, itertime = 0.0, calibrate = true)
+function evalnewcol(multiparams, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a::Vector{Matrix{Float32}}, multiout::Vector{Matrix{Float32}}, v, shuffleinds::Set{Int64}, changeind::Int64, currenterr, threshold, temp; rng=1234, reslayers=0, costFunc = "sqErr")
+	
+	newcol = !in(changeind, shuffleinds)
+	if newcol
+		v .= view(input_data, :, changeind)
+		#fill shuffle column if it is being added
+		shuffle!(MersenneTwister(rng), v)
+		view(input_data_copy, :, changeind) .= v
+	else
+		v .= view(input_data_copy, :, changeind)
+		view(input_data_copy, :, changeind) .= view(input_data, :, changeind)
+	end
+
+	_,errs,_ = calcMultiOutCPU!(input_data_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers = reslayers)
+
+	acc = if errs < currenterr
+		1.0
+	else
+		exp(-(errs-currenterr)/temp)
+	end
+
+	
+	#restore input_data_copy to initial state if step is rejected
+	if acc < threshold
+		if newcol
+			view(input_data_copy, :, changeind) .= view(input_data, :, changeind)
+		else
+			view(input_data_copy, :, changeind) .= v
+		end
+	end
+
+	return errs, (acc >= threshold)
+end
+
+function run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord::RecordType, tsteps; printstep = true, updateinterval = 2.0, accept_rate = 0.0, dicthitrate = 0.0, itertime = 0.0, calibrate = true, multiout=Vector{Matrix{Float32}}())
 	
 	##############################Initialize Values###############################################
 	f = 0.99 #controls how long running average is for iter time and accept and repeat rate
@@ -376,7 +429,14 @@ function run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, c
 		newcols = union(currentcols, changeind)
 		changestring = "+$changeind"
 	end
-	(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, err, threshold, T0, reslayers=model[3], costFunc = model[4])
+
+	if length(model) == 4
+		(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, err, threshold, T0, reslayers=model[3], costFunc = model[4])
+	elseif length(model) == 3
+		(newerr, acc) = evalnewcol(model[1], input_data, output_data, input_data_copy, a, multiout, v, currentcols, changeind, err, threshold, T0, reslayers=model[2], costFunc = model[3])
+	else
+		error("model is not a valid format")
+	end
 
 	if printstep
 		lines = ceil(Int64, n/30) + 3
@@ -387,7 +447,7 @@ function run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, c
 		colsvec = [in(c, newcols) for c in 1:n]
 		printcolsvec(origcolsvec, colsvec, changeind, acc)
 		println()
-		println("Current error of $err after no steps")
+		println("Current error of $(roundstr(err)) after no steps")
 	end
 
 	
@@ -472,7 +532,13 @@ function run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, c
 				end
 			end
 		else
-			(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, err, threshold, tsteps[i], reslayers=model[3], costFunc = model[4])
+			if length(model) == 4
+				(newerr, acc) = evalnewcol(model[1], model[2], input_data, output_data, input_data_copy, a, v, currentcols, changeind, err, threshold, tsteps[i], reslayers=model[3], costFunc = model[4])
+			elseif length(model) == 3
+				(newerr, acc) = evalnewcol(model[1], input_data, output_data, input_data_copy, a, multiout, v, currentcols, changeind, err, threshold, tsteps[i], reslayers=model[2], costFunc = model[3])
+			else
+				error("model is not a valid format")
+			end
 			push!(colsrecord, newcols => newerr)
 		end
 		
@@ -507,11 +573,11 @@ function run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, c
 			colsvec = [in(c, newcols) for c in 1:n]
 			printcolsvec(origcolsvec, colsvec, changeind, acc)
 			println()
-			println("Current error: $err, accept rate:  $accept_rate, dictionary hit rate: $dicthitrate")
+			println("Current error: $(roundstr(err)), accept rate:  $(roundstr(accept_rate)), dictionary hit rate: $(roundstr(dicthitrate))")
 			if i > calsteps
-				println("On step $i of $(length(tsteps)) temperature = $currenttemp, T0 = $T0 after $calsteps steps of calibration")
+				println("On step $i of $(length(tsteps)) temperature = $(roundstr(currenttemp)), T0 = $(roundstr(T0)) after $calsteps steps of calibration")
 			else
-				println("On step $i of $(length(tsteps)) temperature = $currenttemp, waiting $calsteps steps for T0 calibration")
+				println("On step $i of $(length(tsteps)) temperature = $(roundstr(currenttemp)), waiting $calsteps steps for T0 calibration")
 			end
 		end
 
@@ -545,7 +611,7 @@ function run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, c
 	return (err_record, colsrecord, temprecord, costsequence, currentcols)
 end
 
-function run_stationary_steps(model, input_data, output_data, input_data_copy, a, v, startingcols, startingerr, initialcolsrecord, initialtemp, C0; seed = 1, delt = delt=0.001, updateinterval=2.0, printiter=true, n = size(input_data, 2), m = m = round(Int64, n*log(n)))
+function run_stationary_steps(model, input_data, output_data, input_data_copy, a, v, startingcols, startingerr, initialcolsrecord, initialtemp, C0; seed = 1, delt = delt=0.001, updateinterval=2.0, printiter=true, n = size(input_data, 2), m = m = round(Int64, n*log(n)), multiout=Vector{Matrix{Float32}}())
 	
 	Random.seed!(seed)
 	
@@ -567,7 +633,7 @@ function run_stationary_steps(model, input_data, output_data, input_data_copy, a
 	#add line padding for print update if print is turned on
 	lines = ceil(Int64, n/30) + 3
 	if printiter
-		println("On initial step using starting temperature of $initialtemp")
+		println("On initial step using starting temperature of $(roundstr(initialtemp))")
 		for j in 1:lines-1
 			println()
 		end
@@ -575,7 +641,7 @@ function run_stationary_steps(model, input_data, output_data, input_data_copy, a
 		println("Starting $m steps of sampling process without printing updates")
 	end
 
-	(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, startingcols, [("", startingcols, startingerr)], push!(initialcolsrecord, startingcols => startingerr), tsteps, printstep = printiter, updateinterval = updateinterval, calibrate = false)
+	(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, startingcols, [("", startingcols, startingerr)], push!(initialcolsrecord, startingcols => startingerr), tsteps, printstep = printiter, updateinterval = updateinterval, calibrate = false, multiout=multiout)
 	Cs = mean(costsequence)
 	ar = calc_accept_rate(costsequence)
 
@@ -604,7 +670,7 @@ function run_stationary_steps(model, input_data, output_data, input_data_copy, a
 		end
 		tsteps = fill(newtemp, m)
 		initialtemp = newtemp
-		(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord, tsteps, printstep = printiter, updateinterval = updateinterval, calibrate = false)
+		(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord, tsteps, printstep = printiter, updateinterval = updateinterval, calibrate = false, multiout=multiout)
 
 		ar = calc_accept_rate(costsequence)
 		push!(fulltemprecord, (newtemp, mean(costsequence), ar))
@@ -632,7 +698,7 @@ function run_stationary_steps(model, input_data, output_data, input_data_copy, a
 			print("\u001b[$(lines+4)E") #move cursor to beginning of lines lines+1 lines down
 		end
 		tsteps = fill(0.0, round(Int64, n*log(n)))
-		(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord, tsteps, printstep = printiter, updateinterval = updateinterval, calibrate = false)
+		(err_record, colsrecord, temprecord, costsequence, currentcols) = run_gibbs_step(model, input_data, output_data, input_data_copy, a, v, currentcols, err_record, colsrecord, tsteps, printstep = printiter, updateinterval = updateinterval, calibrate = false, multiout=multiout)
 		ar = calc_accept_rate(costsequence)
 		push!(fulltemprecord, (0.0, mean(costsequence), ar))
 		colscheck = length(unique(costsequence)) > 1 #verify that sequence is still fluctuating
@@ -645,8 +711,19 @@ function run_quasistatic_anneal_process(model, input_data, output_data; seed = 1
 
 	(m, n) = size(input_data)
 	input_data_copy = copy(input_data)
-	a = form_activations(model[1], m)
+	a = if length(model) == 4
+		form_activations(model[1], m)
+	else
+		form_activations(model[1][1][1], m)
+	end
+
 	v = Vector{Float32}(undef, m) 
+	if length(model) == 3
+		num = length(model[1])
+		multiout = [copy(a[end]) for _ in 1:num]
+	else
+		multiout = Vector{Matrix{Float32}}()
+	end
 	
 
 	@assert m == length(output_data) "X and y must have the same number of rows"
@@ -654,7 +731,7 @@ function run_quasistatic_anneal_process(model, input_data, output_data; seed = 1
 
 	namePrefix = "QuasistaticAnnealReheatShuffleNNErrs"
 	
-	(err_record, colsrecord, tsteps, accs) = run_temp_calibrate(model, input_data, output_data, input_data_copy, a, v, seed = seed, colsrecord=initialcolsrecord, printiter = printiter, updateinterval = updateinterval, chi = chi)
+	(err_record, colsrecord, tsteps, accs) = run_temp_calibrate(model, input_data, output_data, input_data_copy, a, v, seed = seed, colsrecord=initialcolsrecord, printiter = printiter, updateinterval = updateinterval, chi = chi, multiout=multiout)
 	
 	l = length(accs)
 	accrate = mean(accs[round(Int64, l/2):end])
@@ -677,7 +754,7 @@ function run_quasistatic_anneal_process(model, input_data, output_data; seed = 1
 	while newbesterr < besterr
 		besterr = newbesterr
 		t_start = time()
-		(newerr_record, colsrecord, temprecord) = run_stationary_steps(model, input_data, output_data, input_data_copy, a, v, startingcols, besterr, colsrecord, newtemp, C0, seed = seed, delt = delt)
+		(newerr_record, colsrecord, temprecord) = run_stationary_steps(model, input_data, output_data, input_data_copy, a, v, startingcols, besterr, colsrecord, newtemp, C0, seed = seed, delt = delt, multiout=multiout)
 
 		# run_stationary_steps(model, input_data, output_data, input_data_copy, a, v, startingcols, startingerr, initialcolsrecord, initialtemp, C0; seed = 1, delt = delt=0.001, updateinterval=2.0, printiter=true, n = size(input_data, 2), m = m = round(Int64, n*log(n)))
 

@@ -1841,7 +1841,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	return (fullMultiPerformance, bootstrapOut)
 end
 
-function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0) where U <: Matrix{Float32}
+function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0, ignorebest=false, lockepochs=false, minepoch=0) where U <: Matrix{Float32}
 
 	X, Xtest = if isempty(sampleCols)
 		(Xraw, Xtestraw)
@@ -1878,20 +1878,12 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
 	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, digits = 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX$(swastr)_", costFunc)
 
-	multiOut = pmap(1:num) do foo
-		#BLAS.set_num_threads(Sys.CPU_THREADS)
-		printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
-		if (nprocs() > 1) & (backend == :CPU)
-			BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS/4)), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
-		else
-			BLAS.set_num_threads(blasthreads)
-		end
-
+	if lockepochs
 		if ID == 1
-            Random.seed!(1234 + foo - 1)
+            Random.seed!(1234)
         else
             Random.seed!(ID)
-            Random.seed!(1234+rand(UInt32)+foo)
+            Random.seed!(1234+rand(UInt32)+1)
         end
   
 		T0, B0 = if isempty(multiparams)
@@ -1901,16 +1893,86 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 				initializeparams_saxe(M, hidden, O, reslayers)
 			end		
 		else
-			multiparams[foo]
+			multiparams[1]
 		end
 
 		if ID == 1
-            Random.seed!(1234 + foo - 1)
+            Random.seed!(1234)
         else
             Random.seed!(ID)
-            Random.seed!(1234+rand(UInt32)+foo)
+            Random.seed!(1234+rand(UInt32)+1)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch)
+		multiOut1 = (T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch)
+		multiOut2 = pmap(2:num) do foo
+			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
+			if (nprocs() > 1) & (backend == :CPU)
+				BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS/4)), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
+			else
+				BLAS.set_num_threads(blasthreads)
+			end
+
+			if ID == 1
+	            Random.seed!(1234 + foo - 1)
+	        else
+	            Random.seed!(ID)
+	            Random.seed!(1234+rand(UInt32)+foo)
+	        end
+	  
+			T0, B0 = if isempty(multiparams)
+				if occursin("Log", costFunc)
+					initializeparams_saxe(M, hidden, 2*O, reslayers)
+				else
+					initializeparams_saxe(M, hidden, O, reslayers)
+				end		
+			else
+				multiparams[foo]
+			end
+
+			if ID == 1
+	            Random.seed!(1234 + foo - 1)
+	        else
+	            Random.seed!(ID)
+	            Random.seed!(1234+rand(UInt32)+foo)
+	        end	
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, bestresultepoch, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=true)
+		end
+		multiOut = [multiOut1; multiOut2]
+	else
+		multiOut = pmap(1:num) do foo
+			#BLAS.set_num_threads(Sys.CPU_THREADS)
+			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
+			if (nprocs() > 1) & (backend == :CPU)
+				BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS/4)), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
+			else
+				BLAS.set_num_threads(blasthreads)
+			end
+
+			if ID == 1
+	            Random.seed!(1234 + foo - 1)
+	        else
+	            Random.seed!(ID)
+	            Random.seed!(1234+rand(UInt32)+foo)
+	        end
+	  
+			T0, B0 = if isempty(multiparams)
+				if occursin("Log", costFunc)
+					initializeparams_saxe(M, hidden, 2*O, reslayers)
+				else
+					initializeparams_saxe(M, hidden, O, reslayers)
+				end		
+			else
+				multiparams[foo]
+			end
+
+			if ID == 1
+	            Random.seed!(1234 + foo - 1)
+	        else
+	            Random.seed!(ID)
+	            Random.seed!(1234+rand(UInt32)+foo)
+	        end	
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch)
+		end
 	end
 	GC.gc()
 	bootstrapOut = [(a[1], a[2]) for a in multiOut]
@@ -2065,7 +2127,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 
 	filename = 	string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", round(alpha, digits = 3), "_alpha_", formIndicString(R, lambda, c, dropout), "ADAMAX$(swastr)_", costFunc)
 
-	bootstrapOut = pmap(1:num) do foo
+	multiout = pmap(1:num) do foo
 		printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
 		if (nprocs() > 1) & (backend == :CPU)
@@ -2097,9 +2159,10 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
             Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y),), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, ignorebest=ignorebest)
-		(T, B)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y),), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, ignorebest=ignorebest, swa=swa)
 	end
+	bestepochs = [a[7] for a in multiout]
+	bootstrapOut = [(a[1], a[2]) for a in multiout]
 	GC.gc()
 	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
 	writefiles && writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
@@ -2176,7 +2239,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 
     printanything && println("saving results to file")
 	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
-	return (fullMultiPerformance, bootstrapOut)
+	return (fullMultiPerformance, bootstrapOut, bestepochs)
 end
 
 function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList = [], adv = false, dropout=0.0f0, costFunc = "absErr", binInput = false)

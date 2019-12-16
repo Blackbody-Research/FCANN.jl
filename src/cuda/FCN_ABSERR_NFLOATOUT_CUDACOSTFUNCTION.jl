@@ -433,7 +433,7 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
 			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
 		else
-			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, deltas[i])
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i])
 			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) 
 		end
 

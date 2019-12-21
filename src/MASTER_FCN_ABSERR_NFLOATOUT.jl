@@ -2029,7 +2029,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		[]
 	end
 
-    fullMultiPerformance = mapreduce(vcat, 1:length(bootstrapOutTrain)) do i
+    fullMultiErrors = map(1:length(bootstrapOutTrain)) do i
         #calculate average network output     
         line = if occursin("Log", costFunc)
             # combinedOutputTrainPre = [reduce(+, [a[:, 1:O] for a in bootstrapOutTrain[1:i]])/i sqrt.(reduce(+, [a[:, O+1:2*O].^2 for a in bootstrapOutTrain2[1:i]]))]  
@@ -2057,7 +2057,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
 
-            [i Jtrain[1] errorEstTrain Jtest[1] errorEstTest Jtrain[2] Jtest[2]]
+            ([i Jtrain[1] errorEstTrain Jtest[1] errorEstTest Jtrain[2] Jtest[2]], combinedOutputTrain, combinedOutputTest)
         else
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
@@ -2075,11 +2075,14 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
 
-            [i Jtrain errorEstTrain Jtest errorEstTest]
+            ([i Jtrain errorEstTrain Jtest errorEstTest], combinedOutputTrain, combinedOutputTest)
         end
         printanything && println(string("Done with networks 1 to ", i, " out of ", length(bootstrapOutTrain)))
         line
     end 
+
+    fullMultiPerformance = mapreduce(a -> a[1], vcat, fullMultiErrors)
+
     testerrs = fullMultiPerformance[:, 4]
     (besterr, bestind) = findmin(testerrs)
     println("Completed training networks with parameters: $numEpochs epochs, $(length(hidden)) layers of size $(isempty(hidden) ? 0 : hidden[1]), $c maxnorm, $R decay rate, $alpha alpha, $dropout dropout, and $reslayers reslayer size")
@@ -2087,7 +2090,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
     printanything && println("saving results to file")
 	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
-	return (fullMultiPerformance, bootstrapOut, resultepochs)
+	return (fullMultiPerformance, bootstrapOut, resultepochs, fullMultiErrors[end][1], fullMultiErrors[end][2])
 end
 
 function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0, ignorebest=false) where U <: Matrix{Float32}

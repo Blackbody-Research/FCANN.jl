@@ -2090,7 +2090,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
     printanything && println("saving results to file")
 	writefiles && writedlm(string(ID, "_multiPerformance_", filename, ".csv"), [header; fullMultiPerformance])			
-	return (fullMultiPerformance, bootstrapOut, resultepochs, fullMultiErrors[end][1], fullMultiErrors[end][2])
+	return (fullMultiPerformance, bootstrapOut, resultepochs, fullMultiErrors[end][2], fullMultiErrors[end][3])
 end
 
 function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0, ignorebest=false) where U <: Matrix{Float32}

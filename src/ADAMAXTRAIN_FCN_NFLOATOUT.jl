@@ -127,9 +127,9 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
 			end
 			numBatches = ceil(Int64, m/maxB)
-			batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+			batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
 			out1 = predictBatches(T, B, batchInputs, resLayers)
-			out2 = predict(T, B, view(input_data, (numBatches-1)*maxB+1:m, :), resLayers)
+			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers)
 			[out1; out2]
 		end
 
@@ -209,9 +209,9 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 					println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
 				end
 				numBatches = ceil(Int64, m/maxB)
-				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
 				out1 = predictMultiBatches(multiParams, batchInputs, resLayers)
-				out2 = predictMulti(multiParams, view(input_data, (numBatches-1)*maxB+1:m, :), resLayers)
+				out2 = predictMulti(multiParams, input_data[(numBatches-1)*maxB+1:m, :], resLayers)
 				map((a, b) -> [a; b], out1, out2)
 			end
 		end

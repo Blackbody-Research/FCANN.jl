@@ -334,7 +334,7 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 	v = Vector{Float32}(undef, m)
 	input_copy = copy(input_data)
 
-	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers)
+	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers)[1]
 	shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
 	shuffle_cols = Vector{Vector{Int64}}(undef, length(shuffleind))
@@ -350,9 +350,9 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 	tlast = time()
 	for (i, c) in enumerate(shuffleind)
 		if num == 1
-			err = errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c], rng=1, reslayers=reslayers, costFunc=costFunc)
+			err = errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c], rng=1, reslayers=reslayers, costFunc=costFunc)[1]
 		else
-			err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+			err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])[1]
 		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = [c; fixedshuffle]
@@ -372,7 +372,7 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 	end
 
 	if !isempty(fixedshuffle)
-		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc)[1] for j in 1:num])
 	else
 		fixederr = NNerr
 	end
@@ -1016,7 +1016,7 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
 			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, digits=1)
 			if testset
-				println(string("On epoch ", epoch, " out of ", numEpochs, " best train and test cost is ", (round(bestCost, sigdigits=5), round(bestCostTest, sigdigits=5))))
+				println(string("On epoch ", epoch, " out of ", N, " best train and test cost is ", (round(bestCost, sigdigits=5), round(bestCostTest, sigdigits=5))))
 			else
 				println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, digits=8)))
 			end

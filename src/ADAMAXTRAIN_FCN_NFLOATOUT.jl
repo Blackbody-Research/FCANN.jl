@@ -927,6 +927,7 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	tfail = 0
 	tolpass = true
 	bestresultepoch = 0
+	nModels = 0
 
 	t = 1
 	while (epoch <= minepoch) || ((epoch <= N) && (tfail <= patience) && tolpass)

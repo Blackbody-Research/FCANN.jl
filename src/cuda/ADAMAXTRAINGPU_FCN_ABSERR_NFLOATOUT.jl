@@ -173,21 +173,21 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 end
 
-function errshufflecol(d_T::Vector{CUDAArray} d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, d_input_data::CUDAArray, d_output_data::CUDAArray, d_a::Vector{CUDAArray}, v::Vector, d_v::CUDAArray, ind; rng=1, reslayers=0, costFunc = "sqErr")
+function errshufflecol(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, d_input_data::CUDAArray, d_output_data::CUDAArray, d_a::Vector{CUDAArray}, v::Vector, d_v::CUDAArray, ind; rng=1, reslayers=0, costFunc = "sqErr")
 
 
 	#fill v with column to shuffle
 	v .= view(input_data, :, ind)
 	shuffle!(MersenneTwister(rng), v)
-	memcpy!(v, d_v)
-	run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
+	memcpy!(d_v, v)
+	run_kernel_1D(swap_matrix_col, length(v), ind, d_input_data, d_v)
 
-	hidden_layers = [a.size[1] for a in d_B]
+	hidden_layers = [a.size[1] for a in d_B][1:end-1]
 
 	errs = nnCostFunctionNOGRAD(d_T, d_B, size(input_data, 2), 1, hidden_layers::Vector, size(input_data, 1), d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers = reslayers)
 	
 	#restore input_data_copy to initial state
-	run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
+	run_kernel_1D(swap_matrix_col, length(v), ind, d_input_data, d_v)
 
 	return errs
 end
@@ -196,10 +196,15 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	(m, n) = size(input_data)
 	d_a = form_activations(d_T, m)
 	v = Vector{Float32}(undef, m)
+	d_v = cuda_allocate(v)
 	d_input_data = cuda_allocate(input_data)
 	d_output_data = cuda_allocate(output_data)
 
-	NNerr = nnCostFunctionNOGRAD(d_T, d_B, size(input_data, 2), 1, hidden_layers::Vector, size(input_data, 1), d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers= reslayers)
+	hidden_layers = [a.size[1] for a in d_B][1:end-1]
+	# println(hidden_layers)
+
+	NNerr = nnCostFunctionNOGRAD(d_T, d_B, n, 1, hidden_layers, m, d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers= reslayers)
+	# println("NNerr = $NNerr")
 
 	shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
@@ -208,7 +213,7 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 		for ind in fixedshuffle
 			v .= view(input_data, :, ind)
 			shuffle!(MersenneTwister(1), v)
-			memcpy!(v, d_v)
+			memcpy!(d_v, v)
 			run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
 		end
 	end
@@ -218,6 +223,7 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	for (i, c) in enumerate(shuffleind)
 		if num == 1
 			err = errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=1, reslayers=reslayers, costFunc=costFunc)
+			# println("new err = $err")
 		else
 			err = maximum([errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
 		end

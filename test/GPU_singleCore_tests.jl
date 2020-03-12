@@ -77,6 +77,13 @@ else
     println("TEST PASSED")
     println()
 
+    println("Calculating feature impacts")
+    d_T = FCANN.device_allocate(T)
+    d_B = FCANN.device_allocate(B)
+
+    calcfeatureimpact(d_T, d_B, Xtest, ytest, num=1)
+    calcfeatureimpact(d_T, d_B, Xtest, ytest, num=2)
+
     println("Training with ", hidden, " hidden layers from previous endpoint")
     record, T, B, a, b, bestCost = fullTrain(name, 150, 1024, hidden, 0.0f0, Inf, 0.0001f0, 0.1f0, 2, startID = 1,writeFiles=false)
     @test(bestCost < record[1])

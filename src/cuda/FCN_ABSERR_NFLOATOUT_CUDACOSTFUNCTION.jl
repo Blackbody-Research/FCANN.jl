@@ -3,7 +3,13 @@ using NVIDIALibraries, NVIDIALibraries.DeviceArray
 @using_nvidialib_settings 
 
 costfunc_kernel_names = ("fill_cols", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "tanhActivation")
-algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP
+
+#for cuda version 8 tensor ops are not available so default to regular GEMM algorithm
+algo = try
+	CUBLAS_GEMM_DEFAULT_TENSOR_OP
+catch
+	CUBLAS_GEMM_DFALT
+end
 
 function cu_module_load()
 	#------use nvcc to compile .ptx files from .cu kernels and load module------------

@@ -435,7 +435,7 @@ function updateAvg!(nModels, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_T
 	cuCtxSynchronize()
 end
 
-function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0)
+function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=())
 #train on a GPU fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
@@ -495,16 +495,25 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
     total_ops = fops + bops + pops
 
-	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
-	
-	batchInputs = device_allocate(inputbatchData)
-	batchOutputs = device_allocate(outputbatchData)
-
-	if testset
-		d_testinput = cuda_allocate(input_test)
-		d_testoutput = cuda_allocate(output_test)
-	end
+	if isempty(prepdata)
+		(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
 		
+		batchInputs = device_allocate(inputbatchData)
+		batchOutputs = device_allocate(outputbatchData)
+
+		if testset
+			d_testinput = cuda_allocate(input_test)
+			d_testoutput = cuda_allocate(output_test)
+		end
+	else
+		batchInputs = prepdata[1]
+		batchOutputs = prepdata[2]
+		if testset
+			d_testinput = prepdata[3]
+			d_testoutput = prepdata[4]
+		end
+	end
+
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
 
@@ -531,14 +540,21 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	#create a vector to store the squared sum of each row in the theta matricies
 	d_normVecParams = map(a -> cuda_allocate(zeros(Float32, a)), [hidden_layers; n2])
 	
+	
 	#initialize activation gradients on device
-	tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
-	d_tanh_grad_zBATCH = device_allocate(tanh_grad_zBATCH)
-	
-	#initialize activations and deltas on device
-	d_aBATCH = form_activations(d_Thetas, batchSize)
-	d_deltasBATCH = form_activations(d_Thetas, batchSize)
-	
+	if isempty(prepactivations)
+		tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
+		d_tanh_grad_zBATCH = device_allocate(tanh_grad_zBATCH)
+		
+		#initialize activations and deltas on device
+		d_aBATCH = form_activations(d_Thetas, batchSize)
+		d_deltasBATCH = form_activations(d_Thetas, batchSize)
+	else
+		d_tanh_grad_zBATCH = prepactivations[1]
+		d_aBATCH = prepactivations[2]
+		d_deltasBATCH = prepactivations[3]
+	end
+		
 	d_onesVecBATCH = cuda_allocate(ones(Float32, batchSize))
 	
 	numLayers = length(T0)

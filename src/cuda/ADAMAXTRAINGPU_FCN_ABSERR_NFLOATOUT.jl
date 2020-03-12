@@ -173,6 +173,81 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 end
 
+function errshufflecol(d_T::Vector{CUDAArray} d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, d_input_data::CUDAArray, d_output_data::CUDAArray, d_a::Vector{CUDAArray}, v::Vector, d_v::CUDAArray, ind; rng=1, reslayers=0, costFunc = "sqErr")
+
+
+	#fill v with column to shuffle
+	v .= view(input_data, :, ind)
+	shuffle!(MersenneTwister(rng), v)
+	memcpy!(v, d_v)
+	run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
+
+	hidden_layers = [a.size[1] for a in d_B]
+
+	errs = nnCostFunctionNOGRAD(d_T, d_B, size(input_data, 2), 1, hidden_layers::Vector, size(input_data, 1), d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers = reslayers)
+	
+	#restore input_data_copy to initial state
+	run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
+
+	return errs
+end
+
+function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[])
+	(m, n) = size(input_data)
+	d_a = form_activations(d_T, m)
+	v = Vector{Float32}(undef, m)
+	d_input_data = cuda_allocate(input_data)
+	d_output_data = cuda_allocate(output_data)
+
+	NNerr = nnCostFunctionNOGRAD(d_T, d_B, size(input_data, 2), 1, hidden_layers::Vector, size(input_data, 1), d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers= reslayers)
+
+	shuffleind = setdiff(1:n, fixedshuffle)
+	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
+	shuffle_cols = Vector{Vector{Int64}}(undef, length(shuffleind))
+	if num == 1
+		for ind in fixedshuffle
+			v .= view(input_data, :, ind)
+			shuffle!(MersenneTwister(1), v)
+			memcpy!(v, d_v)
+			run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
+		end
+	end
+	println()
+	println()
+	tlast = time()
+	for (i, c) in enumerate(shuffleind)
+		if num == 1
+			err = errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=1, reslayers=reslayers, costFunc=costFunc)
+		else
+			err = maximum([errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		end
+		shuffle_errs[i] = err
+		shuffle_cols[i] = [c; fixedshuffle]
+		if (i == 1) || (time()-tlast > 2)
+			print("\33[2K\033[A\r")
+			print("\33[2K\033[A\r")
+			println("Finished evaluating shuffled column $c: number $i of $(length(shuffleind))")
+			println("with an error change of $(100*(err - NNerr)/abs(NNerr))%")
+			tlast = time()
+		end
+	end
+
+	if num == 1
+		for ind in fixedshuffle
+			view(input_copy, :, ind) .= view(input_data, :, ind)
+		end
+	end
+
+	if !isempty(fixedshuffle)
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc)[1] for j in 1:num])
+	else
+		fixederr = NNerr
+	end
+	featureimpact = 100 .*(shuffle_errs .- NNerr) ./ abs(NNerr)
+	sortinds = reverse(sortperm(featureimpact))
+	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
+end
+
 function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory

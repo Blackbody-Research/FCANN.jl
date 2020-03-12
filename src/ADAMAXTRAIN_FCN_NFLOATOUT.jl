@@ -781,7 +781,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0)
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=())
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -841,14 +841,25 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
     total_ops = fops + bops + pops
 
-	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
-		
+    if isempty(prepdata)
+		(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
+	else
+		(inputbatchData, outputbatchData) = prepdata
+	end
+
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
 
-	tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
-	aBATCH = form_activations(T0, batchSize)
-	deltasBATCH = form_activations(T0, batchSize)
+	if isempty(prepactivations)
+		tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
+		aBATCH = form_activations(T0, batchSize)
+		deltasBATCH = form_activations(T0, batchSize)
+	else
+		tanh_grad_zBATCH = prepactivations[1]
+		aBATCH = prepactivations[2]
+		deltasBATCH = prepactivations[3]
+	end
+
 	Theta_grads = deepcopy(T0) 
 	Bias_grads = deepcopy(B0)
 	onesVecBATCH = ones(Float32, batchSize)

@@ -173,6 +173,87 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 end
 
+function errshufflecol(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, d_input_data::CUDAArray, d_output_data::CUDAArray, d_a::Vector{CUDAArray}, v::Vector, d_v::CUDAArray, ind; rng=1, reslayers=0, costFunc = "sqErr")
+
+
+	#fill v with column to shuffle
+	v .= view(input_data, :, ind)
+	shuffle!(MersenneTwister(rng), v)
+	memcpy!(d_v, v)
+	run_kernel_1D(swap_matrix_col, length(v), ind, d_input_data, d_v)
+
+	hidden_layers = [a.size[1] for a in d_B][1:end-1]
+
+	errs = nnCostFunctionNOGRAD(d_T, d_B, size(input_data, 2), 1, hidden_layers::Vector, size(input_data, 1), d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers = reslayers)
+	
+	#restore input_data_copy to initial state
+	run_kernel_1D(swap_matrix_col, length(v), ind, d_input_data, d_v)
+
+	return errs
+end
+
+function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[])
+	(m, n) = size(input_data)
+	d_a = form_activations(d_T, m)
+	v = Vector{Float32}(undef, m)
+	d_v = cuda_allocate(v)
+	d_input_data = cuda_allocate(input_data)
+	d_output_data = cuda_allocate(output_data)
+
+	hidden_layers = [a.size[1] for a in d_B][1:end-1]
+	# println(hidden_layers)
+
+	NNerr = nnCostFunctionNOGRAD(d_T, d_B, n, 1, hidden_layers, m, d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers= reslayers)
+	# println("NNerr = $NNerr")
+
+	shuffleind = setdiff(1:n, fixedshuffle)
+	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
+	shuffle_cols = Vector{Vector{Int64}}(undef, length(shuffleind))
+	if num == 1
+		for ind in fixedshuffle
+			v .= view(input_data, :, ind)
+			shuffle!(MersenneTwister(1), v)
+			memcpy!(d_v, v)
+			run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
+		end
+	end
+	println()
+	println()
+	tlast = time()
+	for (i, c) in enumerate(shuffleind)
+		if num == 1
+			err = errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=1, reslayers=reslayers, costFunc=costFunc)
+			# println("new err = $err")
+		else
+			err = maximum([errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+		end
+		shuffle_errs[i] = err
+		shuffle_cols[i] = [c; fixedshuffle]
+		if (i == 1) || (time()-tlast > 2)
+			print("\33[2K\033[A\r")
+			print("\33[2K\033[A\r")
+			println("Finished evaluating shuffled column $c: number $i of $(length(shuffleind))")
+			println("with an error change of $(100*(err - NNerr)/abs(NNerr))%")
+			tlast = time()
+		end
+	end
+
+	if num == 1
+		for ind in fixedshuffle
+			view(input_copy, :, ind) .= view(input_data, :, ind)
+		end
+	end
+
+	if !isempty(fixedshuffle)
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc)[1] for j in 1:num])
+	else
+		fixederr = NNerr
+	end
+	featureimpact = 100 .*(shuffle_errs .- NNerr) ./ abs(NNerr)
+	sortinds = reverse(sortperm(featureimpact))
+	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
+end
+
 function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
@@ -435,7 +516,7 @@ function updateAvg!(nModels, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_T
 	cuCtxSynchronize()
 end
 
-function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0)
+function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=())
 #train on a GPU fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
@@ -495,16 +576,25 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
     total_ops = fops + bops + pops
 
-	(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
-	
-	batchInputs = device_allocate(inputbatchData)
-	batchOutputs = device_allocate(outputbatchData)
-
-	if testset
-		d_testinput = cuda_allocate(input_test)
-		d_testoutput = cuda_allocate(output_test)
-	end
+	if isempty(prepdata)
+		(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
 		
+		batchInputs = device_allocate(inputbatchData)
+		batchOutputs = device_allocate(outputbatchData)
+
+		if testset
+			d_testinput = cuda_allocate(input_test)
+			d_testoutput = cuda_allocate(output_test)
+		end
+	else
+		batchInputs = prepdata[1]
+		batchOutputs = prepdata[2]
+		if testset
+			d_testinput = prepdata[3]
+			d_testoutput = prepdata[4]
+		end
+	end
+
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
 
@@ -531,14 +621,21 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	#create a vector to store the squared sum of each row in the theta matricies
 	d_normVecParams = map(a -> cuda_allocate(zeros(Float32, a)), [hidden_layers; n2])
 	
+	
 	#initialize activation gradients on device
-	tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
-	d_tanh_grad_zBATCH = device_allocate(tanh_grad_zBATCH)
-	
-	#initialize activations and deltas on device
-	d_aBATCH = form_activations(d_Thetas, batchSize)
-	d_deltasBATCH = form_activations(d_Thetas, batchSize)
-	
+	if isempty(prepactivations)
+		tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
+		d_tanh_grad_zBATCH = device_allocate(tanh_grad_zBATCH)
+		
+		#initialize activations and deltas on device
+		d_aBATCH = form_activations(d_Thetas, batchSize)
+		d_deltasBATCH = form_activations(d_Thetas, batchSize)
+	else
+		d_tanh_grad_zBATCH = prepactivations[1]
+		d_aBATCH = prepactivations[2]
+		d_deltasBATCH = prepactivations[3]
+	end
+		
 	d_onesVecBATCH = cuda_allocate(ones(Float32, batchSize))
 	
 	numLayers = length(T0)

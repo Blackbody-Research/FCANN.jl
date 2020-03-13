@@ -1481,7 +1481,7 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = ())
 	printanything && println("reading and converting training data")
 	(Xraw, Xtestraw, Y, Ytest) = if isempty(inputdata)
 		if binInput
@@ -1550,10 +1550,10 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	BLAS.set_num_threads(blasthreads)
 
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest)
-	GC.gc()
+	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations)
+	# GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
-	GC.gc()
+	# GC.gc()
 	(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 
 	if writeFiles
@@ -1902,7 +1902,38 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+1)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch)
+
+        println("Prepping batch and test data")
+		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
+		if backend == :GPU
+			batchInputs = device_allocate(inputbatchData)
+			batchOutputs = device_allocate(outputbatchData)
+			d_testinput = cuda_allocate(Xtest)
+			d_testoutput = cuda_allocate(Ytest)
+			prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
+		else
+			prepdata = (inputbatchData, outputbatchData)
+		end
+
+		println("Prepping activation data")
+		if backend == :GPU
+			d_Thetas = FCANN.device_allocate(T0) 
+
+			tanh_grad_zBATCH = FCANN.form_tanh_grads(hidden, batchSize)
+			d_tanh_grad_zBATCH = FCANN.device_allocate(tanh_grad_zBATCH)
+				
+			#initialize activations and deltas on device
+			d_aBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			d_deltasBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			prepactivations = (d_tanh_grad_zBATCH, d_aBATCH, d_deltasBATCH)
+		else
+			tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
+			aBATCH = form_activations(T0, batchSize)
+			deltasBATCH = form_activations(T0, batchSize)
+			prepactivations = (tanh_grad_zBATCH, aBATCH, daltasBATCH)
+		end
+
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations)
 		multiOut1 = (T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch)
 		multiOut2 = pmap(2:num) do foo
 			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
@@ -1935,10 +1966,53 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	            Random.seed!(ID)
 	            Random.seed!(1234+rand(UInt32)+foo)
 	        end	
-			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, bestresultepoch, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=true)
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, bestresultepoch, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=true, prepdata=prepdata, prepactivations=prepactivations)
 		end
 		multiOut = [multiOut1; multiOut2]
 	else
+
+
+		T0, B0 = if isempty(multiparams)
+			if occursin("Log", costFunc)
+				initializeparams_saxe(M, hidden, 2*O, reslayers)
+			else
+				initializeparams_saxe(M, hidden, O, reslayers)
+			end		
+		else
+			multiparams[1]
+		end
+	
+
+        println("Prepping batch and test data")
+		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
+		if backend == :GPU
+			batchInputs = device_allocate(inputbatchData)
+			batchOutputs = device_allocate(outputbatchData)
+			d_testinput = cuda_allocate(Xtest)
+			d_testoutput = cuda_allocate(Ytest)
+			prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
+		else
+			prepdata = (inputbatchData, outputbatchData)
+		end
+
+		println("Prepping activation data")
+		if backend == :GPU
+			d_Thetas = FCANN.device_allocate(T0) 
+
+			tanh_grad_zBATCH = FCANN.form_tanh_grads(hidden, batchSize)
+			d_tanh_grad_zBATCH = FCANN.device_allocate(tanh_grad_zBATCH)
+				
+			#initialize activations and deltas on device
+			d_aBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			d_deltasBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			prepactivations = (d_tanh_grad_zBATCH, d_aBATCH, d_deltasBATCH)
+		else
+			tanh_grad_zBATCH = form_tanh_grads(hidden, batchSize)
+			aBATCH = form_activations(T0, batchSize)
+			deltasBATCH = form_activations(T0, batchSize)
+			prepactivations = (tanh_grad_zBATCH, aBATCH, deltasBATCH)
+		end
+
 		multiOut = pmap(1:num) do foo
 			#BLAS.set_num_threads(Sys.CPU_THREADS)
 			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)

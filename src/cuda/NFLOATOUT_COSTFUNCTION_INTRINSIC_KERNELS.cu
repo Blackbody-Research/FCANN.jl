@@ -132,6 +132,20 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}	
 	
+	__global__ void swap_matrix_col(int N, int C, float *X, float *V)
+    {
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int index = (C-1)*N + i;
+		
+		if (i < N)
+		{
+			float a = X[index];
+			X[index] = V[i];
+			V[i] = a;
+		}
+	}	
+	
+
 	__global__ void finish_delta(int N, int M, float *A, float *Y, float *out)
     {	
 		int i = blockIdx.x * blockDim.x + threadIdx.x;	

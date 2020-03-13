@@ -2,7 +2,7 @@ using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
 @using_nvidialib_settings 
 
-costfunc_kernel_names = ("fill_cols", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "tanhActivation")
+costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "tanhActivation")
 
 #for cuda version 8 tensor ops are not available so default to regular GEMM algorithm
 algo = try
@@ -101,6 +101,14 @@ function run_kernel(kernel::CUfunction, N::Int64, M::Int64, inputs...; stream = 
 	threads = Cuint.((K, K))
 	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
     cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs..., stream = stream)
+    cuCtxSynchronize()
+end
+
+function run_kernel_1D(kernel::CUfunction, N::Int64, inputs...; stream = CUstream(C_NULL))
+	K = 256
+	threads = Cuint.((K,))
+	blocks = Cuint.((ceil(Int, N/K),))
+    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs..., stream = stream)
     cuCtxSynchronize()
 end
 

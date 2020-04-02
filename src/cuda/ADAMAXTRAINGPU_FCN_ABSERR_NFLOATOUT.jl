@@ -168,10 +168,10 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 				errs1 = calcError(d_out1, cuda_allocate(output_data[1:maxB, :]), costFunc = costFunc)
 				errs2 = calcError(d_out2, cuda_allocate(output_data[maxB+1:m, :]), costFunc = costFunc)
 				if length(errs1) == 1
-					errs = (maxB*errs1 + (size(output_data, 1)-maxB)*errs2) / size(output_data, 1)
+					errs = (maxB*errs1 + (m)-maxB)*errs2) / m)
 				else
-					tmp1 = (maxB*errs1[1] + (size(output_data, 1)-maxB)*errs2[1]) / size(output_data, 1)
-					tmp2 = (maxB*errs1[2] + (size(output_data, 1)-maxB)*errs2[2]) / size(output_data, 1)
+					tmp1 = (maxB*errs1[1] + (m)-maxB)*errs2[1]) / m)
+					tmp2 = (maxB*errs1[2] + (m)-maxB)*errs2[2]) / m)
 					errs = (tmp1, tmp2)
 				end
 				deallocate!(d_out1)
@@ -185,7 +185,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 				num_hidden = l - 1
 
 				d_a = form_activations(d_Thetas, maxB)
-				out1 = Matrix{Float32}(undef, m, output_layer_size)
+				out = Matrix{Float32}(undef, m, output_layer_size)
 				if occursin("Log", costFunc)
 					cumerr = [0.0f0, 0.0f0]
 				else
@@ -193,9 +193,9 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 				end 
 				for inds in batchinds
 					d_X = cuda_allocate(input_data[inds, :])
-					forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
-					err = calcError(d_a[end], cuda_allocate(output_data[inds, :]), input_layer_size, output_layer_size, hidden_layers, costFunc=costFunc)
-					out1[inds, :] .= host_allocate(d_a[end])
+					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers)
+					err = calcError(d_a[end], cuda_allocate(output_data[inds, :]), costFunc=costFunc)
+					out[inds, :] .= host_allocate(d_a[end])
 					if length(err) == 1
 						cumerr += err
 					else

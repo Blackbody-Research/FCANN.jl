@@ -162,6 +162,14 @@ function host_allocate(device_array::Vector{CUDAArray})
 	return host_array
 end
 
+function clear_gpu_data(device_array::Vector{CUDAArray})
+	l = length(device_array)
+	for d_a in device_array
+		deallocate!(d_a)
+	end
+end
+
+
 function cublasSaxpy(handle::cublasHandle_t, alpha::Float32, x::CUDAArray, y::CUDAArray)::Nothing
     @assert ((x.element_type == Float32) &&
             (y.element_type == Float32))
@@ -301,6 +309,20 @@ function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, h
 	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 
 	return (d_a[end], host_allocate(d_a[end]))
+end
+
+function predict!(d_Thetas, d_biases, d_X, d_a, resLayers::Int64=0)
+	l = length(d_Thetas)
+	num_hidden = l - 1
+	m = d_X.size[1]
+	h = [B.size[1] for B in d_biases]
+	hidden_layers = if num_hidden==0
+		Vector{Int64}()
+	else
+		h[1:l-1]
+	end
+
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 end
 
 function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0)

@@ -99,6 +99,16 @@ function calcError(modelOut::NVIDIALibraries.DeviceArray.CUDAArray, dataOut::NVI
 
 end
 
+function calcOutputGPU!(d_X, d_y, d_T, d_B, d_a; costFunc = "absErr", resLayers=0)
+	predict!(d_T, d_B, d_X, d_a, resLayers)
+	errs = calcError(d_a[end], d_y, costFunc=costFunc)
+end
+
+function calcOutputGPU!(d_X, d_T, d_B, d_a; costFunc = "absErr", resLayers=0)
+	predict!(d_T, d_B, d_X, d_a, resLayers)
+	errs = calcError(d_a[end], d_y, costFunc=costFunc)
+end
+
 function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
@@ -127,8 +137,6 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	#transfer parameters to GPU
 	d_Thetas = device_allocate(T) 
 	d_Biases = device_allocate(B) 
-	d_y = cuda_allocate(output_data)
-	GC.gc()
 
 	free = zeros(UInt64, 1)
 	total = zeros(UInt64, 1)
@@ -139,10 +147,13 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		println("Not enough GPU memory for calculation, returning nothing")
 		return nothing
 	else
-		(d_out, out) = if maxB > m 
+		(out, errs) = if maxB > m 
 			d_X = cuda_allocate(input_data)
-			
-			predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+			d_a = form_activations(d_Thetas, m)
+			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers)
+			errs = calcError(d_a[end], cuda_allocate(output_data), costFunc = costFunc)
+			(host_allocate(d_a[end]), errs)
+			# predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
 		else
 			if maxB == 2^17
 				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -152,25 +163,67 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			numBatches = ceil(Int64, m/maxB)
 			if numBatches == 2
 				(d_out1, out1) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
-				GC.gc()
 				(d_out2, out2) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
-				GC.gc()
 				out3 = [out1; out2]
-				(cuda_allocate(out3), out3)
+				errs1 = calcError(d_out1, cuda_allocate(output_data[1:maxB, :]), costFunc = costFunc)
+				errs2 = calcError(d_out2, cuda_allocate(output_data[maxB+1:m, :]), costFunc = costFunc)
+				if length(errs1) == 1
+					errs = (maxB*errs1 + (size(output_data, 1)-maxB)*errs2) / size(output_data, 1)
+				else
+					tmp1 = (maxB*errs1[1] + (size(output_data, 1)-maxB)*errs2[1]) / size(output_data, 1)
+					tmp2 = (maxB*errs1[2] + (size(output_data, 1)-maxB)*errs2[2]) / size(output_data, 1)
+					errs = (tmp1, tmp2)
+				end
+				deallocate!(d_out1)
+				deallocate!(d_out2)
+				(out3, errs)
 			else
-				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
-				(d_out1, out1) = predictBatches(d_Thetas, d_Biases, batchInputs, input_layer_size, output_layer_size, hidden_layers, resLayers)
-				GC.gc()
-				(d_out2, out2) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
-				GC.gc()
-				out3 = [out1; out2]
-				(cuda_allocate(out3), out3)
+				batchinds = [(i-1)*maxB+1:i*maxB for i in 1:numBatches-1]
+				# batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				# batchOutputs = [view(output_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				l = length(d_Thetas)
+				num_hidden = l - 1
+
+				d_a = form_activations(d_Thetas, maxB)
+				out1 = Matrix{Float32}(undef, m, output_layer_size)
+				if occursin("Log", costFunc)
+					cumerr = [0.0f0, 0.0f0]
+				else
+					cumerr = 0.0f0
+				end 
+				for inds in batchinds
+					d_X = cuda_allocate(input_data[inds, :])
+					forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+					err = calcError(d_a[end], cuda_allocate(output_data[inds, :]), input_layer_size, output_layer_size, hidden_layers, costFunc=costFunc)
+					out1[inds, :] .= host_allocate(d_a[end])
+					if length(err) == 1
+						cumerr += err
+					else
+						cumerr[1] += err[1]
+						cumerr[2] += err[2]
+					end
+				end
+
+				clear_gpu_data(d_a)
+
+				finalinds = (numBatches-1)*maxB+1:m
+				(d_out2, out2) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[finalinds, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
+				errs2 = calcError(d_out2, cuda_allocate(output_data[finalinds, :]), costFunc = costFunc)
+				out[finalinds, :] .= out2
+
+				if length(errs2) == 1
+					err = (size(out2, 1)*errs2 + maxB*cumerr) / m
+				else
+					err = ((size(out2, 1)*errs2[1] + maxB*cumerr[1]) / m, (size(out2, 1)*errs2[2] + maxB*cumerr[2]) / m)
+				end
+				deallocate!(d_out2)
+				(out, err)
 			end
 		end
-		errs = calcError(d_out, d_y, costFunc = costFunc)
-		GC.gc()
-		return (out, errs)
 	end
+	clear_gpu_data(d_Thetas)
+	clear_gpu_data(d_Biases)
+	return (out, errs)
 end
 
 function errshufflecol(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, d_input_data::CUDAArray, d_output_data::CUDAArray, d_a::Vector{CUDAArray}, v::Vector, d_v::CUDAArray, ind; rng=1, reslayers=0, costFunc = "sqErr")

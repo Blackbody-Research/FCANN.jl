@@ -134,8 +134,8 @@ end
 #with parameters T, B.  free is an integer representing the number of available bytes
 function getMaxGPUBatchSize(T, B, free, numType=Float32)
 	neuronCount = mapreduce(t -> size(t, 1), +, T)
-	#also add allocation for the new input batches which need to be moved to the GPU
-	floor(Int64, max(0, free)/(sizeof(numType)*(neuronCount + size(T[1], 2))))
+	#also add allocation for the new input and output batches which need to be moved to the GPU
+	floor(Int64, max(0, free)/(sizeof(numType)*(neuronCount + size(T[1], 2) + length(B[end]))))
 end
 
 #given a fixed M and O.  Try to generate networks with different numbers of hidden layers

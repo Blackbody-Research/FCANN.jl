@@ -162,16 +162,24 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			end
 			numBatches = ceil(Int64, m/maxB)
 			if numBatches == 2
-				(d_out1, out1) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
-				(d_out2, out2) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
+				d_X = cuda_allocate(input_data[1:maxB, :])
+				(d_out1, out1) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+				deallocate!(d_X)
+				d_X = cuda_allocate(input_data[maxB+1:m, :])
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+				deallocate!(d_X)
 				out3 = [out1; out2]
-				errs1 = calcError(d_out1, cuda_allocate(output_data[1:maxB, :]), costFunc = costFunc)
-				errs2 = calcError(d_out2, cuda_allocate(output_data[maxB+1:m, :]), costFunc = costFunc)
+				d_y = cuda_allocate(output_data[1:maxB, :])
+				errs1 = calcError(d_out1, d_y, costFunc = costFunc)
+				deallocate!(d_y)
+				d_y = cuda_allocate(output_data[maxB+1:m, :])
+				errs2 = calcError(d_out2, d_y, costFunc = costFunc)
+				deallocate!(d_y)
 				if length(errs1) == 1
-					errs = (maxB*errs1 + (m)-maxB)*errs2) / m)
+					errs = (maxB*errs1 + (m-maxB)*errs2) / m
 				else
-					tmp1 = (maxB*errs1[1] + (m)-maxB)*errs2[1]) / m)
-					tmp2 = (maxB*errs1[2] + (m)-maxB)*errs2[2]) / m)
+					tmp1 = (maxB*errs1[1] + (m-maxB)*errs2[1]) / m
+					tmp2 = (maxB*errs1[2] + (m-maxB)*errs2[2]) / m
 					errs = (tmp1, tmp2)
 				end
 				deallocate!(d_out1)
@@ -194,7 +202,8 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 				for inds in batchinds
 					d_X = cuda_allocate(input_data[inds, :])
 					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers)
-					err = calcError(d_a[end], cuda_allocate(output_data[inds, :]), costFunc=costFunc)
+					d_y = cuda_allocate(output_data[inds, :])
+					err = calcError(d_a[end], d_y, costFunc=costFunc)
 					out[inds, :] .= host_allocate(d_a[end])
 					if length(err) == 1
 						cumerr += err
@@ -202,6 +211,8 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 						cumerr[1] += err[1]
 						cumerr[2] += err[2]
 					end
+					deallocate!(d_X)
+					deallocate!(d_y)
 				end
 
 				clear_gpu_data(d_a)

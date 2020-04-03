@@ -2013,7 +2013,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 			prepactivations = (tanh_grad_zBATCH, aBATCH, deltasBATCH)
 		end
 
-		multiOut = pmap(1:num) do foo
+		multiOut = map(1:num) do foo
 			#BLAS.set_num_threads(Sys.CPU_THREADS)
 			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
 			if (nprocs() > 1) & (backend == :CPU)
@@ -2045,7 +2045,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	            Random.seed!(ID)
 	            Random.seed!(1234+rand(UInt32)+foo)
 	        end	
-			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch)
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations)
 		end
 	end
 	GC.gc()

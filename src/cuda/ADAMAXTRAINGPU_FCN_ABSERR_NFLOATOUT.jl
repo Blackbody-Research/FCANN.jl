@@ -83,18 +83,23 @@ function calcError(modelOut::NVIDIALibraries.DeviceArray.CUDAArray, dataOut::NVI
 		end
 
 		err = sum(host_allocate(delt))/m
+		deallocate!(delt)
+		return err
 	else
-		delt1 = device_copy(modelOut)
 		delt2 = device_copy(modelOut)
 		if (m == o) && (p == 2*n)
-			run_kernel(costFuncKs[costFunc], m, n, delt1, dataOut)
-			run_kernel(costFuncKs[costFunc2], m, n, delt2, dataOut)
+			delt = device_copy(modelOut)
+			run_kernel(costFuncKs[costFunc], m, n, delt, dataOut)
+			err1 = sum(host_allocate(delt))/m
+			deallocate!(delt)
+			delt = device_copy(modelOut)
+			run_kernel(costFuncKs[costFunc2], m, n, delt, dataOut)
+			err2 = sum(host_allocate(delt)[:, 1:n])/m #needed b/c only the first n columns of delt2 contain valid errors
+			deallocate!(delt)
 		else
 			error("output layer does not match data")
 		end
-		err1 = sum(host_allocate(delt1))/m
-		err2 = sum(host_allocate(delt2)[:, 1:n])/m #needed b/c only the first n columns of delt2 contain valid errors
-		(err1, err2)
+		return (err1, err2)
 	end
 
 end
@@ -203,7 +208,9 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 					d_X = cuda_allocate(input_data[inds, :])
 					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers)
 					d_y = cuda_allocate(output_data[inds, :])
+					deallocate!(d_X)
 					err = calcError(d_a[end], d_y, costFunc=costFunc)
+					deallocate!(d_y)
 					out[inds, :] .= host_allocate(d_a[end])
 					if length(err) == 1
 						cumerr += err
@@ -211,8 +218,6 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 						cumerr[1] += err[1]
 						cumerr[2] += err[2]
 					end
-					deallocate!(d_X)
-					deallocate!(d_y)
 				end
 
 				clear_gpu_data(d_a)

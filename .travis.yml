@@ -83,7 +83,6 @@ script:
     export PATH=/usr/local/cuda-$CUDA/bin:$PATH;
    fi
  - julia --project -e 'using Pkg; 
-                       # Pkg.add("Arpack"); 
                        Pkg.build(); 
                        Pkg.test(coverage=true)'
 

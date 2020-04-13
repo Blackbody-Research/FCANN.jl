@@ -150,7 +150,7 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	newMem = if Sys.isapple()
 		Int64(Sys.free_memory())
 	else
-		Int64(Sys.free_memory()) - (100*2^20)
+		Int64(Sys.free_memory()) - 1E9
 	end
 
 	maxB = min(2^17, getMaxBatchSize(T, B, newMem))

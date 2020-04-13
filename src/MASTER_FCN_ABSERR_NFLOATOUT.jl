@@ -1574,7 +1574,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 
 	Random.seed!(1234)
 	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations)
-	# GC.gc()
+	GC.gc()
 	(outTrain, Jtrain) = calcOutput(traindata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder)
 	# GC.gc()
 	(outTest, Jtest) = calcOutput(testdata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder)
@@ -2107,7 +2107,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		end
 	end
 
-	# GC.gc()
+	GC.gc()
 	bootstrapOut = [(a[1], a[2]) for a in multiOut]
 	resultepochs = [a[10] for a in multiOut]
 	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
@@ -2321,7 +2321,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 	
 	printanything && println("Calculating training set outputs")
 	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-    GC.gc()
+    # GC.gc()
 	
 	header = if occursin("Log", costFunc)
 		[reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]

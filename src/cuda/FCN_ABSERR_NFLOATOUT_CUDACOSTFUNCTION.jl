@@ -285,6 +285,28 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	@fastmath sum(tmp_out)/m
 end
 
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+
+	@assert d_a[end].size[1] == d_X.size[1]
+
+	if occursin("Log", costFunc)
+		@assert d_a[end].size[2] == 2*d_X.size[2]
+	else
+		@assert d_a[end].size[2] == d_X.size[2]
+	end
+
+	#define size of output data separately from output layer
+	n = d_X.size[2]
+	
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+	#launch across output data size rather than output layer size
+	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_X)
+	# cuCtxSynchronize()
+	#changed from absolute sum to regular sum because the actual error values are stored in d_a[end]
+	tmp_out = host_allocate(d_a[end]) 
+	@fastmath sum(tmp_out)/m
+end
+
 function form_activations(d_Thetas::Vector{CUDAArray}, m::Int64)
 	l = length(d_Thetas)
 	d_a = Vector{CUDAArray}(undef, l)
@@ -483,5 +505,97 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	cublasGemmEx(cublas_handle, algo, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
 	# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
 	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
-	cuCtxSynchronize()
+	# cuCtxSynchronize()
+end
+
+
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
+
+	# kernelTests()
+
+	@assert d_a[end].size[1] == d_X.size[1]
+
+	if occursin("Log", costFunc)
+		@assert d_a[end].size[2] == 2*d_X.size[2]
+	else
+		@assert d_a[end].size[2] == d_X.size[2]
+	end
+
+	#define size of output data separately from output layer
+	n = d_X.size[2]
+
+	if num_hidden > 0
+		if lambda > 0.0f0
+			for i in 1:length(d_Thetas)
+				memcpy!(d_Theta_grads[i], d_Thetas[i])
+			end
+		end
+
+		for i = 1:num_hidden
+			run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
+		end
+	end
+	run_kernel(fill_cols, m, output_layer_size, d_a[end], d_biases[end])
+	cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	if num_hidden > 0
+
+		if D == 0.0f0
+			run_kernel(tanhGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+		else
+			run_kernel(tanhGradientDropout, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
+				if D == 0.0f0
+					run_kernel(tanhGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+				else
+					run_kernel(tanhGradientDropout, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+				end
+			end
+		end
+		cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+	end
+
+	#launch across output data size rather than output layer size
+	run_kernel(costFuncDerivKs[costFunc], m, n, d_a[end], d_X, d_deltas[end])
+
+	i = num_hidden
+	while i >= 1
+		cublasGemmEx(cublas_handle, algo, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[i+1], d_ones, 0.0f0, d_bias_grads[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden-resLayers)) && (((i+resLayers-1)%resLayers)==0))
+			#replace d_deltas[i] with d_deltas[i+resLayers]
+			memcpy!(d_deltas[i], d_deltas[i+resLayers])
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+		else
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i])
+			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) 
+		end
+
+		run_kernel(elMul, m, hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
+		i = i - 1
+	end
+	cublasGemmEx(cublas_handle, algo, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
+	# cuCtxSynchronize()
 end

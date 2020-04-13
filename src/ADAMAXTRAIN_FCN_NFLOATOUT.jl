@@ -97,6 +97,48 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 	end
 end
 
+function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder = false, costFunc = "absErr", dropout = 0.0f0)
+#calculate network output given input data and a set of network parameters.
+	#Setup some useful variables
+	m = size(input_data, 1)
+
+	#leave 1 GB of memory left over except on apple systems where free memory is underreported
+	newMem = if Sys.isapple()
+		Int64(Sys.free_memory())
+	else
+		Int64(Sys.free_memory()) - 1E9
+	end
+
+	maxB = min(2^17, getMaxBatchSize(T, B, newMem))
+	BLAS.set_num_threads(0)
+	
+	if maxB == 0
+		println("Not enough memory for calculation, returning nothing")
+		return nothing
+	else
+		out = if maxB > m
+			predict(T, B, input_data, resLayers, layerout=layerout)
+		else
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+			end
+			numBatches = ceil(Int64, m/maxB)
+			batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
+			out1 = predictBatches(T, B, batchInputs, resLayers, layerout=layerout)
+			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, layerout=layerout)
+			[out1; out2]
+		end
+		if autoencoder
+			errs = calcError(out, input_data, costFunc = costFunc)
+			return (out, errs)
+		else
+			return out
+		end 
+	end
+end
+
 function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
@@ -764,6 +806,23 @@ function updateBest!(bestT, bestB, newT, newB)
 	end
 end
 
+function generateBatches(data, batchsize)
+	m = size(data, 1)
+	# if batchsize > m
+	# 	error("Your batchsize is larger than the total number of examples.")
+	# end
+	
+	numBatches = round(Int, ceil(m/batchsize))
+	batchData = Array{Matrix{Float32}}(undef, numBatches)
+	
+	randInd = repeat(shuffle(collect(1:m)), ceil(Int, batchsize/m)+1)
+	
+	for i = 1:numBatches
+		batchData[i] = data[randInd[(i-1)*batchsize + 1:i*batchsize], :]
+	end
+	return batchData
+end
+
 function generateBatches(input_data, output_data, batchsize)
 	m = size(output_data, 1)
 	# if batchsize > m
@@ -788,14 +847,20 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
 #Note that all floating point input variables must be float32 or single precision   
-	input_data = data[1][1]
-	output_data = data[1][2]
+	
+	#if the input data only contains one matrix then consider input and output
+	#data to be the same and train an autoencoder
+	autoencoder = (length(data[1]) == 1)
 
+	input_data = data[1][1]
+
+	output_data = autoencoder ? input_data : data[1][2]
+	
 	testset = (length(data) > 1)
 
 	if testset
 		input_test = data[2][1]
-		output_test = data[2][2]
+		output_test = autoencoder ? input_test : data[2][2]
 		(mtest, ntest) = size(input_test)
 	end
 
@@ -833,7 +898,7 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 
 	if printAnything
 		println()
-		printstyled(stdout, "Beginning training with the following parameters:", bold=true, color=:green)
+		printstyled(IOContext(stdout, :color => true), "Beginning training with the following parameters:", bold=true, color=:green)
 		println()
 		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout, ", residual layer size = ", resLayers))
 		println("-------------------------------------------------------------------")
@@ -844,9 +909,15 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
     total_ops = fops + bops + pops
 
     if isempty(prepdata)
-		(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
+		inputbatchData = generateBatches(input_data, batchSize)
+		if !autoencoder
+			outputbatchData = generateBatches(output_data, batchSize)
+		end
 	else
-		(inputbatchData, outputbatchData) = prepdata
+		inputbatchData = prepdata[1]
+		if !autoencoder
+			outputbatchData = prepdata[2]
+		end
 	end
 
 	#create memory objects used in cost function
@@ -871,20 +942,37 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		aTEST = form_activations(T0, mtest)
 	end
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+	if autoencoder
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+	else
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+	end
 	
 	function calcout_batches(T, B)
 		currentOut = 0.0f0 
 		for i = 1:numBatches
-			currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+			if autoencoder
+				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+			else
+				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+			end
 		end
 		currentOut = currentOut/numBatches
 	end
 
 	currentOut = calcout_batches(T0, B0)
+	
 	if testset
-		testout = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, input_test, output_test, lambda, aTEST, dropout, costFunc=costFunc, resLayers = resLayers)
+		function calcout_test(T, B)
+			if autoencoder
+				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers)
+			else
+				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, output_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers)
+			end
+		end
 	end
+
+	testset && (testout = calcout_test(T0, B0))
 
 	if printAnything
 		printstyled(stdout, string("Initial cost is ", currentOut), bold=true, color=:red)
@@ -948,7 +1036,11 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		#run through an epoch in batches with randomized order
 		for batch in randperm(numBatches)
 			if eta > 0
-				nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+				if autoencoder
+					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+				else
+					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+				end
 				if swa && (epoch > 100)
 					updateParams!(G, Thetas, Biases, Theta_grads, Bias_grads)
 				else
@@ -984,7 +1076,7 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 			costRecord[iter + 1] = currentOut
 
 			if testset
-				testout = nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, input_test, output_test, lambda, aTEST, dropout, costFunc=costFunc, resLayers = resLayers)
+				testout = calcout_test(T_est, B_est)
 				costRecordTest[iter + 1] = testout
 			end
 			
@@ -1040,7 +1132,9 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	end
 	lastepoch = epoch - 1
 	currentOut = calcout_batches(T_est, B_est)
-	testset && (testout = nnCostFunctionNOGRAD(T_est, B_est, input_layer_size, hidden_layers, input_test, output_test, lambda, aTEST, dropout, costFunc=costFunc, resLayers = resLayers))
+	testset && (testout = calcout_test(T_est, B_est))
+
+
 
 	if ignorebest || (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
 		bestCost = currentOut
@@ -1056,12 +1150,12 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 
     if printAnything
 		println("-------------------------------------------------------------------")
-		printstyled(stdout, "Completed training on CPU with the following parameters: ", bold = true, color=:green)
+		printstyled(IOContext(stdout, :color => true), "Completed training on CPU with the following parameters: ", bold = true, color=:green)
 
 		println()
 		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", N, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout, ", residual layer size = ", resLayers))
 	
-		printstyled(stdout, string("Training Results: Cost reduced from ", testset ? costRecordTest[1] : costRecord[1], "to ", testset ? bestCostTest : bestCost, " after ", round(Int64, timeRecord[lastepoch+1]), " seconds and ", lastepoch, " epochs"), bold=true, color=:red)
+		printstyled(IOContext(stdout, :color => true), string("Training Results: Cost reduced from ", testset ? costRecordTest[1] : costRecord[1], "to ", testset ? bestCostTest : bestCost, " after ", round(Int64, timeRecord[lastepoch+1]), " seconds and ", lastepoch, " epochs"), bold=true, color=:red)
 		println()	
 		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
 	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))

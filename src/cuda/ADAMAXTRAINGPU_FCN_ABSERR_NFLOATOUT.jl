@@ -114,7 +114,7 @@ function calcOutputGPU!(d_X, d_T, d_B, d_a; costFunc = "absErr", resLayers=0)
 	errs = calcError(d_a[end], d_y, costFunc=costFunc)
 end
 
-function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0)
+function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder=false, costFunc="absErr", dropout=0.0f0)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	# if costFunc != "absErr"
@@ -153,11 +153,18 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0)
 			d_a = form_activations(d_Thetas, m)
 			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers)
 			# errs = calcError(d_a[end], cuda_allocate(output_data), costFunc = costFunc)
+			if autoencoder
+				errs = calcError(d_a[end], d_X, costFunc=costFunc)
+			end
 			deallocate!(d_X)
 			out = host_allocate(d_a[layerout])
 			# predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
 			clear_gpu_data(d_a)
-			out
+			if autoencoder
+				(out, errs)
+			else
+				out
+			end
 		else
 			if maxB == 2^17
 				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -168,9 +175,15 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0)
 			if numBatches == 2
 				d_X = cuda_allocate(input_data[1:maxB, :])
 				(d_out1, out1) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				if autoencoder
+					errs1 = calcError(d_out1, d_X, costFunc=costFunc)
+				end
 				deallocate!(d_X)
 				d_X = cuda_allocate(input_data[maxB+1:m, :])
 				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				if autoencoder
+					errs2 = calcError(d_out2, d_X, costFunc=costFunc)
+				end
 				deallocate!(d_X)
 				out3 = [out1; out2]
 				# d_y = cuda_allocate(output_data[1:maxB, :])
@@ -186,10 +199,25 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0)
 				# 	tmp2 = (maxB*errs1[2] + (m-maxB)*errs2[2]) / m
 				# 	errs = (tmp1, tmp2)
 				# end
+
+				if autoencoder
+					if length(errs1) == 1
+						errs = (maxB*errs1 + (m-maxB)*errs2) / m
+					else
+						tmp1 = (maxB*errs1[1] + (m-maxB)*errs2[1]) / m
+						tmp2 = (maxB*errs1[2] + (m-maxB)*errs2[2]) / m
+						errs = (tmp1, tmp2)
+					end
+				end
+
 				deallocate!(d_out1)
 				deallocate!(d_out2)
 				# (out3, errs)
-				out3
+				if autoencoder
+					(out3, errs)
+				else
+					out3
+				end
 			else
 				batchinds = [(i-1)*maxB+1:i*maxB for i in 1:numBatches-1]
 				# batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
@@ -199,32 +227,41 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0)
 
 				d_a = form_activations(d_Thetas, maxB)
 				out = Matrix{Float32}(undef, m, length(B[layerout]))
-				# if occursin("Log", costFunc)
-				# 	cumerr = [0.0f0, 0.0f0]
-				# else
-				# 	cumerr = 0.0f0
-				# end 
+				if autoencoder
+					if occursin("Log", costFunc)
+						cumerr = [0.0f0, 0.0f0]
+					else
+						cumerr = 0.0f0
+					end 
+				end
 				for inds in batchinds
 					d_X = cuda_allocate(input_data[inds, :])
 					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers)
 					# d_y = cuda_allocate(output_data[inds, :])
+					if autoencoder
+						err = calcError(d_a[end], d_X, costFunc=costFunc)
+					end
 					deallocate!(d_X)
-					# err = calcError(d_a[end], d_y, costFunc=costFunc)
 					# deallocate!(d_y)
 					out[inds, :] .= host_allocate(d_a[layerout])
-					# if length(err) == 1
-					# 	cumerr += err
-					# else
-					# 	cumerr[1] += err[1]
-					# 	cumerr[2] += err[2]
-					# end
+					if autoencoder
+						if length(err) == 1
+							cumerr += err
+						else
+							cumerr[1] += err[1]
+							cumerr[2] += err[2]
+						end
+					end
 				end
 
 				clear_gpu_data(d_a)
 
 				finalinds = (numBatches-1)*maxB+1:m
-				(d_out2, out2) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[finalinds, :]), input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
-				# errs2 = calcError(d_out2, cuda_allocate(output_data[finalinds, :]), costFunc = costFunc)
+				d_X = cuda_allocate(input_data[finalinds, :])
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				if autoencoder
+					errs2 = calcError(d_out2, d_X, costFunc = costFunc)
+				end
 				out[finalinds, :] .= out2
 
 				# if length(errs2) == 1
@@ -232,12 +269,17 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0)
 				# else
 				# 	err = ((size(out2, 1)*errs2[1] + maxB*cumerr[1]) / m, (size(out2, 1)*errs2[2] + maxB*cumerr[2]) / m)
 				# end
+				deallocate!(d_X)
 				deallocate!(d_out2)
-				# (out, err)
-				out
+				if autoencoder
+					(out, err)
+				else
+					out
+				end
 			end
 		end
 	end
+
 	clear_gpu_data(d_Thetas)
 	clear_gpu_data(d_Biases)
 	# return (out, errs)
@@ -287,7 +329,10 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			d_a = form_activations(d_Thetas, m)
 			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers)
 			errs = calcError(d_a[end], cuda_allocate(output_data), costFunc = costFunc)
-			(host_allocate(d_a[end]), errs)
+			out = host_allocate(d_a[end])
+			clear_gpu_data(d_a)
+			deallocate!(d_X)
+			(out, errs)
 			# predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
 		else
 			if maxB == 2^17
@@ -353,7 +398,9 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 				clear_gpu_data(d_a)
 
 				finalinds = (numBatches-1)*maxB+1:m
-				(d_out2, out2) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[finalinds, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
+				d_X = cuda_allocate(input_data[finalinds, :])
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+				d_y = cuda_allocate(output_data[finalinds, :])
 				errs2 = calcError(d_out2, cuda_allocate(output_data[finalinds, :]), costFunc = costFunc)
 				out[finalinds, :] .= out2
 
@@ -363,6 +410,8 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 					err = ((size(out2, 1)*errs2[1] + maxB*cumerr[1]) / m, (size(out2, 1)*errs2[2] + maxB*cumerr[2]) / m)
 				end
 				deallocate!(d_out2)
+				deallocate!(d_y)
+				deallocate!(d_X)
 				(out, err)
 			end
 		end
@@ -725,15 +774,20 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
 #Note that all floating point input variables must be float32 or single precision   
+	
+	#if the input data only contains one matrix then consider input and output
+	#data to be the same and train an autoencoder
+	autoencoder = (length(data[1]) == 1)
+
 	input_data = data[1][1]
-	output_data = data[1][2]
+	output_data = autoencoder ? input_data : data[1][2]
 
 
 	testset = (length(data) > 1)
 
 	if testset
 		input_test = data[2][1]
-		output_test = data[2][2]
+		output_test = autoencoder ? input_test : data[2][2]
 		(mtest, ntest) = size(input_test)
 	end
 
@@ -765,7 +819,7 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 
 	if printAnything
 		println()
-		printstyled(color = :green, stdout, "Beginning training on GPU with the following parameters:", bold=true)
+		printstyled(color = :green, IOContext(stdout, :color => true), "Beginning training on GPU with the following parameters:", bold=true)
 		println()
 		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", training alpha = ", alpha, ", decay rate = ", R, ", residual size = ", resLayers))
 		println("-------------------------------------------------------------------")
@@ -781,26 +835,42 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
     total_ops = fops + bops + pops
 
 	if isempty(prepdata)
-		(inputbatchData, outputbatchData) = generateBatches(input_data, output_data, batchSize)
-		
+		inputbatchData = generateBatches(input_data, batchSize)
+		if !autoencoder
+			outputbatchData = generateBatches(output_data, batchSize)
+		end
+
 		batchInputs = device_allocate(inputbatchData)
-		batchOutputs = device_allocate(outputbatchData)
+		if !autoencoder
+			batchOutputs = device_allocate(outputbatchData)
+		end
 
 		if testset
 			# d_testinput = cuda_allocate(input_test)
 			# d_testoutput = cuda_allocate(output_test)
-			testbatches = generateBatches(input_test, output_test, batchSize)
-			batchInputsTest = device_allocate(testbatches[1])
-			batchOutputsTest = device_allocate(testbatches[2])
+			testbatchinputs = generateBatches(input_test, batchSize)
+			if !autoencoder
+				testbatchoutputs = generateBatches(output_test, batchSize)
+			end
+			batchInputsTest = device_allocate(testbatchinputs)
+			if !autoencoder
+				batchOutputsTest = device_allocate(testbatchoutputs)
+			end
 		end
 	else
 		batchInputs = prepdata[1]
-		batchOutputs = prepdata[2]
+		if !autoencoder
+			batchOutputs = prepdata[2]
+		end
 		if testset
 			# d_testinput = prepdata[3]
 			# d_testoutput = prepdata[4]
-			batchInputsTest = prepdata[3]
-			batchOutputsTest = prepdata[4]
+			if !autoencoder
+				batchInputsTest = prepdata[3]
+				batchOutputsTest = prepdata[4]
+			else
+				batchInputsTest = prepdata[2]
+			end
 		end
 	end
 
@@ -851,13 +921,21 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 
 	# testset && (d_aTEST = form_activations(d_Thetas, mtest))
 
-	nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], batchOutputs[end],lambda, dropout, costFunc = costFunc, resLayers=resLayers)
+	if autoencoder
+		nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], lambda, dropout, costFunc = costFunc, resLayers=resLayers)
+	else
+		nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], batchOutputs[end],lambda, dropout, costFunc = costFunc, resLayers=resLayers)
+	end
 	
 	function calcout_batches(d_T, d_B)
 		currentOut = 0.0f0
 
 		for i = 1:numBatches
-			currentOut += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+			if autoencoder
+				currentOut += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+			else
+				currentOut += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+			end
 		end
 		currentOut = currentOut/numBatches
 	end
@@ -867,7 +945,11 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		function calcout_test(d_T, d_B)
 			currentout = 0.0f0
 			for i in eachindex(batchInputsTest)
-				currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], batchOutputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+				if autoencoder
+					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+				else
+					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], batchOutputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+				end
 			end
 			currentout = currentout/length(batchInputsTest)
 		end
@@ -920,7 +1002,11 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		#run through an epoch in batches with randomized order
 		for batch in randperm(numBatches)
 			if swa || (eta > 0)
-				nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], batchOutputs[batch],lambda,dropout, costFunc = costFunc, resLayers=resLayers)
+				if autoencoder
+					nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], lambda,dropout, costFunc = costFunc, resLayers=resLayers)
+				else
+					nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], batchOutputs[batch],lambda,dropout, costFunc = costFunc, resLayers=resLayers)
+				end
 				if swa && (epoch > 100)
 					updateParams!(G, d_Thetas, d_Biases, d_Theta_grads, d_Bias_grads)
 				else
@@ -1005,12 +1091,20 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 
 	clearlist1 = [d_T0, d_Thetas, d_Theta_grads, d_Theta_avg, d_mT, d_vT, d_B0, d_Biases, d_Bias_grads, d_Bias_avg, d_mB, d_vB, d_onesVecParams, d_normVecParams]
 	clearlist2 = if isempty(prepdata)
-		[batchInputs, batchOutputs]
+		if autoencoder
+			[batchInputs]
+		else
+			[batchInputs, batchOutputs]
+		end
 	else
 		[]
 	end
 	clearlist3 = if isempty(prepdata) && testset
-		[batchInputsTest, batchOutputsTest]
+		if autoencoder
+			[batchInputsTest]
+		else
+			[batchInputsTest, batchOutputsTest]
+		end
 	else
 		[]
 	end
@@ -1044,11 +1138,11 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 
    if printAnything
 		println("-------------------------------------------------------------------")
-		printstyled(color = :green, stdout, "Completed training on GPU with the following parameters: ", bold = true)
+		printstyled(color = :green, IOContext(stdout, :color => true), "Completed training on GPU with the following parameters: ", bold = true)
 		println()
 		println(string("input size = ", n, ", hidden layers = ", hidden_layers, ", output size = ", n2, ", batch size = ", batchSize, ", num epochs = ", numEpochs, ", training alpha = ", alpha, ", decay rate = ", R, ", L2 Reg Constant = ", lambda, ", max norm reg constant = ", c, ", dropout rate = ", dropout))
 	
-		printstyled(stdout, string("Training Results: Cost reduced from ", testset ? costRecordTest[1] : costRecord[1], "to ", testset ? bestCostTest : bestCost, " after ", round(Int64, timeRecord[lastepoch+1]), " seconds and ", lastepoch, " epochs"), bold=true, color=:red)
+		printstyled(IOContext(stdout, :color => true), string("Training Results: Cost reduced from ", testset ? costRecordTest[1] : costRecord[1], "to ", testset ? bestCostTest : bestCost, " after ", round(Int64, timeRecord[lastepoch+1]), " seconds and ", lastepoch, " epochs"), bold=true, color=:red)
 		println()	
 		println(string("Median time of ", 1e9*median(time_per_epoch)/m, " ns per example"))
 	    println(string("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize))

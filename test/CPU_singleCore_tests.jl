@@ -116,3 +116,6 @@ println()
 println("Calculating feature impacts")
 calcfeatureimpact(T, B, Xtest, ytest, num=1)
 calcfeatureimpact(T, B, Xtest, ytest, num=2)
+
+println("Training autoencoder")
+record, T, B = fullTrain(name, 10, 1024, [2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, inputdata = (Xtrain, Xtest))

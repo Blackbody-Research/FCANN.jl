@@ -253,8 +253,29 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(m, n, a[end], lambda, Thetas)
 end
 
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers::Vector, X::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
 
-function predict(Thetas, biases, X::Matrix{Float32}, resLayers::Int64 = 0)
+	num_hidden = length(hidden_layers)
+
+	#Setup some useful variables
+	(m, n) = size(X)
+	# F = 1.0f0 - D
+	
+	if occursin("Log", costFunc)
+		@assert 2*n == size(a[end], 2)
+	else
+		@assert n == size(a[end], 2)
+	end
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
+
+	#mean abs error cost function
+	calcFinalOut!(costFuncs[costFunc], a[end], X, m, n)
+
+	J = calcJ(m, n, a[end], lambda, Thetas)
+end
+
+function predict(Thetas, biases, X::Matrix{Float32}, resLayers::Int64 = 0; layerout=length(Thetas))
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
@@ -275,7 +296,7 @@ function predict(Thetas, biases, X::Matrix{Float32}, resLayers::Int64 = 0)
 	a = form_activations(Thetas, m)
 
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
-	return a[end]
+	return a[layerout]
 end
 
 function predict!(Thetas, biases, X::Matrix{Float32}, a::Vector{Matrix{Float32}}, resLayers::Int64 = 0)
@@ -300,7 +321,7 @@ function predict!(Thetas, biases, X::Matrix{Float32}, a::Vector{Matrix{Float32}}
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
 end
 
-function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0)
+function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0; layerout=length(Thetas))
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
@@ -322,11 +343,11 @@ function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLay
 	# F = (1.0f0 - D)
 	mapreduce(vcat, batches) do X
 		forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
-		copy(a[end])
+		copy(a[layerout])
 	end
 end
 
-function predictMulti(multiParams, X::Matrix{Float32}, resLayers::Int64 = 0)
+function predictMulti(multiParams, X::Matrix{Float32}, resLayers::Int64 = 0; layerout=length(multiParams[1][1]))
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
@@ -348,7 +369,7 @@ function predictMulti(multiParams, X::Matrix{Float32}, resLayers::Int64 = 0)
 		Thetas = params[1]
 		biases = params[2]
 		forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
-		copy(a[end])
+		copy(a[layerout])
 	end
 	for params in multiParams]
 end
@@ -378,7 +399,7 @@ function predictMulti!(multiParams, X::Matrix{Float32}, a, outputs, resLayers::I
 	end
 end
 
-function predictMultiBatches(multiParams, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0)
+function predictMultiBatches(multiParams, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0; layerout=length(multiParams[1][1]))
 #PREDICT Predict the value of an input in batches given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
@@ -403,7 +424,7 @@ function predictMultiBatches(multiParams, batches::Vector{Matrix{Float32}}, resL
 			Thetas = params[1]
 			biases = params[2]
 			forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
-			return copy(a[end])
+			return copy(a[layerout])
 		end
 	end
 	for params in multiParams]
@@ -490,6 +511,88 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
+
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
+
+
+	#Setup some useful variables
+	(m, n) = size(X)
+	         
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+
+	fillAs!(a, biases, m)
+
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	if length(Thetas) > 1
+		if D == 0.0f0
+			tanhGradient!(a[1], tanh_grad_z[1])
+		else
+			tanhGradient!(a[1], tanh_grad_z[1], D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
+				if D == 0.0f0
+					tanhGradient!(a[i], tanh_grad_z[i])
+				else
+					tanhGradient!(a[i], tanh_grad_z[i], D)
+				end
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+
+	#mean abs error cost function
+	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], X, m, n)
+
+	# println("deltas[end] CPU is $(deltas[end])")
+
+
+	i = num_hidden
+	
+	while i >= 1
+		gemm!('T', 'N', 1.0f0/m, deltas[i+1], a[i], lambda/m, Theta_grads[i+1])
+		gemv!('T', 1.0f0/m, deltas[i+1], onesVec, 0.0f0, Bias_grads[i+1])
+		#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+		if (resLayers != 0) && ((i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0))
+			#replace deltas[i] with deltas[i+resLayers]
+			# scal!(length(deltas[i]), 0.0f0, deltas[i], 1)
+			# axpy!(1.0f0, deltas[i+resLayers], deltas[i]) 
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			#propagate derivative back to deltas from the original input to the residual layers
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 1.0f0, deltas[i])
+			# gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i])
+		else
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
+		end
+		finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
+		i = i - 1
+	end
+
+
+	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
+	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+end
+
 
 function nnCostFunctionAdv(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector{Int}, advX::Matrix{Float32}, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32})
 

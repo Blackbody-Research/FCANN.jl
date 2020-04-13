@@ -90,6 +90,9 @@ else
     println("TEST PASSED")
     println()
 
+    println("Training autoencoder")
+    record, T, B = fullTrain(name, 150, 1024, [2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, inputdata = (Xtrain, Xtest))
+
     M = 10
 
     filename = string(name, "_10_input_10X2_hidden_2_output_0.0001_alpha_0.1_decay_ADAMAX_absErr")

@@ -11,8 +11,12 @@ end
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash
 # with any cost function other than "absErr"
-function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
+function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder=false)
 	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+end
+
+function calcOutput(input_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder = true)
+	eval(Symbol("calcOutput", backend))(input_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder = autoencoder)
 end
 
 function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0)
@@ -1483,14 +1487,21 @@ end
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
 function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = ())
 	printanything && println("reading and converting training data")
-	(Xraw, Xtestraw, Y, Ytest) = if isempty(inputdata)
+	
+	if isempty(inputdata)
 		if binInput
-			readBinInput(name)
+			inputdata = readBinInput(name)
 		else
-			readInput(name)
+			inputdata = readInput(name)
 		end
+	end
+
+	if length(inputdata) == 2
+		autoencoder = true
+		(Xraw, Xtestraw) = inputdata
 	else
-		inputdata
+		autoencoder = false
+		(Xraw, Xtestraw, Y, Ytest) = inputdata
 	end
 
 	X, Xtest = if isempty(sampleCols)
@@ -1508,7 +1519,11 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	end
 
 	(numRows, M) = size(X)
-	O = size(Y, 2)
+	if autoencoder
+		O = size(X, 2)
+	else
+		O = size(Y, 2)
+	end
 
 	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
 		"sqErr"
@@ -1549,12 +1564,20 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	#BLAS.set_num_threads(5)	
 	BLAS.set_num_threads(blasthreads)
 
+	if autoencoder
+		traindata = (X,)
+		testdata = (Xtest,)
+	else
+		traindata = (X, Y)
+		testdata = (Xtest, Ytest)
+	end
+
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations)
+	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations)
 	# GC.gc()
-	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+	(outTrain, Jtrain) = calcOutput(traindata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder)
 	# GC.gc()
-	(outTest, Jtest) = calcOutput(Xtest, Ytest, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+	(outTest, Jtest) = calcOutput(testdata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder)
 
 	if writeFiles
 		if occursin("Log", costFunc)

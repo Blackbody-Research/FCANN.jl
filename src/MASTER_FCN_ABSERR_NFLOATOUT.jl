@@ -1929,13 +1929,18 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
         println("Prepping batch and test data")
 		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
 		if backend == :GPU
+			gpuvars = Vector()
 			testbatches = generateBatches(Xtest, Ytest, batchSize)
 			batchInputs = device_allocate(inputbatchData)
 			batchOutputs = device_allocate(outputbatchData)
+			push!(gpuvars, batchInputs)
+			push!(gpuvars, batchOutputs)
 			# d_testinput = cuda_allocate(Xtest)
 			# d_testoutput = cuda_allocate(Ytest)
 			batchInputsTest = device_allocate(testbatches[1])
 			batchOutputsTest = device_allocate(testbatches[2])
+			push!(gpuvars, batchInputsTest)
+			push!(gpuvars, batchOutputsTest)
 			# prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
 			prepdata = (batchInputs, batchOutputs, batchInputsTest, batchOutputsTest)
 		else
@@ -1945,13 +1950,17 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		println("Prepping activation data")
 		if backend == :GPU
 			d_Thetas = FCANN.device_allocate(T0) 
+			push!(gpuvars, d_Thetas)
 
 			tanh_grad_zBATCH = FCANN.form_tanh_grads(hidden, batchSize)
 			d_tanh_grad_zBATCH = FCANN.device_allocate(tanh_grad_zBATCH)
+			push!(gpuvars, d_tanh_grad_zBATCH)
 				
 			#initialize activations and deltas on device
 			d_aBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			push!(gpuvars, d_aBATCH)
 			d_deltasBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			push!(gpuvars, d_deltasBATCH)
 			prepactivations = (d_tanh_grad_zBATCH, d_aBATCH, d_deltasBATCH)
 		else
 			tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
@@ -2013,13 +2022,18 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
         println("Prepping batch and test data")
 		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
 		if backend == :GPU
+			gpuvars = Vector()
 			testbatches = generateBatches(Xtest, Ytest, batchSize)
 			batchInputs = device_allocate(inputbatchData)
+			push!(gpuvars, batchInputs)	
 			batchOutputs = device_allocate(outputbatchData)
+			push!(gpuvars, batchOutputs)	
 			# d_testinput = cuda_allocate(Xtest)
 			# d_testoutput = cuda_allocate(Ytest)
 			batchInputsTest = device_allocate(testbatches[1])
+			push!(gpuvars, batchInputsTest)	
 			batchOutputsTest = device_allocate(testbatches[2])
+			push!(gpuvars, batchOutputsTest)	
 			# prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
 			prepdata = (batchInputs, batchOutputs, batchInputsTest, batchOutputsTest)
 		else
@@ -2028,13 +2042,17 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		println("Prepping activation data")
 		if backend == :GPU
 			d_Thetas = FCANN.device_allocate(T0) 
+			push!(gpuvars, d_Thetas)	
 
 			tanh_grad_zBATCH = FCANN.form_tanh_grads(hidden, batchSize)
 			d_tanh_grad_zBATCH = FCANN.device_allocate(tanh_grad_zBATCH)
+			push!(gpuvars, d_tanh_grad_zBATCH)	
 				
 			#initialize activations and deltas on device
 			d_aBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			push!(gpuvars, d_aBATCH)	
 			d_deltasBATCH = FCANN.form_activations(d_Thetas, batchSize)
+			push!(gpuvars, d_deltasBATCH)	
 			prepactivations = (d_tanh_grad_zBATCH, d_aBATCH, d_deltasBATCH)
 		else
 			tanh_grad_zBATCH = form_tanh_grads(hidden, batchSize)
@@ -2078,7 +2096,18 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample)
 		end
 	end
-	GC.gc()
+
+	if backend == :GPU
+		for v in gpuvars
+			if typeof(v) == CUDAArray
+				deallocate!(v)
+			else
+				clear_gpu_data(v)
+			end
+		end
+	end
+
+	# GC.gc()
 	bootstrapOut = [(a[1], a[2]) for a in multiOut]
 	resultepochs = [a[10] for a in multiOut]
 	fileout = convert(Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, bootstrapOut)
@@ -2086,7 +2115,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	
 	printanything && println("Calculating training set outputs")
 	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
-    GC.gc()
+    # GC.gc()
     printanything && println("Calculating test set outputs")
     (bootstrapOutTest, outTest, errTest, errEstTest) = calcMultiOut(Xtest, Ytest, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers) #pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
 	
@@ -2133,6 +2162,11 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		[]
 	end
 
+	if backend == :GPU
+		d_out = cuda_allocate(outTrain)
+		d_out_test = cuda_allocate(outTest)
+	end
+
     fullMultiErrors = map(1:length(bootstrapOutTrain)) do i
         #calculate average network output     
         line = if occursin("Log", costFunc)
@@ -2142,9 +2176,10 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             # errorEstTrain = mean(reduce(+, [abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]) for a in bootstrapOutTrain2])/i)
 
             errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
-      
+      		
             Jtrain = if backend == :GPU
-            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
+	      		memcpy!(d_out, combinedOutputTrain)
+            	calcError(d_out, d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
             end
@@ -2156,7 +2191,8 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
             
             Jtest= if backend == :GPU
-            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
+	            memcpy!(d_out_test, combinedOutputTest)
+            	calcError(d_out_test, d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
@@ -2166,7 +2202,8 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
             Jtrain = if backend == :GPU
-            	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
+	            memcpy!(d_out, combinedOutputTrain)
+            	calcError(d_out, d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
             end
@@ -2174,7 +2211,8 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
             errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
             Jtest= if backend == :GPU
-            	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
+	            memcpy!(d_out_test, combinedOutputTest)
+            	calcError(d_out_test, d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
             end
@@ -2184,6 +2222,13 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
         printanything && println(string("Done with networks 1 to ", i, " out of ", length(bootstrapOutTrain)))
         line
     end 
+
+    if backend == :GPU
+    	deallocate!(d_out)
+    	deallocate!(d_out_test)
+    	deallocate!(d_y)
+    	deallocate!(d_ytest)
+    end
 
     fullMultiPerformance = mapreduce(a -> a[1], vcat, fullMultiErrors)
 

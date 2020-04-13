@@ -102,7 +102,7 @@ function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 	#Setup some useful variables
 	m = size(input_data, 1)
 
-	membuffer = min(1E9, Sys.total_memory()*0.1)
+	membuffer = min(1E9, Sys.total_memory()*0.01)
 	#leave 1 GB of memory left over except on apple systems where free memory is underreported
 	newMem = if Sys.isapple()
 		Int64(Sys.free_memory())
@@ -147,7 +147,7 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	m = size(input_data, 1)
 	n = size(output_data, 2)
 
-	membuffer = min(1E9, Sys.total_memory()*0.1)
+	membuffer = min(1E9, Sys.total_memory()*0.01)
 
 	#leave 1 GB of memory left over except on apple systems where free memory is underreported
 	newMem = if Sys.isapple()
@@ -208,7 +208,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		"absErr"
 	end
 
-	membuffer = min(1E9, Sys.total_memory()*0.1)
+	membuffer = min(1E9, Sys.total_memory()*0.01)
 
 	#if copying the input data will result in needing to break up the data into smaller batches to preserve system memory, then it isn't worth it
 	#account for copying input data memory into other workers while leaving 1 GB left over 
@@ -240,7 +240,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		newMem = if Sys.isapple()
 			Int64(Sys.free_memory())
 		else
-			Int64(Sys.free_memory()) - (1024^3)
+			Int64(Sys.free_memory()) - membuffer
 		end
 		maxB = min(2^17, getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem))
 		if maxB == 0

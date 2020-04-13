@@ -842,7 +842,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=())
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -908,6 +908,13 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
     total_ops = fops + bops + pops
 
+    if trainsample == 1.0
+    	batchset = 1:numBatches
+    else
+    	batchset = rand(1:numBatches, round(Int64, numBatches*trainsample))
+    end
+
+
     if isempty(prepdata)
 		inputbatchData = generateBatches(input_data, batchSize)
 		if !autoencoder
@@ -943,21 +950,21 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	end
 
 	if autoencoder
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
 	else
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[end], outputbatchData[end], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], outputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
 	end
 	
 	function calcout_batches(T, B)
 		currentOut = 0.0f0 
-		for i = 1:numBatches
+		for i = batchset
 			if autoencoder
 				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
 			else
 				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers)
 			end
 		end
-		currentOut = currentOut/numBatches
+		currentOut = currentOut/length(batchset)
 	end
 
 	currentOut = calcout_batches(T0, B0)
@@ -1034,7 +1041,7 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	while (epoch <= minepoch) || ((epoch <= N) && (tfail <= patience) && tolpass)
 	#while epoch <= N
 		#run through an epoch in batches with randomized order
-		for batch in randperm(numBatches)
+		for batch in shuffle(batchset)
 			if eta > 0
 				if autoencoder
 					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers)

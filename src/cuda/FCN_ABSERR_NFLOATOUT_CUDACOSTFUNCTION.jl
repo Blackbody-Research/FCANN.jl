@@ -101,7 +101,7 @@ function run_kernel(kernel::CUfunction, N::Int64, M::Int64, inputs...; stream = 
 	threads = Cuint.((K, K))
 	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
     cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs..., stream = stream)
-    cuCtxSynchronize()
+    # cuCtxSynchronize()
 end
 
 function run_kernel_1D(kernel::CUfunction, N::Int64, inputs...; stream = CUstream(C_NULL))
@@ -109,7 +109,7 @@ function run_kernel_1D(kernel::CUfunction, N::Int64, inputs...; stream = CUstrea
 	threads = Cuint.((K,))
 	blocks = Cuint.((ceil(Int, N/K),))
     cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs..., stream = stream)
-    cuCtxSynchronize()
+    # cuCtxSynchronize()
 end
 
 function kernelTests()
@@ -260,7 +260,7 @@ function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_b
 		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 		cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
-	cuCtxSynchronize()
+	# cuCtxSynchronize()
 end
 
 function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
@@ -279,7 +279,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 	#launch across output data size rather than output layer size
 	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_y)
-	cuCtxSynchronize()
+	# cuCtxSynchronize()
 	#changed from absolute sum to regular sum because the actual error values are stored in d_a[end]
 	tmp_out = host_allocate(d_a[end]) 
 	@fastmath sum(tmp_out)/m
@@ -296,7 +296,7 @@ function form_activations(d_Thetas::Vector{CUDAArray}, m::Int64)
 	return d_a
 end
 
-function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0)
+function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0; layerout = length(hidden_layers)+1)
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -308,7 +308,7 @@ function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, h
 	
 	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 
-	return (d_a[end], host_allocate(d_a[end]))
+	return (d_a[layerout], host_allocate(d_a[layerout]))
 end
 
 function predict!(d_Thetas, d_biases, d_X, d_a, resLayers::Int64=0)
@@ -343,6 +343,8 @@ function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_la
 		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
 		return host_allocate(d_a[end])
 	end
+
+	clear_gpu_data(d_a)
 	(cuda_allocate(out), out)
 end
 
@@ -388,6 +390,8 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 		end
 		for params in multiParams]
 	end
+
+	clear_gpu_data(d_a)
 	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
 end
 

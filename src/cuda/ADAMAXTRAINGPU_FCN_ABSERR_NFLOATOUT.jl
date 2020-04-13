@@ -114,6 +114,136 @@ function calcOutputGPU!(d_X, d_T, d_B, d_a; costFunc = "absErr", resLayers=0)
 	errs = calcError(d_a[end], d_y, costFunc=costFunc)
 end
 
+function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0)
+#calculate network output given input data and a set of network parameters.
+#calculation is performed on the GPU and then returned to system memory
+	# if costFunc != "absErr"
+	# 	error("Only the absErr cost function exists for the GPU backend")
+	# end
+
+	#Setup some useful variables
+	m = size(input_data, 1)
+	# n = size(output_data, 2)
+	
+	num_hidden = length(T) - 1
+	hidden_layers = if num_hidden > 0
+		map(p -> length(p), B[1:num_hidden])
+	else
+		Int64.([])
+	end
+
+	(m, input_layer_size) = size(input_data)
+	output_layer_size = length(B[end])
+
+	#transfer parameters to GPU
+	d_Thetas = device_allocate(T) 
+	d_Biases = device_allocate(B) 
+
+	free = zeros(UInt64, 1)
+	total = zeros(UInt64, 1)
+	cudaMemGetInfo(free, total)
+	newMem = free[1] - 1E9
+	maxB = min(2^17, getMaxGPUBatchSize(T, B, newMem))
+	if maxB == 0
+		println("Not enough GPU memory for calculation, returning nothing")
+		return nothing
+	else
+		out = if maxB > m 
+			d_X = cuda_allocate(input_data)
+			d_a = form_activations(d_Thetas, m)
+			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers)
+			# errs = calcError(d_a[end], cuda_allocate(output_data), costFunc = costFunc)
+			deallocate!(d_X)
+			out = host_allocate(d_a[layerout])
+			# predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+			clear_gpu_data(d_a)
+			out
+		else
+			if maxB == 2^17
+				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+			else
+				println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of GPU memory"))
+			end
+			numBatches = ceil(Int64, m/maxB)
+			if numBatches == 2
+				d_X = cuda_allocate(input_data[1:maxB, :])
+				(d_out1, out1) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				deallocate!(d_X)
+				d_X = cuda_allocate(input_data[maxB+1:m, :])
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				deallocate!(d_X)
+				out3 = [out1; out2]
+				# d_y = cuda_allocate(output_data[1:maxB, :])
+				# errs1 = calcError(d_out1, d_y, costFunc = costFunc)
+				# deallocate!(d_y)
+				# d_y = cuda_allocate(output_data[maxB+1:m, :])
+				# errs2 = calcError(d_out2, d_y, costFunc = costFunc)
+				# deallocate!(d_y)
+				# if length(errs1) == 1
+				# 	errs = (maxB*errs1 + (m-maxB)*errs2) / m
+				# else
+				# 	tmp1 = (maxB*errs1[1] + (m-maxB)*errs2[1]) / m
+				# 	tmp2 = (maxB*errs1[2] + (m-maxB)*errs2[2]) / m
+				# 	errs = (tmp1, tmp2)
+				# end
+				deallocate!(d_out1)
+				deallocate!(d_out2)
+				# (out3, errs)
+				out3
+			else
+				batchinds = [(i-1)*maxB+1:i*maxB for i in 1:numBatches-1]
+				# batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				# batchOutputs = [view(output_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
+				l = length(d_Thetas)
+				num_hidden = l - 1
+
+				d_a = form_activations(d_Thetas, maxB)
+				out = Matrix{Float32}(undef, m, length(B[layerout]))
+				# if occursin("Log", costFunc)
+				# 	cumerr = [0.0f0, 0.0f0]
+				# else
+				# 	cumerr = 0.0f0
+				# end 
+				for inds in batchinds
+					d_X = cuda_allocate(input_data[inds, :])
+					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers)
+					# d_y = cuda_allocate(output_data[inds, :])
+					deallocate!(d_X)
+					# err = calcError(d_a[end], d_y, costFunc=costFunc)
+					# deallocate!(d_y)
+					out[inds, :] .= host_allocate(d_a[layerout])
+					# if length(err) == 1
+					# 	cumerr += err
+					# else
+					# 	cumerr[1] += err[1]
+					# 	cumerr[2] += err[2]
+					# end
+				end
+
+				clear_gpu_data(d_a)
+
+				finalinds = (numBatches-1)*maxB+1:m
+				(d_out2, out2) = predict(d_Thetas, d_Biases, cuda_allocate(input_data[finalinds, :]), input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				# errs2 = calcError(d_out2, cuda_allocate(output_data[finalinds, :]), costFunc = costFunc)
+				out[finalinds, :] .= out2
+
+				# if length(errs2) == 1
+				# 	err = (size(out2, 1)*errs2 + maxB*cumerr) / m
+				# else
+				# 	err = ((size(out2, 1)*errs2[1] + maxB*cumerr[1]) / m, (size(out2, 1)*errs2[2] + maxB*cumerr[2]) / m)
+				# end
+				deallocate!(d_out2)
+				# (out, err)
+				out
+			end
+		end
+	end
+	clear_gpu_data(d_Thetas)
+	clear_gpu_data(d_Biases)
+	# return (out, errs)
+	return out
+end
+
 function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
@@ -146,7 +276,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	free = zeros(UInt64, 1)
 	total = zeros(UInt64, 1)
 	cudaMemGetInfo(free, total)
-	newMem = free[1] - (100*2^20)
+	newMem = free[1] - 1E9
 	maxB = min(2^17, getMaxGPUBatchSize(T, B, newMem))
 	if maxB == 0
 		println("Not enough GPU memory for calculation, returning nothing")
@@ -318,6 +448,11 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	else
 		fixederr = NNerr
 	end
+
+	deallocate!(d_input_data)
+	deallocate!(d_output_data)
+	deallocate!(d_v)
+	clear_gpu_data(d_a)
 	featureimpact = 100 .*(shuffle_errs .- NNerr) ./ abs(NNerr)
 	sortinds = reverse(sortperm(featureimpact))
 	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
@@ -367,7 +502,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	free = zeros(UInt64, 1)
 	total = zeros(UInt64, 1)
 	cudaMemGetInfo(free, total)
-	newMem = free[1] - (100*2^20)
+	newMem = free[1] - 1E9
 	maxB = min(2^17, getMaxGPUBatchSize(multiParams[1][1], multiParams[1][2], newMem))
 
 	if maxB == 0
@@ -652,15 +787,20 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		batchOutputs = device_allocate(outputbatchData)
 
 		if testset
-			d_testinput = cuda_allocate(input_test)
-			d_testoutput = cuda_allocate(output_test)
+			# d_testinput = cuda_allocate(input_test)
+			# d_testoutput = cuda_allocate(output_test)
+			testbatches = generateBatches(input_test, output_test, batchSize)
+			batchInputsTest = device_allocate(testbatches[1])
+			batchOutputsTest = device_allocate(testbatches[2])
 		end
 	else
 		batchInputs = prepdata[1]
 		batchOutputs = prepdata[2]
 		if testset
-			d_testinput = prepdata[3]
-			d_testoutput = prepdata[4]
+			# d_testinput = prepdata[3]
+			# d_testoutput = prepdata[4]
+			batchInputsTest = prepdata[3]
+			batchOutputsTest = prepdata[4]
 		end
 	end
 
@@ -709,7 +849,7 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	
 	numLayers = length(T0)
 
-	testset && (d_aTEST = form_activations(d_Thetas, mtest))
+	# testset && (d_aTEST = form_activations(d_Thetas, mtest))
 
 	nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[end], batchOutputs[end],lambda, dropout, costFunc = costFunc, resLayers=resLayers)
 	
@@ -723,7 +863,14 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	end
 
 	if testset
-		calcout_test(d_T, d_B) = nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, mtest, d_aTEST, d_testinput, d_testoutput, 0.0f0, 0.0f0, costFunc=costFunc, resLayers=resLayers)
+		# calcout_test(d_T, d_B) = nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, mtest, d_aTEST, d_testinput, d_testoutput, 0.0f0, 0.0f0, costFunc=costFunc, resLayers=resLayers)
+		function calcout_test(d_T, d_B)
+			currentout = 0.0f0
+			for i in eachindex(batchInputsTest)
+				currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], batchOutputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+			end
+			currentout = currentout/length(batchInputsTest)
+		end
 	end
 
 	currentOut = calcout_batches(d_Thetas, d_Biases)
@@ -850,9 +997,34 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 
 		epoch += 1
 	end
+
+
 	lastepoch = epoch - 1
 	currentOut = calcout_batches(d_Theta_est, d_Bias_est)
 	testset && (testout = calcout_test(d_Theta_est, d_Bias_est))
+
+	clearlist1 = [d_T0, d_Thetas, d_Theta_grads, d_Theta_avg, d_mT, d_vT, d_B0, d_Biases, d_Bias_grads, d_Bias_avg, d_mB, d_vB, d_onesVecParams, d_normVecParams]
+	clearlist2 = if isempty(prepdata)
+		[batchInputs, batchOutputs]
+	else
+		[]
+	end
+	clearlist3 = if isempty(prepdata) && testset
+		[batchInputsTest, batchOutputsTest]
+	else
+		[]
+	end
+	clearlist4 = if isempty(prepactivations)
+		[d_tanh_grad_zBATCH, d_aBATCH, d_deltasBATCH]
+	else
+		[]
+	end
+
+	for gpu_var in [clearlist1; clearlist2; clearlist3; clearlist4]
+		clear_gpu_data(gpu_var)
+	end
+
+	deallocate!(d_onesVecBATCH)
 
 	if ignorebest || (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
 		bestCost = currentOut
@@ -860,6 +1032,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		bestresultepoch = lastepoch
 		GPU2Host((bestThetas, bestBiases), (d_Theta_est, d_Bias_est))
 	end
+
+	clear_gpu_data(d_Theta_est)
+	clear_gpu_data(d_Bias_est)
 
 	time_per_epoch = timeRecord[2:lastepoch+1] .- timeRecord[1:lastepoch]
     train_time = timeRecord[lastepoch]

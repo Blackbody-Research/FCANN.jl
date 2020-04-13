@@ -766,14 +766,16 @@ end
 
 function generateBatches(input_data, output_data, batchsize)
 	m = size(output_data, 1)
-	if batchsize > m
-		error("Your batchsize is larger than the total number of examples.")
-	end
+	# if batchsize > m
+	# 	error("Your batchsize is larger than the total number of examples.")
+	# end
 	
 	numBatches = round(Int, ceil(m/batchsize))
 	inputbatchData = Array{Matrix{Float32}}(undef, numBatches)
 	outputbatchData = Array{Matrix{Float32}}(undef, numBatches)
-	randInd = [shuffle(collect(1:m)) shuffle(collect(1:m))]
+	
+	randInd = repeat(shuffle(collect(1:m)), ceil(Int, batchsize/m)+1)
+	
 	for i = 1:numBatches
 		inputbatchData[i] = input_data[randInd[(i-1)*batchsize + 1:i*batchsize], :]
 		outputbatchData[i] = output_data[randInd[(i-1)*batchsize + 1:i*batchsize], :]

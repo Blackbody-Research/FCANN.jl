@@ -1906,11 +1906,15 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
         println("Prepping batch and test data")
 		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
 		if backend == :GPU
+			testbatches = generateBatches(Xtest, Ytest, batchSize)
 			batchInputs = device_allocate(inputbatchData)
 			batchOutputs = device_allocate(outputbatchData)
-			d_testinput = cuda_allocate(Xtest)
-			d_testoutput = cuda_allocate(Ytest)
-			prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
+			# d_testinput = cuda_allocate(Xtest)
+			# d_testoutput = cuda_allocate(Ytest)
+			batchInputsTest = device_allocate(testbatches[1])
+			batchOutputsTest = device_allocate(testbatches[2])
+			# prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
+			prepdata = (batchInputs, batchOutputs, batchInputsTest, batchOutputsTest)
 		else
 			prepdata = (inputbatchData, outputbatchData)
 		end
@@ -1986,15 +1990,18 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
         println("Prepping batch and test data")
 		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
 		if backend == :GPU
+			testbatches = generateBatches(Xtest, Ytest, batchSize)
 			batchInputs = device_allocate(inputbatchData)
 			batchOutputs = device_allocate(outputbatchData)
-			d_testinput = cuda_allocate(Xtest)
-			d_testoutput = cuda_allocate(Ytest)
-			prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
+			# d_testinput = cuda_allocate(Xtest)
+			# d_testoutput = cuda_allocate(Ytest)
+			batchInputsTest = device_allocate(testbatches[1])
+			batchOutputsTest = device_allocate(testbatches[2])
+			# prepdata = (batchInputs, batchOutputs, d_testinput, d_testoutput)
+			prepdata = (batchInputs, batchOutputs, batchInputsTest, batchOutputsTest)
 		else
 			prepdata = (inputbatchData, outputbatchData)
 		end
-
 		println("Prepping activation data")
 		if backend == :GPU
 			d_Thetas = FCANN.device_allocate(T0) 

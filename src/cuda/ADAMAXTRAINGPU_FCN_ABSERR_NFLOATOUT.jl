@@ -607,7 +607,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 end
 
-function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0)
+function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)))
 
 	Random.seed!(1234)
 

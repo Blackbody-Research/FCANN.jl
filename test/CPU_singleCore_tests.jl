@@ -43,6 +43,12 @@ err = checkNumGrad(0.0f0, costFunc = "cauchyLogErr")
 println("TEST PASSED")
 println()
 
+println("Skipping activation functions")
+err = checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
 #basic test train with 1 input, 1 output, 1 neuron
 println("Testing simple ANN training version 1")
 println("-------------------------------------")

@@ -828,6 +828,33 @@ function generateBatches(data, batchsize)
 	return batchData
 end
 
+function generatebatchinds(data, batchsize)
+	m = size(data, 1)
+	# if batchsize > m
+	# 	error("Your batchsize is larger than the total number of examples.")
+	# end
+	
+	numBatches = round(Int, ceil(m/batchsize))
+	batchinds = Vector{AbstractVector{Int64}}(undef, numBatches)
+	
+	randInd = repeat(shuffle(collect(1:m)), ceil(Int, batchsize/m)+1)
+	
+	for i = 1:numBatches
+		batchinds[i] = randInd[(i-1)*batchsize + 1:i*batchsize]
+	end
+	return batchinds
+end
+
+function generatebatches(data, batchinds)
+	numbatches = length(batchinds)
+	batchdata = Vector{Matrix{Float32}}(undef, numbatches)
+	
+	for (i, ind) in enumerate(batchinds)
+		batchdata[i] = data[ind, :]
+	end
+	return batchdata
+end
+
 function generateBatches(input_data, output_data, batchsize)
 	m = size(output_data, 1)
 	# if batchsize > m
@@ -921,9 +948,10 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 
 
     if isempty(prepdata)
-		inputbatchData = generateBatches(input_data, batchSize)
+    	batchinds = generatebatchinds(input_data, batchSize)
+    	inputbatchData = generatebatches(input_data, batchinds)
 		if !autoencoder
-			outputbatchData = generateBatches(output_data, batchSize)
+			outputbatchData = generatebatches(output_data, batchinds)
 		end
 	else
 		inputbatchData = prepdata[1]

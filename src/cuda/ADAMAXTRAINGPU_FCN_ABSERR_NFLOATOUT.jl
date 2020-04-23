@@ -842,9 +842,10 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
     end
 
 	if isempty(prepdata)
-		inputbatchData = generateBatches(input_data, batchSize)
+		batchinds = generatebatchinds(input_data, batchSize)
+    	inputbatchData = generatebatches(input_data, batchinds)
 		if !autoencoder
-			outputbatchData = generateBatches(output_data, batchSize)
+			outputbatchData = generatebatches(output_data, batchinds)
 		end
 
 		batchInputs = device_allocate(inputbatchData)
@@ -855,9 +856,12 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		if testset
 			# d_testinput = cuda_allocate(input_test)
 			# d_testoutput = cuda_allocate(output_test)
-			testbatchinputs = generateBatches(input_test, batchSize)
+			batchinds = generatebatchinds(input_test, batchSize)
+			testbatchinputs = generatebatches(input_test, batchinds)
+			# testbatchinputs = generateBatches(input_test, batchSize)
 			if !autoencoder
-				testbatchoutputs = generateBatches(output_test, batchSize)
+				# testbatchoutputs = generateBatches(output_test, batchSize)
+				testbatchoutputs = generatebatches(output_test, batchinds)
 			end
 			batchInputsTest = device_allocate(testbatchinputs)
 			if !autoencoder

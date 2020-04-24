@@ -104,17 +104,17 @@ function calcError(modelOut::NVIDIALibraries.DeviceArray.CUDAArray, dataOut::NVI
 
 end
 
-function calcOutputGPU!(d_X, d_y, d_T, d_B, d_a; costFunc = "absErr", resLayers=0)
-	predict!(d_T, d_B, d_X, d_a, resLayers)
+function calcOutputGPU!(d_X, d_y, d_T, d_B, d_a; costFunc = "absErr", resLayers=0, activation_list = fill(true, length(d_T)-1))
+	predict!(d_T, d_B, d_X, d_a, resLayers, activation_list	= activation_list)
 	errs = calcError(d_a[end], d_y, costFunc=costFunc)
 end
 
-function calcOutputGPU!(d_X, d_T, d_B, d_a; costFunc = "absErr", resLayers=0)
-	predict!(d_T, d_B, d_X, d_a, resLayers)
+function calcOutputGPU!(d_X, d_T, d_B, d_a; costFunc = "absErr", resLayers=0, activation_list=fill(true, length(d_T)-1))
+	predict!(d_T, d_B, d_X, d_a, resLayers, activation_list=activation_list)
 	errs = calcError(d_a[end], d_y, costFunc=costFunc)
 end
 
-function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder=false, costFunc="absErr", dropout=0.0f0)
+function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder=false, costFunc="absErr", dropout=0.0f0, activation_list=fill(true, length(T)-1))
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	# if costFunc != "absErr"
@@ -151,7 +151,7 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 		out = if maxB > m 
 			d_X = cuda_allocate(input_data)
 			d_a = form_activations(d_Thetas, m)
-			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers)
+			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers, activation_list=activation_list)
 			# errs = calcError(d_a[end], cuda_allocate(output_data), costFunc = costFunc)
 			if autoencoder
 				errs = calcError(d_a[end], d_X, costFunc=costFunc)
@@ -174,13 +174,13 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 			numBatches = ceil(Int64, m/maxB)
 			if numBatches == 2
 				d_X = cuda_allocate(input_data[1:maxB, :])
-				(d_out1, out1) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				(d_out1, out1) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout, activation_list=activation_list)
 				if autoencoder
 					errs1 = calcError(d_out1, d_X, costFunc=costFunc)
 				end
 				deallocate!(d_X)
 				d_X = cuda_allocate(input_data[maxB+1:m, :])
-				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout, activation_list=activation_list)
 				if autoencoder
 					errs2 = calcError(d_out2, d_X, costFunc=costFunc)
 				end
@@ -236,7 +236,7 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 				end
 				for inds in batchinds
 					d_X = cuda_allocate(input_data[inds, :])
-					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers)
+					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 					# d_y = cuda_allocate(output_data[inds, :])
 					if autoencoder
 						err = calcError(d_a[end], d_X, costFunc=costFunc)
@@ -258,7 +258,7 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 
 				finalinds = (numBatches-1)*maxB+1:m
 				d_X = cuda_allocate(input_data[finalinds, :])
-				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout)
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, layerout=layerout, activation_list=activation_list)
 				if autoencoder
 					errs2 = calcError(d_out2, d_X, costFunc = costFunc)
 					if length(errs2) == 1
@@ -287,7 +287,7 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 	return out
 end
 
-function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0)
+function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list=fill(true, length(T)-1))
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	# if costFunc != "absErr"
@@ -328,7 +328,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		(out, errs) = if maxB > m 
 			d_X = cuda_allocate(input_data)
 			d_a = form_activations(d_Thetas, m)
-			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers)
+			predict!(d_Thetas, d_Biases, d_X, d_a, resLayers, activation_list=activation_list)
 			errs = calcError(d_a[end], cuda_allocate(output_data), costFunc = costFunc)
 			out = host_allocate(d_a[end])
 			clear_gpu_data(d_a)
@@ -344,10 +344,10 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			numBatches = ceil(Int64, m/maxB)
 			if numBatches == 2
 				d_X = cuda_allocate(input_data[1:maxB, :])
-				(d_out1, out1) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+				(d_out1, out1) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 				deallocate!(d_X)
 				d_X = cuda_allocate(input_data[maxB+1:m, :])
-				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 				deallocate!(d_X)
 				out3 = [out1; out2]
 				d_y = cuda_allocate(output_data[1:maxB, :])
@@ -382,7 +382,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 				end 
 				for inds in batchinds
 					d_X = cuda_allocate(input_data[inds, :])
-					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers)
+					forwardNOGRAD!(d_a, d_Thetas, d_Biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 					d_y = cuda_allocate(output_data[inds, :])
 					deallocate!(d_X)
 					err = calcError(d_a[end], d_y, costFunc=costFunc)
@@ -400,7 +400,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 
 				finalinds = (numBatches-1)*maxB+1:m
 				d_X = cuda_allocate(input_data[finalinds, :])
-				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+				(d_out2, out2) = predict(d_Thetas, d_Biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 				d_y = cuda_allocate(output_data[finalinds, :])
 				errs2 = calcError(d_out2, cuda_allocate(output_data[finalinds, :]), costFunc = costFunc)
 				out[finalinds, :] .= out2
@@ -422,7 +422,7 @@ function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	return (out, errs)
 end
 
-function errshufflecol(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, d_input_data::CUDAArray, d_output_data::CUDAArray, d_a::Vector{CUDAArray}, v::Vector, d_v::CUDAArray, ind; rng=1, reslayers=0, costFunc = "sqErr")
+function errshufflecol(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, d_input_data::CUDAArray, d_output_data::CUDAArray, d_a::Vector{CUDAArray}, v::Vector, d_v::CUDAArray, ind; rng=1, reslayers=0, costFunc = "sqErr", activation_list=fill(true, length(d_T)-1))
 
 
 	#fill v with column to shuffle
@@ -433,7 +433,7 @@ function errshufflecol(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_dat
 
 	hidden_layers = [a.size[1] for a in d_B][1:end-1]
 
-	errs = nnCostFunctionNOGRAD(d_T, d_B, size(input_data, 2), 1, hidden_layers::Vector, size(input_data, 1), d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers = reslayers)
+	errs = nnCostFunctionNOGRAD(d_T, d_B, size(input_data, 2), 1, hidden_layers::Vector, size(input_data, 1), d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers = reslayers, activation_list=activation_list)
 	
 	#restore input_data_copy to initial state
 	run_kernel_1D(swap_matrix_col, length(v), ind, d_input_data, d_v)
@@ -441,7 +441,7 @@ function errshufflecol(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_dat
 	return errs
 end
 
-function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[])
+function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[], activation_list=fill(true, length(d_T)-1))
 	(m, n) = size(input_data)
 	d_a = form_activations(d_T, m)
 	v = Vector{Float32}(undef, m)
@@ -452,7 +452,7 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	hidden_layers = [a.size[1] for a in d_B][1:end-1]
 	# println(hidden_layers)
 
-	NNerr = nnCostFunctionNOGRAD(d_T, d_B, n, 1, hidden_layers, m, d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers= reslayers)
+	NNerr = nnCostFunctionNOGRAD(d_T, d_B, n, 1, hidden_layers, m, d_a, d_input_data, d_output_data, 0.0f0, costFunc = costFunc, resLayers= reslayers, activation_list=activation_list)
 	# println("NNerr = $NNerr")
 
 	shuffleind = setdiff(1:n, fixedshuffle)
@@ -471,10 +471,10 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	tlast = time()
 	for (i, c) in enumerate(shuffleind)
 		if num == 1
-			err = errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=1, reslayers=reslayers, costFunc=costFunc)
+			err = errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=1, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list)
 			# println("new err = $err")
 		else
-			err = maximum([errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=j, reslayers=reslayers, costFunc=costFunc) for j in 1:num])
+			err = maximum([errshufflecol(d_T, d_B, input_data, d_input_data, d_output_data, d_a, v, d_v, c, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])
 		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = [c; fixedshuffle]
@@ -494,7 +494,7 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	end
 
 	if !isempty(fixedshuffle)
-		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc)[1] for j in 1:num])
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list)[1] for j in 1:num])
 	else
 		fixederr = NNerr
 	end
@@ -508,7 +508,7 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
 end
 
-function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0)
+function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0, activation_list=fill(true, length(multiParams[1][1]-1)))
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	#Setup some useful variables
@@ -561,7 +561,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	else 
 		multiOut = if maxB > m
 			d_X = cuda_allocate(input_data)
-			predictMulti(multiParamsGPU, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers)
+			predictMulti(multiParamsGPU, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 		else
 			if maxB == 2^17
 				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -570,16 +570,16 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			end
 			numBatches = ceil(Int64, m/maxB)
 			(out1, out2) = if numBatches == 2
-				out1 = predictMulti(multiParamsGPU, cuda_allocate(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
+				out1 = predictMulti(multiParamsGPU, cuda_allocate(input_data[1:maxB, :]), input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 				GC.gc()
-				out2 = predictMulti(multiParamsGPU, cuda_allocate(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
+				out2 = predictMulti(multiParamsGPU, cuda_allocate(input_data[maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 				GC.gc()
 				(out1, out2)
 			else
 				batchInputs = [view(input_data, (i-1)*maxB+1:i*maxB, :) for i = 1:numBatches-1]
-				out1 = predictMultiBatches(multiParamsGPU, batchInputs, input_layer_size, output_layer_size, hidden_layers, resLayers)
+				out1 = predictMultiBatches(multiParamsGPU, batchInputs, input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 				GC.gc()
-				out2 = predictMulti(multiParamsGPU, cuda_allocate(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, resLayers)
+				out2 = predictMulti(multiParamsGPU, cuda_allocate(input_data[(numBatches-1)*maxB+1:m, :]), input_layer_size, output_layer_size, hidden_layers, resLayers, activation_list=activation_list)
 				GC.gc()
 				(out1, out2)
 			end
@@ -658,10 +658,10 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers)
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec, costFunc = costFunc, resLayers=resLayers)
-	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers)
-	costCPU = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers)
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+	costCPU = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 	
 	GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
 
@@ -673,8 +673,8 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
@@ -770,7 +770,7 @@ function updateAvg!(nModels, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_T
 	cuCtxSynchronize()
 end
 
-function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=(), trainsample=1.0)
+function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)))
 #train on a GPU fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
@@ -933,9 +933,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	# testset && (d_aTEST = form_activations(d_Thetas, mtest))
 
 	if autoencoder
-		nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batchset[end]], lambda, dropout, costFunc = costFunc, resLayers=resLayers)
+		nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batchset[end]], lambda, dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 	else
-		nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batchset[end]], batchOutputs[batchset[end]],lambda, dropout, costFunc = costFunc, resLayers=resLayers)
+		nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batchset[end]], batchOutputs[batchset[end]],lambda, dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 	end
 	
 	function calcout_batches(d_T, d_B)
@@ -943,9 +943,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 
 		for i = batchset
 			if autoencoder
-				currentOut += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+				currentOut += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 			else
-				currentOut += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+				currentOut += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputs[i], batchOutputs[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 			end
 		end
 		currentOut = currentOut/length(batchset)
@@ -957,9 +957,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 			currentout = 0.0f0
 			for i in eachindex(batchInputsTest)
 				if autoencoder
-					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 				else
-					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], batchOutputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers)
+					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], batchOutputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 				end
 			end
 			currentout = currentout/length(batchInputsTest)
@@ -1014,9 +1014,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		for batch in shuffle(batchset)
 			if swa || (eta > 0)
 				if autoencoder
-					nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], lambda,dropout, costFunc = costFunc, resLayers=resLayers)
+					nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], lambda,dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 				else
-					nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], batchOutputs[batch],lambda,dropout, costFunc = costFunc, resLayers=resLayers)
+					nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], batchOutputs[batch],lambda,dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 				end
 				if swa && (epoch > 100)
 					updateParams!(G, d_Thetas, d_Biases, d_Theta_grads, d_Bias_grads)

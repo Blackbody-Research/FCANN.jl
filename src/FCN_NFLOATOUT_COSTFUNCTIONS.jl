@@ -157,9 +157,15 @@ end
 function noactivationGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32}, D::Float32)
 	l = length(z)
 	F = 1.0f0/(1.0f0 - D) #added scaling factor so dropout trained network can be treated normally during inference
-	
-	@inbounds for i = 1:l
-		tanh_grad_z[i] = Float32(rand() > D)*F
+	if D != 0
+		@inbounds for i = 1:l
+			tanh_grad_z[i] = Float32(rand() > D)*F
+			z[i] = tanh_grad_z[i]*z[i]
+		end
+	else
+		@inbounds for i in 1:l
+			tanh_grad_z[i] = 1.0f0
+		end
 	end
 end
 

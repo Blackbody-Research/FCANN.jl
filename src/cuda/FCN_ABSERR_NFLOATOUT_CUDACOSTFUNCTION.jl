@@ -2,7 +2,7 @@ using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
 @using_nvidialib_settings 
 
-costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "tanhActivation")
+costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")
 
 #for cuda version 8 tensor ops are not available so default to regular GEMM algorithm
 algo = try
@@ -220,7 +220,7 @@ function cublasSscal(handle::cublasHandle_t, alpha::Float32, x::CUDAArray)::Noth
     @assert (result == cudaSuccess) ("cublasSscal() error: " * cublasGetErrorName(result))
 end
 
-function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64=0)
+function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64=0; activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 #modifies d_a with forward activations
 	num_hidden = length(hidden_layers)
 	m = d_X.size[1]
@@ -244,7 +244,7 @@ function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_b
 
 	if num_hidden > 0
 
-		run_kernel(tanhActivation, m, hidden_layers[1], d_a[1])
+		activation_list[1] && run_kernel(tanhActivation, m, hidden_layers[1], d_a[1])
 
 		if num_hidden > 1
 			for i = 2:num_hidden
@@ -254,7 +254,7 @@ function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_b
 					#calculate residual skip every resLayers layers past the first hidden layer
 					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
 				end
-				run_kernel(tanhActivation, m, hidden_layers[i], d_a[i])	
+				activation_list[i] && run_kernel(tanhActivation, m, hidden_layers[i], d_a[i])	
 			end
 		end
 		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
@@ -263,7 +263,7 @@ function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_b
 	# cuCtxSynchronize()
 end
 
-function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	@assert d_a[end].size[1] == d_y.size[1]
 
@@ -276,7 +276,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	#define size of output data separately from output layer
 	n = d_y.size[2]
 	
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list = activation_list)
 	#launch across output data size rather than output layer size
 	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_y)
 	# cuCtxSynchronize()
@@ -285,7 +285,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	@fastmath sum(tmp_out)/m
 end
 
-function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	@assert d_a[end].size[1] == d_X.size[1]
 
@@ -298,7 +298,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	#define size of output data separately from output layer
 	n = d_X.size[2]
 	
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 	#launch across output data size rather than output layer size
 	run_kernel(costFuncKs[costFunc], m, n, d_a[end], d_X)
 	# cuCtxSynchronize()
@@ -318,7 +318,7 @@ function form_activations(d_Thetas::Vector{CUDAArray}, m::Int64)
 	return d_a
 end
 
-function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0; layerout = length(hidden_layers)+1)
+function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0; layerout = length(hidden_layers)+1, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -328,12 +328,12 @@ function predict(d_Thetas, d_biases, d_X, input_layer_size, output_layer_size, h
 
 	d_a = form_activations(d_Thetas, m)
 	
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 
 	return (d_a[layerout], host_allocate(d_a[layerout]))
 end
 
-function predict!(d_Thetas, d_biases, d_X, d_a, resLayers::Int64=0)
+function predict!(d_Thetas, d_biases, d_X, d_a, resLayers::Int64=0; activation_list::AbstractVector{Bool} = fill(true, length(d_Thetas)-1))
 	l = length(d_Thetas)
 	num_hidden = l - 1
 	m = d_X.size[1]
@@ -344,10 +344,10 @@ function predict!(d_Thetas, d_biases, d_X, d_a, resLayers::Int64=0)
 		h[1:l-1]
 	end
 
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 end
 
-function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0)
+function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0; activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -362,7 +362,7 @@ function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_la
 	out = mapreduce(vcat, batches) do X
 		d_X = cuda_allocate(collect(X))
 
-		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 		return host_allocate(d_a[end])
 	end
 
@@ -370,7 +370,7 @@ function predictBatches(d_Thetas, d_biases, batches, input_layer_size, output_la
 	(cuda_allocate(out), out)
 end
 
-function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0)
+function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64 = 0; activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -387,13 +387,13 @@ function predictMulti(multiParams, d_X, input_layer_size, output_layer_size, hid
 		d_Thetas = params[1]
 		d_biases = params[2]
 
-		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+		forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 		host_allocate(d_a[end])
 	end
 	for params in multiParams]
 end
 
-function predictMultiBatches(multiParams, batches, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64=0)
+function predictMultiBatches(multiParams, batches, input_layer_size, output_layer_size, hidden_layers, resLayers::Int64=0; activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 #PREDICT Predict the value of an input given a trained neural network
 #m = number of examples in X, input_layer_size = number of input values, output_layer_size = number of output values
 #hidden_layers = hidden layer vector
@@ -407,7 +407,7 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 		[begin
 			d_Thetas = params[1]
 			d_biases = params[2]
-			forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+			forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list=activation_list)
 			host_allocate(d_a[end])
 		end
 		for params in multiParams]
@@ -417,7 +417,7 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
 end
 
-function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	num_hidden = length(hidden_layers)
 
@@ -455,11 +455,14 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 	if num_hidden > 0
-
-		if D == 0.0f0
-			run_kernel(tanhGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+		if activation_list[1]
+			if D == 0.0f0
+				run_kernel(tanhGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+			else
+				run_kernel(tanhGradientDropout, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			end
 		else
-			run_kernel(tanhGradientDropout, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			run_kernel(noactivationGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
 		end
 
 		if num_hidden > 1
@@ -470,10 +473,14 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 					#calculate residual skip every resLayers layers past the first hidden layer
 					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
 				end
-				if D == 0.0f0
-					run_kernel(tanhGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+				if activation_list[i]
+					if D == 0.0f0
+						run_kernel(tanhGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+					else
+						run_kernel(tanhGradientDropout, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					end
 				else
-					run_kernel(tanhGradientDropout, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					run_kernel(noactivationGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
 				end
 			end
 		end
@@ -509,7 +516,7 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 end
 
 
-function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0)
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	num_hidden = length(hidden_layers)
 
@@ -548,10 +555,14 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 	if num_hidden > 0
 
-		if D == 0.0f0
-			run_kernel(tanhGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+		if activation_list[1]
+			if D == 0.0f0
+				run_kernel(tanhGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+			else
+				run_kernel(tanhGradientDropout, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			end
 		else
-			run_kernel(tanhGradientDropout, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			run_kernel(noactivationGradient, m, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
 		end
 
 		if num_hidden > 1
@@ -562,10 +573,14 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 					#calculate residual skip every resLayers layers past the first hidden layer
 					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
 				end
-				if D == 0.0f0
-					run_kernel(tanhGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+				if activation_list[i]
+					if D == 0.0f0
+						run_kernel(tanhGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+					else
+						run_kernel(tanhGradientDropout, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					end
 				else
-					run_kernel(tanhGradientDropout, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					run_kernel(noactivationGradient, m, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
 				end
 			end
 		end

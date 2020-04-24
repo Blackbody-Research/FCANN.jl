@@ -11,16 +11,16 @@ end
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash
 # with any cost function other than "absErr"
-function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder=false)
-	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
+function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, activation_list=fill(true, length(T)-1), costFunc = "absErr", resLayers = 0, autoencoder=false)
+	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
 end
 
-function calcOutput(input_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder = true)
-	eval(Symbol("calcOutput", backend))(input_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder = autoencoder)
+function calcOutput(input_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder = true, activation_list=fill(true, length(T)-1))
+	eval(Symbol("calcOutput", backend))(input_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder = autoencoder, activation_list=activation_list)
 end
 
-function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0)
-	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc, resLayers=resLayers)
+function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0, activation_list=fill(true, length(multiParams[1][1])-1))
+	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 end
 
 #form file suffix string based on training parameters, ignore those that do not impact training
@@ -1485,7 +1485,7 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = ())
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = (), activation_list = fill(true, length(hidden)))
 	printanything && println("reading and converting training data")
 	
 	if isempty(inputdata)
@@ -1573,11 +1573,11 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	end
 
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations)
+	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations, activation_list=activation_list)
 	GC.gc()
-	(outTrain, Jtrain) = calcOutput(traindata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder)
+	(outTrain, Jtrain) = calcOutput(traindata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder, activation_list=activation_list)
 	# GC.gc()
-	(outTest, Jtest) = calcOutput(testdata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder)
+	(outTest, Jtest) = calcOutput(testdata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder, activation_list=activation_list)
 
 	if writeFiles
 		if occursin("Log", costFunc)
@@ -1864,7 +1864,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	return (fullMultiPerformance, bootstrapOut)
 end
 
-function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0, ignorebest=false, lockepochs=false, minepoch=0, trainsample=1.0) where U <: Matrix{Float32}
+function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batchSize, hidden, lambda, c, alpha, R, num, ID; sampleCols = [], dropout = 0.0f0, printProg = false, printanything = true, costFunc = "absErr", writefiles = true, reslayers = 0, toltest = Inf, swa = false, multiparams=(), blasthreads=0, ignorebest=false, lockepochs=false, minepoch=0, trainsample=1.0, activation_list=fill(true, length(hidden))) where U <: Matrix{Float32}
 
 	X, Xtest = if isempty(sampleCols)
 		(Xraw, Xtestraw)
@@ -1969,7 +1969,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 			prepactivations = (tanh_grad_zBATCH, aBATCH, daltasBATCH)
 		end
 
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
 		multiOut1 = (T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch)
 		multiOut2 = pmap(2:num) do foo
 			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
@@ -2002,7 +2002,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	            Random.seed!(ID)
 	            Random.seed!(1234+rand(UInt32)+foo)
 	        end	
-			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, bestresultepoch, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=true, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample)
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, bestresultepoch, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=true, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
 		end
 		multiOut = [multiOut1; multiOut2]
 	else
@@ -2093,7 +2093,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	            Random.seed!(ID)
 	            Random.seed!(1234+rand(UInt32)+foo)
 	        end	
-			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample)
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
 		end
 	end
 
@@ -2114,10 +2114,10 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	writefiles && writeParams(fileout, string(ID, "_multiParams_", filename, ".bin"))
 	
 	printanything && println("Calculating training set outputs")
-	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+	(bootstrapOutTrain, outTrain, errTrain, errEstTrain) = calcMultiOut(X, Y, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers, activation_list=activation_list)#pmap(a -> calcOutput(X, Y, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
     # GC.gc()
     printanything && println("Calculating test set outputs")
-    (bootstrapOutTest, outTest, errTest, errEstTest) = calcMultiOut(Xtest, Ytest, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers) #pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
+    (bootstrapOutTest, outTest, errTest, errEstTest) = calcMultiOut(Xtest, Ytest, bootstrapOut, dropout = dropout, costFunc = costFunc, resLayers=reslayers, activation_list=activation_list) #pmap(a -> calcOutput(Xtest, Ytest, a[1], a[2], dropout = dropout, costFunc = costFunc)[1], bootstrapOut)
 	
 	header = if occursin("Log", costFunc)
 		[reshape(map(s -> string("Output ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Value Error Est ", s), 1:O), 1, O) reshape(map(s -> string("Prediction Range Error Est ", s), 1:O), 1, O)]
@@ -2628,7 +2628,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 	return fullMultiPerformance
 end
 
-function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false)
+function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false, activation_list=fill(true, length(hidden)))
 	#generate training set with m examples
 	m = 102400
 	X = randn(Float32, m, M)
@@ -2661,7 +2661,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end	
 	out = pmap(1:num) do _
 		BLAS.set_num_threads(numThreads)
-		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa, ignorebest=true)
+		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa, ignorebest=true, activation_list=activation_list)
 	end
 	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]

@@ -770,7 +770,7 @@ function updateAvg!(nModels, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_T
 	cuCtxSynchronize()
 end
 
-function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)))
+function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false)
 #train on a GPU fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
@@ -863,9 +863,17 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 				# testbatchoutputs = generateBatches(output_test, batchSize)
 				testbatchoutputs = generatebatches(output_test, batchinds)
 			end
-			batchInputsTest = device_allocate(testbatchinputs)
-			if !autoencoder
-				batchOutputsTest = device_allocate(testbatchoutputs)
+
+			if !testbatchloading
+				batchInputsTest = device_allocate(testbatchinputs)
+				if !autoencoder
+					batchOutputsTest = device_allocate(testbatchoutputs)
+				end
+			else
+				testbatchinput = cuda_allocate(testbatchinputs[1])
+				if !autoencoder
+					testbatchoutput = cuda_alloctae(testbatchoutputs[1])
+				end
 			end
 		end
 	else
@@ -955,14 +963,34 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 		# calcout_test(d_T, d_B) = nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, mtest, d_aTEST, d_testinput, d_testoutput, 0.0f0, 0.0f0, costFunc=costFunc, resLayers=resLayers)
 		function calcout_test(d_T, d_B)
 			currentout = 0.0f0
-			for i in eachindex(batchInputsTest)
+			if testbatchloading
+				testiter = eachindex(testbatchinputs)
+			else
+				testiter = eachindex(batchInputsTest)
+			end
+			for i in testiter
 				if autoencoder
-					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+					if testbatchloading
+						memcpy!(testbatchinput, testbatchinputs[i])
+						currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, testbatchinput, 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+					else
+						currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+					end
 				else
-					currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], batchOutputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+					if testbatchloading
+						memcpy!(testbatchinput, testbatchinputs[i])
+						memcpy!(testbatchoutput, testbatchoutputs[i])
+						currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, testbatchinput, testbatchoutput, 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+					else
+						currentout += nnCostFunctionNOGRAD(d_T, d_B, input_layer_size, n2, hidden_layers, batchSize, d_aBATCH, batchInputsTest[i], batchOutputsTest[i], 0.0f0, 0.0f0, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+					end
 				end
 			end
-			currentout = currentout/length(batchInputsTest)
+			if testbatchloading
+				currentout = currentout/length(testbatchinputs)
+			else
+				currentout = currentout/length(batchInputsTest)
+			end
 		end
 	end
 
@@ -1112,9 +1140,20 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	end
 	clearlist3 = if isempty(prepdata) && testset
 		if autoencoder
-			[batchInputsTest]
+			if testbatchloading
+				deallocate!(testbatchinput)
+				[]
+			else
+				[batchInputsTest]
+			end
 		else
-			[batchInputsTest, batchOutputsTest]
+			if testbatchloading
+				deallocate!(testbatchinput)
+				deallocate!(testbatchoutput)
+				[]
+			else
+				[batchInputsTest, batchOutputsTest]
+			end
 		end
 	else
 		[]

@@ -1485,7 +1485,7 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = (), activation_list = fill(true, length(hidden)))
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = (), activation_list = fill(true, length(hidden)), testbatchloading=false)
 	printanything && println("reading and converting training data")
 	
 	if isempty(inputdata)
@@ -1573,7 +1573,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	end
 
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations, activation_list=activation_list)
+	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations, activation_list=activation_list, testbatchloading=testbatchloading)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(traindata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder, activation_list=activation_list)
 	# GC.gc()

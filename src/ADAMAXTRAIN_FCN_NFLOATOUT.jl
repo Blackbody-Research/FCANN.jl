@@ -874,7 +874,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)))
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.

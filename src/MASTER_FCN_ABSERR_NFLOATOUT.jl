@@ -1606,7 +1606,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	(record, T, B, Jtrain, outTrain, bestCost, Jtest, outTest, bestCostTest, bestresultepoch)
 end
 
-function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = resLayers, swa = false, printanything=true, initparams=(), ignorebest=false)
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = 0, swa = false, printanything=true, initparams=(), ignorebest=false)
 
 	M = size(X, 2)
 	O = size(Y, 2)

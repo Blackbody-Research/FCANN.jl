@@ -301,7 +301,7 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 	#Setup some useful variables
 	m = size(input_data, 1)
 	n = if occursin("Log", costFunc)
-		length(multiParams[1][2][end])/2
+		round(Int64, length(multiParams[1][2][end])/2)
 	else
 		length(multiParams[1][2][end])
 	end

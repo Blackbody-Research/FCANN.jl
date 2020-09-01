@@ -296,6 +296,109 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	return (multiOut, out, errs, outErrEst)
 end
 
+function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1))
+#calculate network output given input data and a set of network parameters.
+	#Setup some useful variables
+	m = size(input_data, 1)
+	n = if occursin("Log", costFunc)
+		length(multiParams[1][2][end])/2
+	else
+		length(multiParams[1][2][end])
+	end
+
+	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
+		"sqErr"
+	else
+		"absErr"
+	end
+
+	membuffer = min(1E9, Sys.total_memory()*0.01)
+
+	#if copying the input data will result in needing to break up the data into smaller batches to preserve system memory, then it isn't worth it
+	#account for copying input data memory into other workers while leaving 1 GB left over 
+	#except on apple systems where free memory is underreported
+	function availMem(w)
+		if Sys.isapple()
+			Int64(Sys.free_memory()) - (w * sizeof(input_data))
+		else
+			Int64(Sys.free_memory()) - (w * sizeof(input_data)) - membuffer
+		end
+	end
+
+	calcMaxB(w) = getMaxBatchSize(multiParams[1][1], multiParams[1][2], availMem(w))
+	#create a vector of added workers that will still allow for large batch sizes
+	validProcCount = if nprocs() < 3
+		[]
+	else
+		findall(a -> a > m, calcMaxB.(2:nprocs()-1)) 
+	end
+
+
+	multiOut = if isempty(validProcCount) 
+		if nprocs() > 2
+			println(string("Performing single threaded prediction because the limited available memory would require breaking input data into batches when copied to workers"))
+		else
+			println("Performing multi prediction on a single thread")
+		end
+		BLAS.set_num_threads(0)
+		newMem = if Sys.isapple()
+			Int64(Sys.free_memory())
+		else
+			Int64(Sys.free_memory()) - membuffer
+		end
+		maxB = min(2^17, getMaxBatchSize(multiParams[1][1], multiParams[1][2], newMem))
+		if maxB == 0
+			println("Not enough memory for calculation, returning nothing")
+			return nothing
+		else
+			if maxB > m	
+				predictMulti(multiParams, input_data, resLayers, activation_list=activation_list)
+			else
+				if maxB == 2^17
+					println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
+				else
+					println(string("Breaking up ", m, " input examples into batches of size ", maxB, " to fit in ", newMem/(1024^3), " gigabytes of memory"))
+				end
+				numBatches = ceil(Int64, m/maxB)
+				batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
+				out1 = predictMultiBatches(multiParams, batchInputs, resLayers, activation_list=activation_list)
+				out2 = predictMulti(multiParams, input_data[(numBatches-1)*maxB+1:m, :], resLayers, activation_list=activation_list)
+				map((a, b) -> [a; b], out1, out2)
+			end
+		end
+	else
+		#value is the total number of parallel tasks that should be created to maximize batch size
+		numTasks = min(nprocs()-1, validProcCount[end] + 1)
+		# println(string("Running multi prediction using ", numTasks, " parallel tasks"))
+		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs()-1, numTasks)))))
+		if length(multiParams) > numTasks
+			partitionInds = rem.(1:length(multiParams), numTasks) .+ 1
+			multiParamsPartition = [multiParams[findall(i -> i == n, partitionInds)] for n in 1:numTasks]
+			reduce(vcat, pmap(a -> predictMulti(a, input_data, resLayers, activation_list=activation_list), multiParamsPartition))
+		else
+			pmap(a -> predict(a[1], a[2], input_data, resLayers, activation_list=activation_list), multiParams) 
+		end
+	end
+
+
+	out = if occursin("Log", costFunc)
+		out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+		out2 = log.(1 ./sqrt.(mapreduce(a -> exp.(-2*a[:, n+1:2*n]), +, multiOut)/length(multiOut)))
+		[out1 out2]
+	else
+		mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
+	end
+
+	outErrEst = if occursin("Log", costFunc)
+		mapreduce(a -> abs.([a[:, 1:n] exp.(-a[:, n+1:2*n])] .- [out[:, 1:n] exp.(-out[:, n+1:2*n])]), +, multiOut)/length(multiOut)
+	else
+		mapreduce(a -> abs.(a .- out), +, multiOut)/length(multiOut)
+	end
+
+	GC.gc()
+	return (multiOut, out, outErrEst)
+end
+
 function calcMultiOutCPU!(input_data, output_data, multiParams, a, multiOut; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1))
 	#calculate network output given input data and a set of network parameters.
 	#Setup some useful variables

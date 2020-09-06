@@ -127,8 +127,8 @@ function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 			end
 			numBatches = ceil(Int64, m/maxB)
 			batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
-			out1 = predictBatches(T, B, batchInputs, resLayers, layerout=layerout)
-			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, layerout=layerout)
+			out1 = predictBatches(T, B, batchInputs, resLayers, layerout=layerout, activation_list=activation_list)
+			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, layerout=layerout, activation_list=activation_list)
 			[out1; out2]
 		end
 		if autoencoder

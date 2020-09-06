@@ -333,7 +333,7 @@ function predict!(Thetas, biases, X::Matrix{Float32}, a::Vector{Matrix{Float32}}
 	#dropout scale factor
 	# F = (1.0f0 - D)
 
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers)
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
 end
 
 function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0; layerout=length(Thetas), activation_list = fill(true, length(Thetas)-1))

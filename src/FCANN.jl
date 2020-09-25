@@ -17,7 +17,7 @@ global backendList = [:CPU]
 #get cuda toolkit versions if any
 println("Checking for cuda toolkit versions")
 cuda_versions = try
-    filter(v -> v <= VersionNumber("10.1"), if Sys.islinux()
+    if Sys.islinux()
         map(VersionNumber,
             map((function(name::String)
                 return name[6:end]
@@ -26,7 +26,7 @@ cuda_versions = try
                     if occursin("cuda-", i))))
     else
         get_cuda_toolkit_versions()
-    end)
+    end
 catch
     []
 end
@@ -132,19 +132,8 @@ end
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput, calcfeatureimpact
 
 function __init__()
-    if isempty(cuda_versions)
-        println("No cuda toolkit appears to be installed.  If this sytem has an NVIDIA GPU, install the cuda toolkit and add nvcc to the system path to use the GPU backend.")
-        println("Available backends are: CPU")
-    else
-        println("CUDA version $(cuda_versions[end]) installed, attempting to load GPU backend functions")
-        println("Using the following cuda settings: $(NVIDIALibraries.get_nvlib_settings()) saved to $(joinpath(pwd(), "nvlib_julia.conf")).")
-        if length(cuda_versions) > 1
-            println("Using the latest available version of the cuda toolkit installed by default.  To switch to an earlier cuda version, edit config file above with one of the installed versions: $(cuda_versions)")
-        end 
-        
+   if includecuda
         try 
-            
-
             println("Checking nvcc compiler in system path")
             run(`nvcc --version`)
             
@@ -186,6 +175,8 @@ function __init__()
             println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
         end
+    else
+        println("Available backends are: CPU")
     end
 
     # else

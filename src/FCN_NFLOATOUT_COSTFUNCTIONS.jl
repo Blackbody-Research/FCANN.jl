@@ -354,11 +354,18 @@ function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLay
 	end
 	a = form_activations(Thetas, m)
 
+	outputlength = mapreduce(a -> size(a, 1), +, batches)
+	(batchlength, outputwidth) = size(a[layerout])
+	output = Matrix{Float32}(undef, outputlength, outputwidth)
 	#dropout scale factor
 	# F = (1.0f0 - D)
-	mapreduce(vcat, batches) do X
+	row = 1
+	# mapreduce(vcat, batches) do X
+	for X in batches
 		forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list=activation_list)
-		copy(a[layerout])
+		output[row:row+batchlength-1, :] .= a[layerout]
+		row = row+batchlength
+		# output[copy(a[layerout])
 	end
 end
 

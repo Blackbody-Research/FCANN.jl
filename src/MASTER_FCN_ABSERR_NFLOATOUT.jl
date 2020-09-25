@@ -5,8 +5,15 @@ using Distributed
 
 include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
 
-if !isempty(cuda_versions)
+includecuda = false
+if isempty(cuda_versions)
+    println("No cuda toolkit appears to be installed.  If this sytem has an NVIDIA GPU, install the cuda toolkit and add nvcc to the system path to use the GPU backend.")
+    println("Available backends are: CPU")
+elseif cuda_versions[end] > VersionNumber("10.1")
+	println("The lastest cuda toolkit installed is $(cuda_versions[end]) which exceeds the latest supported version of 10.1")
+else
 	include(joinpath("cuda", "ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl"))
+	includecuda=true
 end
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash

@@ -4,8 +4,13 @@ name = "test"
 M = 10
 O = 2
 
-println("Adding 4 cores to test multitrain algorithms")
-addprocs(4)
+newprocs = 5 - nprocs()
+if newprocs > 0
+	println("Adding $newprocs workers to test multitrain algorithms")
+	addprocs(1, restrict=true, exeflags="--project")
+	addprocs(newprocs-1, restrict=true, exeflags="--project")
+end
+
 @everywhere using FCANN
 println("--------------------------------------------")
 println("Testing archEval")

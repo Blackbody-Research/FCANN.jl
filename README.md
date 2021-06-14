@@ -1,7 +1,7 @@
 # FCANN
-[![Build Status](https://travis-ci.org/Blackbody-Research/FCANN.jl.svg?branch=master)](https://travis-ci.org/Blackbody-Research/FCANN.jl)
-[![codecov.io](https://codecov.io/gh/Blackbody-Research/FCANN.jl/branch/master/graphs/badge.svg?)](http://codecov.io/gh/Blackbody-Research/FCANN.jl)
-[![Coverage Status](https://coveralls.io/repos/github/Blackbody-Research/FCANN.jl/badge.svg?branch=master)](https://coveralls.io/github/Blackbody-Research/FCANN.jl?branch=master)
+[![Build Status](https://travis-ci.com/Blackbody-Research/FCANN.jl.svg?branch=julia-1.6)](https://travis-ci.com/Blackbody-Research/FCANN.jl)
+[![codecov.io](https://codecov.io/gh/Blackbody-Research/FCANN.jl/branch/julia-1.6/graphs/badge.svg?)](http://codecov.io/gh/Blackbody-Research/FCANN.jl)
+[![Coverage Status](https://coveralls.io/repos/github/Blackbody-Research/FCANN.jl/badge.svg?branch=julia-1.6)](https://coveralls.io/github/Blackbody-Research/FCANN.jl?branch=julia-1.6)
 
 Simple module for **F**ully **C**onnected **A**rtificial **N**eural **N**etworks.  Minimum functionality for changing error functions.  Current output task is fixed at regression (floating point value output) but in the future the option to define a network for classification will be added.
 

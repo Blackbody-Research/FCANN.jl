@@ -100,9 +100,9 @@ lambda = 0.0f0 # L2 regularization constant
 c = 2.0f0 # max norm regularization constant (Inf means it doesn't apply)
 
 #run training saving output variables containing trained parameters (T, B), the lowest cost achieved on the training set, a record of costs per epoch, and a record of timestamps each epoch
-T, B, bestCost, record, timeRecord = FCANN.ADAMAXTrainNNCPU(Xtrain, ytrain, batchSize, T0, B0, N, M, H, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, dropout = 0.0f0, costFunc = "absErr")
+T, B, bestCost, record, timeRecord = FCANN.ADAMAXTrainNNCPU(((Xtrain, ytrain)), batchSize, T0, B0, N, M, H, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, dropout = 0.0f0, costFunc = "absErr")
 ```
-
+Note the format for the data input.  It is a tuple with the following possibilities: ((Xtrain,),) (training an autoencoder with no test set), ((Xtrain, ytrain),) (training an input/output pair with no test set), ((Xtrain,), (Xtest,)) (training and autoencoder with a test set), ((Xtrain, ytrain), (Xtest, ytest)) (training an input/output pair with a test set).
 They keyword arguments can be omitted but here show the default values.  The costFunc keyword can be used to change the cost function in the final output layer that calculates the error between the model output and the training data output.  Whenever a model is trained, it is done with a particular cost function in mind.  This is specified in the training process, not in the model construction.
 
 #### Training a Single Network

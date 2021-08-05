@@ -977,7 +977,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false)
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -1165,7 +1165,11 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 
 	iter = 1
 	epoch = 1
-	eta = alpha
+	eta = if isempty(lrschedule)
+		alpha
+	else
+		lrschedule[1]
+	end
 	F = (1.0f0 - R)
 	G = alpha*F
 	tfail = 0
@@ -1177,6 +1181,9 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	while (epoch <= minepoch) || ((epoch <= N) && (tfail <= patience) && tolpass)
 	#while epoch <= N
 		#run through an epoch in batches with randomized order
+		if !isempty(lrschedule)
+			eta = lrschedule[epoch]
+		end
 		for batch in shuffle(batchset)
 			if eta > 0
 				if autoencoder
@@ -1233,14 +1240,15 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 				tfail += 1
 			end
 
-			if epoch > 100
-				#println(string("eta = ", eta))
-				eta = eta*F
-				if (testset ? testout : currentOut) > tol
-					tolpass = false
+			if isempty(lrschedule)
+				if epoch > 100
+					#println(string("eta = ", eta))
+					eta = eta*F
+					if (testset ? testout : currentOut) > tol
+						tolpass = false
+					end
 				end
 			end
-			
 			iter += 1
 		end
 
@@ -1272,6 +1280,8 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
 		end
 		epoch += 1
+
+	
 	end
 	lastepoch = epoch - 1
 	currentOut = calcout_batches(T_est, B_est)

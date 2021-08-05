@@ -1613,7 +1613,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	(record, T, B, Jtrain, outTrain, bestCost, Jtest, outTest, bestCostTest, bestresultepoch)
 end
 
-function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = 0, swa = false, printanything=true, initparams=(), ignorebest=false)
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = 0, swa = false, printanything=true, initparams=(), ignorebest=false, lrschedule = Vector{Float32}())
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -1658,7 +1658,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	#BLAS.set_num_threads(Sys.CPU_THREADS)	
 	# BLAS.set_num_threads(0)	
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything, ignorebest=ignorebest)
+	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, lrschedule = lrschedule, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything, ignorebest=ignorebest)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	

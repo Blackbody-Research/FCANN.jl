@@ -18,16 +18,16 @@ end
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash
 # with any cost function other than "absErr"
-function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, activation_list=fill(true, length(T)-1), costFunc = "absErr", resLayers = 0, autoencoder=false)
-	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
+function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, activation_list=fill(true, length(T)-1), costFunc = "absErr", resLayers = 0, autoencoder=false, userelu = false)
+	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list, userelu = false)
 end
 
-function calcOutput(input_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder = true, activation_list=fill(true, length(T)-1))
-	eval(Symbol("calcOutput", backend))(input_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder = autoencoder, activation_list=activation_list)
+function calcOutput(input_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder = true, activation_list=fill(true, length(T)-1), userelu = false)
+	eval(Symbol("calcOutput", backend))(input_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder = autoencoder, activation_list=activation_list, userelu = false)
 end
 
-function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0, activation_list=fill(true, length(multiParams[1][1])-1))
-	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0, activation_list=fill(true, length(multiParams[1][1])-1), userelu = false)
+	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, userelu = false)
 end
 
 #form file suffix string based on training parameters, ignore those that do not impact training

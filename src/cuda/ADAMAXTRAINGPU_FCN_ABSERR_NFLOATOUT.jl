@@ -104,17 +104,17 @@ function calcError(modelOut::NVIDIALibraries.DeviceArray.CUDAArray, dataOut::NVI
 
 end
 
-function calcOutputGPU!(d_X, d_y, d_T, d_B, d_a; costFunc = "absErr", resLayers=0, activation_list = fill(true, length(d_T)-1))
+function calcOutputGPU!(d_X, d_y, d_T, d_B, d_a; costFunc = "absErr", resLayers=0, activation_list = fill(true, length(d_T)-1), userelu = false)
 	predict!(d_T, d_B, d_X, d_a, resLayers, activation_list	= activation_list)
 	errs = calcError(d_a[end], d_y, costFunc=costFunc)
 end
 
-function calcOutputGPU!(d_X, d_T, d_B, d_a; costFunc = "absErr", resLayers=0, activation_list=fill(true, length(d_T)-1))
+function calcOutputGPU!(d_X, d_T, d_B, d_a; costFunc = "absErr", resLayers=0, activation_list=fill(true, length(d_T)-1), userelu = false)
 	predict!(d_T, d_B, d_X, d_a, resLayers, activation_list=activation_list)
 	errs = calcError(d_a[end], d_y, costFunc=costFunc)
 end
 
-function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder=false, costFunc="absErr", dropout=0.0f0, activation_list=fill(true, length(T)-1))
+function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder=false, costFunc="absErr", dropout=0.0f0, activation_list=fill(true, length(T)-1), userelu = false)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	# if costFunc != "absErr"
@@ -287,7 +287,7 @@ function calcOutputGPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 	return out
 end
 
-function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list=fill(true, length(T)-1))
+function calcOutputGPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list=fill(true, length(T)-1), userelu = false)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	# if costFunc != "absErr"
@@ -508,7 +508,7 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
 end
 
-function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0, activation_list=fill(true, length(multiParams[1][1]-1)))
+function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0, activation_list=fill(true, length(multiParams[1][1]-1)), userelu = false)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	#Setup some useful variables
@@ -607,7 +607,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 end
 
-function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)))
+function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), userelu = false)
 
 	Random.seed!(1234)
 

@@ -49,6 +49,12 @@ err = checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activati
 println("TEST PASSED")
 println()
 
+println("Using RELU activation")
+err = checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", userelu = true)
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
 #basic test train with 1 input, 1 output, 1 neuron
 println("Testing simple ANN training version 1")
 println("-------------------------------------")

@@ -97,7 +97,7 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 	end
 end
 
-function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder = false, costFunc = "absErr", dropout = 0.0f0, activation_list = fill(true, length(T)-1))
+function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder = false, costFunc = "absErr", dropout = 0.0f0, activation_list = fill(true, length(T)-1), userelu = userelu)
 #calculate network output given input data and a set of network parameters.
 	#Setup some useful variables
 	m = size(input_data, 1)
@@ -118,7 +118,7 @@ function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 		return nothing
 	else
 		out = if maxB > m
-			predict(T, B, input_data, resLayers, layerout=layerout, activation_list=activation_list)
+			predict(T, B, input_data, resLayers, layerout=layerout, activation_list=activation_list, userelu = userelu)
 		else
 			if maxB == 2^17
 				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -127,8 +127,8 @@ function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 			end
 			numBatches = ceil(Int64, m/maxB)
 			batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
-			out1 = predictBatches(T, B, batchInputs, resLayers, layerout=layerout, activation_list=activation_list)
-			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, layerout=layerout, activation_list=activation_list)
+			out1 = predictBatches(T, B, batchInputs, resLayers, layerout=layerout, activation_list=activation_list, userelu = userelu)
+			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, layerout=layerout, activation_list=activation_list, userelu = userelu)
 			[out1; out2]
 		end
 		if autoencoder
@@ -140,7 +140,7 @@ function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 	end
 end
 
-function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(T)-1))
+function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(T)-1), userelu = false)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	#Setup some useful variables
@@ -173,8 +173,8 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 			end
 			numBatches = ceil(Int64, m/maxB)
 			batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
-			out1 = predictBatches(T, B, batchInputs, resLayers, activation_list=activation_list)
-			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, activation_list=activation_list)
+			out1 = predictBatches(T, B, batchInputs, resLayers, activation_list=activation_list, userelu = userelu)
+			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, activation_list=activation_list, userelu = userelu)
 			[out1; out2]
 		end
 
@@ -184,19 +184,19 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 	end
 end
 
-function calcOutputCPU!(input_data, output_data, T, B, a; costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(T)-1))
+function calcOutputCPU!(input_data, output_data, T, B, a; costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(T)-1), userelu = false)
 #calculate network output given input data and a set of network parameters.
 #calculation is performed on the GPU and then returned to system memory
 	#Setup some useful variables
 	m = size(input_data, 1)
 	n = size(output_data, 2)
 			
-	predict!(T, B, input_data, a, resLayers, activation_list=activation_list)
+	predict!(T, B, input_data, a, resLayers, activation_list=activation_list, userelu = userelu)
 	errs = calcError(a[end], output_data, costFunc = costFunc)
 	return errs
 end
 
-function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1))
+function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1), userelu = false)
 #calculate network output given input data and a set of network parameters.
 	#Setup some useful variables
 	m = size(input_data, 1)
@@ -248,7 +248,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			return nothing
 		else
 			if maxB > m	
-				predictMulti(multiParams, input_data, resLayers, activation_list=activation_list)
+				predictMulti(multiParams, input_data, resLayers, activation_list=activation_list, userelu = userelu)
 			else
 				if maxB == 2^17
 					println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -257,8 +257,8 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 				end
 				numBatches = ceil(Int64, m/maxB)
 				batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
-				out1 = predictMultiBatches(multiParams, batchInputs, resLayers, activation_list=activation_list)
-				out2 = predictMulti(multiParams, input_data[(numBatches-1)*maxB+1:m, :], resLayers, activation_list=activation_list)
+				out1 = predictMultiBatches(multiParams, batchInputs, resLayers, activation_list=activation_list, userelu = userelu)
+				out2 = predictMulti(multiParams, input_data[(numBatches-1)*maxB+1:m, :], resLayers, activation_list=activation_list, userelu = userelu)
 				map((a, b) -> [a; b], out1, out2)
 			end
 		end
@@ -270,9 +270,9 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		if length(multiParams) > numTasks
 			partitionInds = rem.(1:length(multiParams), numTasks) .+ 1
 			multiParamsPartition = [multiParams[findall(i -> i == n, partitionInds)] for n in 1:numTasks]
-			reduce(vcat, pmap(a -> predictMulti(a, input_data, resLayers, activation_list=activation_list), multiParamsPartition))
+			reduce(vcat, pmap(a -> predictMulti(a, input_data, resLayers, activation_list=activation_list, userelu = userelu), multiParamsPartition))
 		else
-			pmap(a -> predict(a[1], a[2], input_data, resLayers, activation_list=activation_list), multiParams) 
+			pmap(a -> predict(a[1], a[2], input_data, resLayers, activation_list=activation_list, userelu = userelu), multiParams) 
 		end
 	end
 
@@ -296,7 +296,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	return (multiOut, out, errs, outErrEst)
 end
 
-function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1))
+function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1), userelu = false)
 #calculate network output given input data and a set of network parameters.
 	#Setup some useful variables
 	m = size(input_data, 1)
@@ -352,7 +352,7 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 			return nothing
 		else
 			if maxB > m	
-				predictMulti(multiParams, input_data, resLayers, activation_list=activation_list)
+				predictMulti(multiParams, input_data, resLayers, activation_list=activation_list, userelu = userelu)
 			else
 				if maxB == 2^17
 					println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))
@@ -361,8 +361,8 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 				end
 				numBatches = ceil(Int64, m/maxB)
 				batchInputs = [input_data[(i-1)*maxB+1:i*maxB, :] for i = 1:numBatches-1]
-				out1 = predictMultiBatches(multiParams, batchInputs, resLayers, activation_list=activation_list)
-				out2 = predictMulti(multiParams, input_data[(numBatches-1)*maxB+1:m, :], resLayers, activation_list=activation_list)
+				out1 = predictMultiBatches(multiParams, batchInputs, resLayers, activation_list=activation_list, userelu = userelu)
+				out2 = predictMulti(multiParams, input_data[(numBatches-1)*maxB+1:m, :], resLayers, activation_list=activation_list, userelu = userelu)
 				map((a, b) -> [a; b], out1, out2)
 			end
 		end
@@ -374,9 +374,9 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 		if length(multiParams) > numTasks
 			partitionInds = rem.(1:length(multiParams), numTasks) .+ 1
 			multiParamsPartition = [multiParams[findall(i -> i == n, partitionInds)] for n in 1:numTasks]
-			reduce(vcat, pmap(a -> predictMulti(a, input_data, resLayers, activation_list=activation_list), multiParamsPartition))
+			reduce(vcat, pmap(a -> predictMulti(a, input_data, resLayers, activation_list=activation_list, userelu = userelu), multiParamsPartition))
 		else
-			pmap(a -> predict(a[1], a[2], input_data, resLayers, activation_list=activation_list), multiParams) 
+			pmap(a -> predict(a[1], a[2], input_data, resLayers, activation_list=activation_list, userelu = userelu), multiParams) 
 		end
 	end
 
@@ -399,7 +399,7 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 	return (multiOut, out, outErrEst)
 end
 
-function calcMultiOutCPU!(input_data, output_data, multiParams, a, multiOut; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1))
+function calcMultiOutCPU!(input_data, output_data, multiParams, a, multiOut; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(multiParams[1][1])-1), userelu = false)
 	#calculate network output given input data and a set of network parameters.
 	#Setup some useful variables
 	m = size(input_data, 1)
@@ -411,7 +411,7 @@ function calcMultiOutCPU!(input_data, output_data, multiParams, a, multiOut; dro
 		"absErr"
 	end
 
-	predictMulti!(multiParams, input_data, a, multiOut, resLayers, activation_list=activation_list)
+	predictMulti!(multiParams, input_data, a, multiOut, resLayers, activation_list=activation_list, userelu = userelu)
 
 	out = if occursin("Log", costFunc)
 		out1 = mapreduce(a -> a[:, 1:n], +, multiOut)/length(multiOut)
@@ -432,7 +432,7 @@ function calcMultiOutCPU!(input_data, output_data, multiParams, a, multiOut; dro
 	return (out, errs, outErrEst)
 end
 
-function errshufflecols(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a::Vector{Matrix{Float32}}, v, inds; rng=1, reslayers=0, costFunc = "sqErr", activation_list = fill(true, length(T)-1))
+function errshufflecols(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a::Vector{Matrix{Float32}}, v, inds; rng=1, reslayers=0, costFunc = "sqErr", activation_list = fill(true, length(T)-1), userelu = false)
 
 	for ind in inds
 		if ind != 0
@@ -443,7 +443,7 @@ function errshufflecols(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, 
 		end
 	end
 
-	errs = calcOutputCPU!(input_data_copy, output_data, T, B, a, costFunc=costFunc, resLayers = reslayers, activation_list=activation_list)
+	errs = calcOutputCPU!(input_data_copy, output_data, T, B, a, costFunc=costFunc, resLayers = reslayers, activation_list=activation_list, userelu = userelu)
 	
 	#restore input_data_copy to initial state
 	for ind in inds
@@ -455,7 +455,7 @@ function errshufflecols(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, 
 	return errs
 end
 
-function errshufflecols(multiparams, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a::Vector{Matrix{Float32}}, multiout::Vector{Matrix{Float32}}, v, inds; rng=1, reslayers=0, costFunc = "sqErr", activation_list = fill(true, length(multiparams[1][1])-1))
+function errshufflecols(multiparams, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a::Vector{Matrix{Float32}}, multiout::Vector{Matrix{Float32}}, v, inds; rng=1, reslayers=0, costFunc = "sqErr", activation_list = fill(true, length(multiparams[1][1])-1), userelu = false)
 
 	for ind in inds
 		if ind != 0
@@ -466,7 +466,7 @@ function errshufflecols(multiparams, input_data::Matrix{Float32}, output_data::M
 		end
 	end
 
-	(_, errs, _) = calcMultiOutCPU!(input_data_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers = reslayers, activation_list=activation_list)
+	(_, errs, _) = calcMultiOutCPU!(input_data_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers = reslayers, activation_list=activation_list, userelu = userelu)
 	
 	#restore input_data_copy to initial state
 	for ind in inds
@@ -478,13 +478,13 @@ function errshufflecols(multiparams, input_data::Matrix{Float32}, output_data::M
 	return errs
 end
 
-function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[], activation_list = fill(true, length(T)-1))
+function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[], activation_list = fill(true, length(T)-1), userelu = false)
 	(m, n) = size(input_data)
 	a = form_activations(T, m)
 	v = Vector{Float32}(undef, m)
 	input_copy = copy(input_data)
 
-	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list)[1]
+	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list, userelu = userelu)[1]
 	shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
 	shuffle_cols = Vector{Vector{Int64}}(undef, length(shuffleind))
@@ -500,9 +500,9 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 	tlast = time()
 	for (i, c) in enumerate(shuffleind)
 		if num == 1
-			err = errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c], rng=1, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list)[1]
+			err = errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c], rng=1, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu)[1]
 		else
-			err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])[1]
+			err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu) for j in 1:num])[1]
 		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = [c; fixedshuffle]
@@ -522,7 +522,7 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 	end
 
 	if !isempty(fixedshuffle)
-		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list)[1] for j in 1:num])
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu)[1] for j in 1:num])
 	else
 		fixederr = NNerr
 	end
@@ -531,13 +531,13 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
 end
 
-function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, candidatecols::Vector{Int64}; reslayers=0, costFunc="sqErr", num=10, activation_list = fill(true, length(T)-1))
+function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, candidatecols::Vector{Int64}; reslayers=0, costFunc="sqErr", num=10, activation_list = fill(true, length(T)-1), userelu = false)
 	(m, n) = size(input_data)
 	a = form_activations(T, m)
 	v = Vector{Float32}(undef, m)
 	input_copy = copy(input_data)
 
-	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list)
+	NNerr = calcOutputCPU!(input_data, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list, userelu = userelu)
 	# shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(candidatecols))
 	shuffle_cols = Vector{Vector{Int64}}(undef, length(candidatecols))
@@ -556,10 +556,10 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 		if num == 1
 			v .= view(input_copy, :, c)
 			view(input_copy, :, c) .= view(input_data, :, c)
-			err = calcOutputCPU!(input_copy, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list)
+			err = calcOutputCPU!(input_copy, output_data, T, B, a, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list, userelu = userelu)
 			view(input_copy, :, c) .= v
 		else
-			err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])
+			err = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu) for j in 1:num])
 		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = shufflecols
@@ -572,7 +572,7 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 		end
 	end
 	if !isempty(candidatecols)
-		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])
+		fixederr = maximum([errshufflecols(T, B, input_data, output_data, input_copy, a, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu) for j in 1:num])
 	else
 		fixederr = NNerr
 	end
@@ -582,14 +582,14 @@ function calcfeatureimpact(T::Vector{Matrix{Float32}}, B::Vector{Vector{Float32}
 end
 
 
-function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[], activation_list = fill(true, length(multiparams[1][1])-1)) where U <: Tuple
+function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, output_data::Matrix{Float32}; reslayers=0, costFunc="sqErr", num=10, fixedshuffle=[], activation_list = fill(true, length(multiparams[1][1])-1), userelu = false) where U <: Tuple
 	(m, n) = size(input_data)
 	a = form_activations(multiparams[1][1], m)
 	v = Vector{Float32}(undef, m)
 	input_copy = copy(input_data)
 
 	multiout = [copy(a[end]) for i in eachindex(multiparams)]
-	(_, NNerr, _) = calcMultiOutCPU!(input_data, output_data, multiparams, a, multiout, costFunc= costFunc, resLayers=reslayers, activation_list=activation_list)
+	(_, NNerr, _) = calcMultiOutCPU!(input_data, output_data, multiparams, a, multiout, costFunc= costFunc, resLayers=reslayers, activation_list=activation_list, userelu = userelu)
 
 	shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(shuffleind))
@@ -606,9 +606,9 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 	tlast = time()
 	for (i, c) in enumerate(shuffleind)
 		if num == 1
-			err = errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c], rng=1, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list)
+			err = errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c], rng=1, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu)
 		else
-			err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])
+			err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, [c; fixedshuffle], rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu) for j in 1:num])
 		end
 		shuffle_errs[i] = err
 		shuffle_cols[i] = [c; fixedshuffle]
@@ -626,7 +626,7 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 		end
 	end
 	if !isempty(fixedshuffle)
-		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])
+		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, fixedshuffle, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu) for j in 1:num])
 	else
 		fixederr=NNerr
 	end
@@ -635,14 +635,14 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 	(NNerr, zip(shuffle_cols[sortinds], featureimpact[sortinds]), fixederr)
 end
 
-function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, candidatecols::Vector{Int64}; reslayers=0, costFunc="sqErr", num=10, activation_list = fill(true, length(multiparams[1][1])-1)) where U <: Tuple
+function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, output_data::Matrix{Float32}, candidatecols::Vector{Int64}; reslayers=0, costFunc="sqErr", num=10, activation_list = fill(true, length(multiparams[1][1])-1), userelu = false) where U <: Tuple
 	(m, n) = size(input_data)
 	a = form_activations(multiparams[1][1], m)
 	v = Vector{Float32}(undef, m)
 	input_copy = copy(input_data)
 
 	multiout = [copy(a[end]) for i in eachindex(multiparams)]
-	(_, NNerr, _) = calcMultiOutCPU!(input_data, output_data, multiparams, a, multiout, costFunc= costFunc, resLayers=reslayers, activation_list=activation_list)
+	(_, NNerr, _) = calcMultiOutCPU!(input_data, output_data, multiparams, a, multiout, costFunc= costFunc, resLayers=reslayers, activation_list=activation_list, userelu = userelu)
 
 	# shuffleind = setdiff(1:n, fixedshuffle)
 	shuffle_errs = Vector{Float64}(undef, length(candidatecols))
@@ -662,10 +662,10 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 		if num == 1
 			v .= view(input_copy, :, c)
 			view(input_copy, :, c) .= view(input_data, :, c)
-			_, err, _ = calcMultiOutCPU!(input_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list)
+			_, err, _ = calcMultiOutCPU!(input_copy, output_data, multiparams, a, multiout, costFunc=costFunc, resLayers=reslayers, activation_list=activation_list, userelu = userelu)
 			view(input_copy, :, c) .= v
 		else
-			err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])
+			err = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, shufflecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu) for j in 1:num])
 		end
 		shuffle_errs[i] = Float64(err)
 		shuffle_cols[i] = shufflecols
@@ -678,7 +678,7 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 		end
 	end
 	if !isempty(candidatecols)
-		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list) for j in 1:num])
+		fixederr = maximum([errshufflecols(multiparams, input_data, output_data, input_copy, a, multiout, v, candidatecols, rng=j, reslayers=reslayers, costFunc=costFunc, activation_list=activation_list, userelu = userelu) for j in 1:num])
 	else
 		fixederr = NNerr
 	end
@@ -689,7 +689,7 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 end
 
 
-function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLayers = 0, m = 1000, input_layer_size = 3, n = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)))
+function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLayers = 0, m = 1000, input_layer_size = 3, n = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), userelu = false)
 	Random.seed!(1234)
 	#if using log likelihood cost function then need to double output layer size
 	#relative to output example size
@@ -737,7 +737,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 	
 	funcGrad = theta2Params(Bias_grads, Theta_grads)
 
@@ -747,8 +747,8 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
 	
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
@@ -977,7 +977,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false)
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false, userelu = false)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -1086,18 +1086,18 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	end
 
 	if autoencoder
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 	else
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], outputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], outputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 	end
 	
 	function calcout_batches(T, B)
 		currentOut = 0.0f0 
 		for i = batchset
 			if autoencoder
-				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 			else
-				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 			end
 		end
 		currentOut = currentOut/length(batchset)
@@ -1108,9 +1108,9 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	if testset
 		function calcout_test(T, B)
 			if autoencoder
-				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 			else
-				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, output_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, output_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 			end
 		end
 	end
@@ -1187,9 +1187,9 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		for batch in shuffle(batchset)
 			if eta > 0
 				if autoencoder
-					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 				else
-					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, userelu = userelu)
 				end
 				if swa && (epoch > 100)
 					updateParams!(G, Thetas, Biases, Theta_grads, Bias_grads)

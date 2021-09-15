@@ -397,6 +397,7 @@ function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLay
 		row = row+batchlength
 		# output[copy(a[layerout])
 	end
+	return output
 end
 
 function predictMulti(multiParams, X::Matrix{Float32}, resLayers::Int64 = 0; layerout=length(multiParams[1][1]), activation_list=fill(true, length(multiParams[1][1])), userelu = false)

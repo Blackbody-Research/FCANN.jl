@@ -97,7 +97,7 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 	end
 end
 
-function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder = false, costFunc = "absErr", dropout = 0.0f0, activation_list = fill(true, length(T)-1), userelu = userelu)
+function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, autoencoder = false, costFunc = "absErr", dropout = 0.0f0, activation_list = fill(true, length(T)-1), userelu = false)
 #calculate network output given input data and a set of network parameters.
 	#Setup some useful variables
 	m = size(input_data, 1)
@@ -164,7 +164,7 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		return nothing
 	else
 		out = if maxB > m
-			predict(T, B, input_data, resLayers, activation_list=activation_list)
+			predict(T, B, input_data, resLayers, activation_list=activation_list, userelu = userelu)
 		else
 			if maxB == 2^17
 				println(string("Breaking up ", m, " input examples into batches of the maximum size : ", maxB))

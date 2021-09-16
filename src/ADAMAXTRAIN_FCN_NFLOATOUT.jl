@@ -117,7 +117,7 @@ function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 		println("Not enough memory for calculation, returning nothing")
 		return nothing
 	else
-		out = if maxB > m
+		out = if maxB >= m
 			predict(T, B, input_data, resLayers, layerout=layerout, activation_list=activation_list, userelu = userelu)
 		else
 			if maxB == 2^17
@@ -163,7 +163,7 @@ function calcOutputCPU(input_data, output_data, T, B; dropout = 0.0f0, costFunc 
 		println("Not enough memory for calculation, returning nothing")
 		return nothing
 	else
-		out = if maxB > m
+		out = if maxB >= m
 			predict(T, B, input_data, resLayers, activation_list=activation_list, userelu = userelu)
 		else
 			if maxB == 2^17
@@ -247,7 +247,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 			println("Not enough memory for calculation, returning nothing")
 			return nothing
 		else
-			if maxB > m	
+			if maxB >= m	
 				predictMulti(multiParams, input_data, resLayers, activation_list=activation_list, userelu = userelu)
 			else
 				if maxB == 2^17
@@ -351,7 +351,7 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 			println("Not enough memory for calculation, returning nothing")
 			return nothing
 		else
-			if maxB > m	
+			if maxB >= m	
 				predictMulti(multiParams, input_data, resLayers, activation_list=activation_list, userelu = userelu)
 			else
 				if maxB == 2^17

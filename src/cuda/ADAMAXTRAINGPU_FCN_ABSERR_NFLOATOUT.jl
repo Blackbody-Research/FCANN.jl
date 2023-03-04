@@ -1037,7 +1037,11 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 
 	iter = 1
 	epoch = 1
-	eta = alpha
+	eta = if isempty(lrschedule)
+		alpha
+	else
+		lrschedule[1]
+	end
 	F = (1.0f0-R)
 	G = alpha*F
 	t = 1.0f0
@@ -1046,6 +1050,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	bestresultepoch = 0
 
 	while (epoch <= minepoch) || ((epoch <= numEpochs) && (tfail <= patience) && tolpass)
+		if !isempty(lrschedule)
+			eta = lrschedule[epoch]
+		end
 		#run through an epoch in batches with randomized order
 		for batch in shuffle(batchset)
 			if swa || (eta > 0)
@@ -1090,12 +1097,13 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 				tfail += 1
 			end
 			
-			if epoch > 100
-				#println(string("eta = ", eta))
-				eta = eta*F
-
-				if (testset ? testout : currentOut) > tol
-					tolpass = false
+			if isempty(lrschedule)
+				if epoch > 100
+					#println(string("eta = ", eta))
+					eta = eta*F
+					if (testset ? testout : currentOut) > tol
+						tolpass = false
+					end
 				end
 			end
 			iter += 1

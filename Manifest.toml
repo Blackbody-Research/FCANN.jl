@@ -225,7 +225,9 @@ version = "2022.2.1"
 
 [[deps.NVIDIALibraries]]
 deps = ["Libdl", "Printf", "Test"]
-path = "src/NVIDIALibraries.jl"
+git-tree-sha1 = "ac1271b77363c3384f9a5860c83fee407082f7d2"
+repo-rev = "master"
+repo-url = "https://github.com/Blackbody-Research/NVIDIALibraries.jl"
 uuid = "455bb3cc-869f-42f8-aad9-fcdd684af481"
 version = "1.0.0"
 

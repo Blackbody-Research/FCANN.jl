@@ -112,6 +112,12 @@ record, T, B = fullTrain(name, 10, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1)
 println("TEST PASSED")
 println()
 
+println("Training with 2 hidden layers and μP")
+fullTrain(name, 10, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, use_μP = true)
+@test(record[end] < record[1])
+println("TEST PASSED")
+println()
+
 println("Training with 2 hidden layers from previous endpoint")
 record, T, B = fullTrain(name, 150, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 2, startID = 1, writeFiles=false)
 @test(record[end] < record[1])

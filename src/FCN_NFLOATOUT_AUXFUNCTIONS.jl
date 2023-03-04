@@ -53,7 +53,7 @@ function makeorthonormalrand(n::Integer, m::Integer)
 	end
 end
 
-function initializeParams(input_layer_size, hidden_layers, output_layer_size, reslayers=0)
+function initializeParams(input_layer_size, hidden_layers, output_layer_size, reslayers=0, use_μP = false)
 	num_hidden = length(hidden_layers)
 	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1)
 	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
@@ -68,7 +68,9 @@ function initializeParams(input_layer_size, hidden_layers, output_layer_size, re
 				Biases[i] = map(Float32, randn(hidden_layers[i]) .* (scale*hidden_layers[i-1])^(-.5f0))
 			end
 		end
-		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) .* (scale*hidden_layers[num_hidden])^(-.5f0))
+		c = scale*hidden_layers[num_hidden]
+		f = use_μP ? 1.0f0 / c : c^(-0.5f0)
+		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) .* f)
 		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) .* (scale*hidden_layers[num_hidden])^(-.5f0))
 	else
 		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^(-.5f0)
@@ -77,7 +79,7 @@ function initializeParams(input_layer_size, hidden_layers, output_layer_size, re
 	return Thetas, Biases
 end
 
-function initializeparams_saxe(input_layer_size, hidden_layers, output_layer_size, reslayers=0)
+function initializeparams_saxe(input_layer_size, hidden_layers, output_layer_size, reslayers=0; use_μP = false)
 	num_hidden = length(hidden_layers)
 	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1) + 1
 	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
@@ -91,7 +93,9 @@ function initializeparams_saxe(input_layer_size, hidden_layers, output_layer_siz
 					Biases[i] = zeros(Float32, hidden_layers[i])
 				end
 			end
-		Thetas[num_hidden+1] = map(Float32, makeorthonormalrand(output_layer_size, hidden_layers[num_hidden]) .* (scale*hidden_layers[num_hidden])^(-.5f0))
+		c = scale*hidden_layers[num_hidden]
+		f = use_μP ? 1.0f0 / c : c^(-0.5f0)
+		Thetas[num_hidden+1] = map(Float32, makeorthonormalrand(output_layer_size, hidden_layers[num_hidden]) .* f)
 		Biases[num_hidden+1] = zeros(Float32, output_layer_size)
 	else
 		Thetas[1] = Float32.(makeorthonormalrand(output_layer_size, input_layer_size)*input_layer_size^(-.5f0))

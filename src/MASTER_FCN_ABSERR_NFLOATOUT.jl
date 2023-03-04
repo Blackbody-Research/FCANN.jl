@@ -1492,7 +1492,7 @@ end
 #specified with a keyword argument which will use the training results from a previous session with the specified
 #start ID instead of random initializations.  Also printProg can be set to false to supress output of the training
 #progress to the terminal.  Final results will still be printed to terminal regardless. 
-function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = (), activation_list = fill(true, length(hidden)), testbatchloading=false)
+function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], sampleCols = [], dropout = 0.0f0, printanything=true, printProg = true, costFunc = "absErr", writeFiles = true, binInput = false, resLayers = 0, swa=false, blasthreads=0, inputdata = (), initparams = (), ignorebest=false, prepdata = (), prepactivations = (), activation_list = fill(true, length(hidden)), testbatchloading=false, use_μP = false)
 	printanything && println("reading and converting training data")
 	
 	if isempty(inputdata)
@@ -1555,9 +1555,9 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 			printanything && println("initializing network parameters")
 			Random.seed!(1234)
 			if occursin("Log", costFunc)
-				initializeparams_saxe(M, hidden, 2*O)
+				initializeparams_saxe(M, hidden, 2*O, use_μP = use_μP)
 			else
-				initializeparams_saxe(M, hidden, O)
+				initializeparams_saxe(M, hidden, O, use_μP = use_μP)
 			end	
 		else
 			printanything && println("reading previous session parameters")
@@ -1580,7 +1580,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	end
 
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations, activation_list=activation_list, testbatchloading=testbatchloading)
+	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations, activation_list=activation_list, testbatchloading=testbatchloading, use_μP = use_μP)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(traindata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder, activation_list=activation_list)
 	# GC.gc()
@@ -1613,7 +1613,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	(record, T, B, Jtrain, outTrain, bestCost, Jtest, outTest, bestCostTest, bestresultepoch)
 end
 
-function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = 0, swa = false, printanything=true, initparams=(), ignorebest=false, lrschedule = Vector{Float32}())
+function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; startID = [], dropout = 0.0f0, printProg = true, costFunc = "absErr", writeFiles = true, resLayers = 0, swa = false, printanything=true, initparams=(), ignorebest=false, lrschedule = Vector{Float32}(), use_μP = false)
 
 	M = size(X, 2)
 	O = size(Y, 2)
@@ -1643,9 +1643,9 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 			printanything && println("initializing network parameters")
 			Random.seed!(1234)
 			if occursin("Log", costFunc)
-				initializeparams_saxe(M, hidden, 2*O)
+				initializeparams_saxe(M, hidden, 2*O, use_μP = use_μP)
 			else
-				initializeparams_saxe(M, hidden, O)
+				initializeparams_saxe(M, hidden, O, use_μP = use_μP)
 			end	
 		else
 			printanything && println("reading previous session parameters")
@@ -1658,7 +1658,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	#BLAS.set_num_threads(Sys.CPU_THREADS)	
 	# BLAS.set_num_threads(0)	
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, lrschedule = lrschedule, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything, ignorebest=ignorebest)
+	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, lrschedule = lrschedule, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything, ignorebest=ignorebest, use_μP = use_μP)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	

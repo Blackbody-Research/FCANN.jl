@@ -798,14 +798,14 @@ function updateV!(beta2, vT, vB, TG, BG)
 	end
 end
 
-function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t)
-	scale = alpha/(1.0f0 - beta1^t)
+function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t, scales)
+	basescale = alpha/(1.0f0 - beta1^t)
 	for i = 1:length(T)
 		@simd for ii = 1:length(T[i])
-			@inbounds T[i][ii] = T[i][ii] - scale*mT[i][ii]/vT[i][ii]
+			@inbounds T[i][ii] = T[i][ii] - scales[i]*basescale*mT[i][ii]/vT[i][ii]
 		end
 		@simd for ii = 1:length(B[i])
-			@inbounds B[i][ii] = B[i][ii] - scale*mB[i][ii]/vB[i][ii]
+			@inbounds B[i][ii] = B[i][ii] - scales[i]*basescale*mB[i][ii]/vB[i][ii]
 		end
 	end
 end
@@ -821,9 +821,9 @@ function updateParams_old!(alpha, T, B, TG, BG)
 	end
 end
 
-function updateParams!(alpha, T, B, TG, BG)
+function updateParams!(alpha, T, B, TG, BG, scales)
 	for i in eachindex(T)
-		axpy!(-alpha, TG[i], T[i])
+		axpy!(-alpha*scales[i], TG[i], T[i])
 		axpy!(-alpha, BG[i], B[i])
 	end
 end
@@ -977,7 +977,7 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false)
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false, use_μP = false)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
@@ -1016,6 +1016,14 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	#check that parameters are appropriate for input and output data given selected cost function
 	if size(T0[1], 2) != n 
 		error("parameters incompatible with input data")
+	end
+
+	#set per layer learning rate scales.  it only differs from 1 in the case of using μP parametrization
+	scales = fill(1.0f0, length(T0))
+	if use_μP
+		for i in 2:length(T0)
+			scales[i] /= size(T0[i], 2) #this should be the input dimension for this layer
+		end
 	end
 	
 	if occursin("Log", costFunc)
@@ -1192,11 +1200,11 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 				end
 				if swa && (epoch > 100)
-					updateParams!(G, Thetas, Biases, Theta_grads, Bias_grads)
+					updateParams!(G, Thetas, Biases, Theta_grads, Bias_grads, scales)
 				else
 					updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
 					updateV!(beta2, vT, vB, Theta_grads, Bias_grads)		
-					updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t)
+					updateParams!(eta, beta1, Thetas, Biases, mT, mB, vT, vB, t, scales)
 				end
 				if c < Inf 
 					scaleParams!(Thetas[1:end-1], Biases[1:end-1], c)

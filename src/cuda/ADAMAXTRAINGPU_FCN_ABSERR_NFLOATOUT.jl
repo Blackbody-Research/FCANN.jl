@@ -719,12 +719,12 @@ function scaleThetas!(d_Thetas::Vector{CUDAArray}, d_Theta_grads::Vector{CUDAArr
 	cuCtxSynchronize()
 end
 
-function updateParams!(alpha, beta1, beta2, t, d_Thetas::Vector{CUDAArray}, d_Theta_grads::Vector{CUDAArray}, d_Biases::Vector{CUDAArray}, d_Bias_grads::Vector{CUDAArray}, d_mT, d_mB, d_vT, d_vB)
+function updateParams!(alpha, beta1, beta2, t, d_Thetas::Vector{CUDAArray}, d_Theta_grads::Vector{CUDAArray}, d_Biases::Vector{CUDAArray}, d_Bias_grads::Vector{CUDAArray}, d_mT, d_mB, d_vT, d_vB, scales)
 	for i = 1:length(d_Thetas)
 		(N, M) = d_Thetas[i].size
 		
 		#launch kernel to update Thetas
-		run_kernel(updateParams, N, M, alpha, beta1, beta2, t, d_Thetas[i], d_Theta_grads[i], d_mT[i], d_vT[i])
+		run_kernel(updateParams, N, M, scales[i]*alpha, beta1, beta2, t, d_Thetas[i], d_Theta_grads[i], d_mT[i], d_vT[i])
 		N = d_Biases[i].size[1]
 		M = 1
 		#launch kernel to update Biases
@@ -734,9 +734,9 @@ function updateParams!(alpha, beta1, beta2, t, d_Thetas::Vector{CUDAArray}, d_Th
 	cuCtxSynchronize()
 end
 
-function updateParams!(alpha, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_TG::Vector{CUDAArray}, d_BG::Vector{CUDAArray})
+function updateParams!(alpha, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_TG::Vector{CUDAArray}, d_BG::Vector{CUDAArray}, scales)
 	for i in eachindex(d_T)
-		cublasSaxpy(cublas_handle, -alpha, d_TG[i], d_T[i])
+		cublasSaxpy(cublas_handle, -alpha*scales[i], d_TG[i], d_T[i])
 		cublasSaxpy(cublas_handle, -alpha, d_BG[i], d_B[i])
 	end
 	cuCtxSynchronize()	
@@ -770,7 +770,7 @@ function updateAvg!(nModels, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_T
 	cuCtxSynchronize()
 end
 
-function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false)
+function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, hidden_layers, lambda, c; alpha=0.001f0, R=0.1f0, printProgress = false, printAnything = true, dropout = 0.0f0, costFunc="absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata=(), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false, use_μP = false)
 #train on a GPU fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  The final required input "md" is the context for the GPU hardware being used.
@@ -808,6 +808,14 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	#check that parameters are appropriate for input and output data given selected cost function
 	if size(T0[1], 2) != n 
 		error("parameters incompatible with input data")
+	end
+	 
+	#set per layer learning rate scales.  it only differs from 1 in the case of using μP parametrization
+	scales = fill(1.0f0, length(T0))
+	if use_μP
+		for i in 2:length(T0)
+			scales[i] /= size(T0[i], 2) #this should be the input dimension for this layer
+		end
 	end
 	
 	if occursin("Log", costFunc) 
@@ -1047,9 +1055,9 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 					nnCostFunction(d_Thetas, d_Biases, input_layer_size, n2, hidden_layers, batchSize, d_onesVecBATCH, d_aBATCH, d_tanh_grad_zBATCH, d_deltasBATCH, d_Theta_grads, d_Bias_grads, batchInputs[batch], batchOutputs[batch],lambda,dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 				end
 				if swa && (epoch > 100)
-					updateParams!(G, d_Thetas, d_Biases, d_Theta_grads, d_Bias_grads)
+					updateParams!(G, d_Thetas, d_Biases, d_Theta_grads, d_Bias_grads, scales)
 				else
-					updateParams!(eta, beta1, beta2, t, d_Thetas, d_Theta_grads, d_Biases, d_Bias_grads, d_mT, d_mB, d_vT, d_vB)
+					updateParams!(eta, beta1, beta2, t, d_Thetas, d_Theta_grads, d_Biases, d_Bias_grads, d_mT, d_mB, d_vT, d_vB, scales)
 				end
 				if c < Inf 
 					scaleThetas!(d_Thetas[1:end-1], d_Theta_grads[1:end-1], d_onesVecParams, d_normVecParams, c)

@@ -225,7 +225,7 @@ version = "2022.2.1"
 
 [[deps.NVIDIALibraries]]
 deps = ["Libdl", "Printf", "Test"]
-path = "src/NVIDIALibraries.jl"
+path = "src/NVIDIALibraries.jl-master"
 uuid = "455bb3cc-869f-42f8-aad9-fcdd684af481"
 version = "1.0.0"
 

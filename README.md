@@ -10,7 +10,8 @@ Simple module for **F**ully **C**onnected **A**rtificial **N**eural **N**etworks
 Within Julia REPL enter Pkg mode by typing ']' then execute
 
 ```
-add https://github.com/Blackbody-Research/FCANN.jl.git
+add https://github.com/Blackbody-Research/NVIDIALibraries.jl
+add https://github.com/Blackbody-Research/FCANN.jl
 ```
 
 Ensure packaging has been installed properly by running ```Pkg.test("FCANN")``` 

@@ -1217,10 +1217,10 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	end
 
 	testresults = if testset
-		(bestCostTest, costRecordTest, lastepoch, bestresultepoch)
+		(bestCostTest, [costRecordTest[1:iter]; testout], lastepoch, bestresultepoch)
 	else
 		(bestresultepoch,)
 	end
 
-    return (bestThetas, bestBiases, bestCost, costRecord[1:lastepoch+1], timeRecord, GFLOPS_per_epoch, testresults...)
+    return (bestThetas, bestBiases, bestCost, [costRecord[1:iter]; currentOut], timeRecord, GFLOPS_per_epoch, testresults...)
 end

@@ -1364,5 +1364,5 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		(bestresultepoch,)
 	end
 
-	return (bestThetas, bestBiases, bestCost, costRecord[1:lastepoch+1], timeRecord, GFLOPS_per_epoch, testresults...)
+	return (bestThetas, bestBiases, bestCost, costRecord[1:iter], timeRecord, GFLOPS_per_epoch, testresults...)
 end

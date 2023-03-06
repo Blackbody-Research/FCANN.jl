@@ -765,6 +765,12 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 	return err
 end
 
+function zeroParams!(T, B)
+	for i in 1:length(T)
+		scal!(0.0f0, T[i])
+		scal!(0.0f0, B[i])
+	end
+end
 
 function updateM_old!(beta1, mT, mB, TG, BG)
 	b2 = 1.0f0 - beta1
@@ -977,12 +983,56 @@ function generateBatches(input_data, output_data, batchsize)
 	return (inputbatchData, outputbatchData)
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, prepdata = (), prepactivations=(), trainsample=1.0, activation_list = fill(true, length(hidden_layers)), testbatchloading=false, use_μP = false)
+function form_parameter_allocations(T0, B0)
+	(	Theta_grads = deepcopy(T0), 
+		Bias_grads = deepcopy(B0),
+		mT = deepcopy(T0), 
+		mB = deepcopy(B0), 
+		vT = deepcopy(T0), 
+		vB = deepcopy(B0), 
+		T_avg = deepcopy(T0), 
+		B_avg = deepcopy(B0), 
+		T_est = deepcopy(T0), 
+		B_est = deepcopy(B0), 
+		Thetas = deepcopy(T0), 
+		Biases = deepcopy(B0), 
+		bestThetas = deepcopy(T0), 
+		bestBiases = deepcopy(B0))
+end
+
+function form_prep_activations(hidden_layers, batchSize, T0)
+	(form_tanh_grads(hidden_layers, batchSize), form_activations(T0, batchSize), form_activations(T0, batchSize))
+end
+
+function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; 
+	alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, 
+	tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, 
+	prepdata = (), #data prepared in batches
+	prepactivations= form_prep_activations(hidden_layers, batchSize, T0), #allocations to store batch activations during training
+	params = form_parameter_allocations(T0, B0), #memory allocations that mimic the parameters and store values through training
+	onesVecBATCH = ones(Float32, batchSize),
+	trainsample=1.0, activation_list = fill(true, length(hidden_layers)), 
+	testbatchloading=false, use_μP = false)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
 #Note that all floating point input variables must be float32 or single precision   
-	
+
+	(Theta_grads,   
+	Bias_grads, 
+	mT,  
+	mB,  
+	vT,  
+	vB,  
+	T_avg,  
+	B_avg,  
+	T_est,  
+	B_est,  
+	Thetas,  
+	Biases,  
+	bestThetas,  
+	bestBiases) = params
+
 	#if the input data only contains one matrix then consider input and output
 	#data to be the same and train an autoencoder
 	autoencoder = (length(data[1]) == 1)
@@ -1074,19 +1124,12 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
 
-	if isempty(prepactivations)
-		tanh_grad_zBATCH = form_tanh_grads(hidden_layers, batchSize)
-		aBATCH = form_activations(T0, batchSize)
-		deltasBATCH = form_activations(T0, batchSize)
+	(tanh_grad_zBATCH, aBATCH, deltasBATCH) = if isempty(prepactivations)
+		form_prep_activations(hidden_layers, batchSize, T0)
 	else
-		tanh_grad_zBATCH = prepactivations[1]
-		aBATCH = prepactivations[2]
-		deltasBATCH = prepactivations[3]
+		prepactivations
 	end
 
-	Theta_grads = deepcopy(T0) 
-	Bias_grads = deepcopy(B0)
-	onesVecBATCH = ones(Float32, batchSize)
 	numLayers = length(T0)
 
 	if testset
@@ -1136,20 +1179,13 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	beta1 = 0.9f0
 	beta2 = 0.999f0
 
-	mT = 0.0f0*deepcopy(T0)
-	mB = 0.0f0*deepcopy(B0)
-
-	vT = 0.0f0*deepcopy(T0)
-	vB = 0.0f0*deepcopy(B0)
-
-	T_avg = 0.0f0*deepcopy(T0)
-	B_avg = 0.0f0*deepcopy(B0)
-
-	T_est = 0.0f0*deepcopy(T0)
-	B_est = 0.0f0*deepcopy(B0)
-
-	Thetas = deepcopy(T0)
-	Biases = deepcopy(B0)
+	#reset all these to 0 at the beginning of training
+	zeroParams!(mT, mB)
+	zeroParams!(vT, vB)
+	zeroParams!(T_avg, B_avg)
+	zeroParams!(T_est, B_est)
+	
+	
 
 	period = 10
 	costRecord = Array{Float32}(undef, ceil(Int, N/period)+1)
@@ -1165,8 +1201,6 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	timeRecord = Array{Float64}(undef, N+1)
 	timeRecord[1] = 0.0
 
-	bestThetas = deepcopy(T0)
-	bestBiases = deepcopy(B0)
 	bestCost = currentOut
 	testset && (bestCostTest = testout)
 	rollingAvgCost = currentOut
@@ -1330,5 +1364,5 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		(bestresultepoch,)
 	end
 
-	return (bestThetas, bestBiases, bestCost, costRecord, timeRecord, GFLOPS_per_epoch, testresults...)
+	return (bestThetas, bestBiases, bestCost, costRecord[1:lastepoch+1], timeRecord, GFLOPS_per_epoch, testresults...)
 end

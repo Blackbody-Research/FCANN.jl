@@ -846,7 +846,7 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
     if trainsample == 1.0
     	batchset = 1:numBatches
     else
-    	batchset = rand(1:numBatches, round(Int64, numBatches*trainsample))
+    	batchset = rand(1:numBatches, ceil(Int64, numBatches*trainsample))
     end
 
 	if isempty(prepdata)

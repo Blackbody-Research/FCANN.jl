@@ -104,6 +104,30 @@ function initializeparams_saxe(input_layer_size, hidden_layers, output_layer_siz
 	return Thetas, Biases
 end
 
+#initialize parameters overwriting existing parameters
+function initializeparams_saxe!(Thetas, Biases, reslayers=0; use_μP = false)
+	num_hidden = length(Thetas) - 1
+	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1) + 1
+	if num_hidden > 0
+		Thetas[1] .= map(Float32, makeorthonormalrand(size(Thetas[1])...) .* (scale*size(Thetas[1], 2))^(-.5f0))
+		Biases[1] .= zero(Float32)
+			if num_hidden > 1
+				for i in 2:num_hidden
+					Thetas[i] .= map(Float32, makeorthonormalrand(size(Thetas[i])...) .* (scale*size(Thetas[i], 2))^(-.5f0))
+					Biases[i] .= zero(Float32)
+				end
+			end
+		c = scale*size(Thetas[end], 2)
+		f = use_μP ? 1.0f0 / c : c^(-0.5f0)
+		Thetas[num_hidden+1] .= map(Float32, makeorthonormalrand(size(Thetas[num_hidden+1])...) .* f)
+		Biases[num_hidden+1] .= zero(Float32)
+	else
+		Thetas[1] .= Float32.(makeorthonormalrand(size(Thetas[1])...)*size(Thetas[1], 2)^(-.5f0))
+		Biases[1] .= zeros(Float32)
+	end
+	return Thetas, Biases
+end
+
 function getNumParams(M, H, O)
 	num = 0
 	if length(H) > 0

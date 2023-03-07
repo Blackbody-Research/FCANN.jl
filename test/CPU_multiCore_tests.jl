@@ -14,12 +14,12 @@ end
 @everywhere using FCANN
 println("--------------------------------------------")
 println("Testing archEval")
-archEval(name, 100, 1024, [[1], [2], [3], [2, 2]])
+archEval(name, 100, 512, [[1], [2], [3], [2, 2]])
 println("TEST PASSED")
 println()
 
 println("Testing archEval with normLog cost function")
-archEval(name, 100, 1024, [[1], [2], [3], [2, 2]], costFunc = "normLogErr")
+archEval(name, 100, 512, [[1], [2], [3], [2, 2]], costFunc = "normLogErr")
 println("TEST PASSED")
 println()
 
@@ -27,27 +27,27 @@ rm(string("archEval_", name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_
 rm(string("archEval_", name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_normLogErr.csv"))
 
 println("Testing evalLayers")
-evalLayers(name, 100, 1024, [100, 200], layers=[2, 4])
+evalLayers(name, 100, 512, [100, 200], layers=[2, 4])
 println("TEST PASSED")
 println()
 
 rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_0.002_alpha_ADAMAX", backend, "_absErr.csv"))
 
 println("Testing smartEvalLayers")
-smartEvalLayers(name, 100, 1024, [100, 200], layers=[1, 2], tau=0.05f0)
+smartEvalLayers(name, 100, 512, [100, 200], layers=[1, 2], tau=0.05f0)
 println("TEST PASSED")
 println()
 
 rm(string("evalLayers_", name, "_", M, "_input_", O, "_output_100_epochs_smartParams_ADAMAX", backend, "_absErr.csv"))
 
 println("Testing multiTrain")
-multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
-multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 20, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, trainsample=0.1)
-multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
-(_, multiparams, _) = multiTrain(name, Xtrain, ytrain, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
+multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
+multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 20, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, trainsample=0.1)
+multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
+(_, multiparams, _) = multiTrain(name, Xtrain, ytrain, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
 FCANN.calcMultiOutCPU(Xtrain[:, [1, 2]], multiparams, resLayers=1)
 for v1 = (1, 2), costFunc = ("absErr", "normLogErr")
-	multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, v1, costFunc = costFunc)
+	multiTrain(name, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 6, v1, costFunc = costFunc)
 end
 println("TEST PASSED")
 println()

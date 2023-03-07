@@ -63,7 +63,7 @@ else
     M = 10
     hidden = [10, 10]
     O = 2
-    batchSize = 1024
+    batchSize = 512
     N = 150
     testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = true)
     println("TEST PASSED")
@@ -76,14 +76,14 @@ else
     name = "test"
 
     println("Training with 0 hidden layers")
-    record, T, B = fullTrain(name, 150, 1024, Vector{Int64}(), 0.0f0, Inf, 0.001f0, 0.1f0, 1,writeFiles=false)
+    record, T, B = fullTrain(name, 150, 512, Vector{Int64}(), 0.0f0, Inf, 0.001f0, 0.1f0, 1,writeFiles=false)
     @test(record[end] < record[1])
     println("TEST PASSED")
     println()
 
     hidden = [10, 10]
     println("Training with ", hidden, " hidden layers")
-    record, T, B = fullTrain(name, 10, 1024, hidden, 0.0f0, Inf, 0.0001f0, 0.1f0, 1)
+    record, T, B = fullTrain(name, 10, 512, hidden, 0.0f0, Inf, 0.0001f0, 0.1f0, 1)
     @test(record[end] < record[1])
     println("TEST PASSED")
     println()
@@ -96,13 +96,13 @@ else
     calcfeatureimpact(d_T, d_B, Xtest, ytest, num=2)
 
     println("Training with ", hidden, " hidden layers from previous endpoint")
-    record, T, B, a, b, bestCost = fullTrain(name, 150, 1024, hidden, 0.0f0, Inf, 0.0001f0, 0.1f0, 2, startID = 1,writeFiles=false)
+    record, T, B, a, b, bestCost = fullTrain(name, 150, 512, hidden, 0.0f0, Inf, 0.0001f0, 0.1f0, 2, startID = 1,writeFiles=false)
     @test(bestCost < record[1])
     println("TEST PASSED")
     println()
 
     println("Training autoencoder")
-    record, T, B = fullTrain(name, 150, 1024, [2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, inputdata = (Xtrain, Xtest))
+    record, T, B = fullTrain(name, 150, 512, [2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, inputdata = (Xtrain, Xtest))
 
     M = 10
 
@@ -113,14 +113,14 @@ else
     rm(string("1_params_", filename, ".bin"))
 
     println("Testing multiTrain")
-    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
-    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 20, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, trainsample=0.1)
-    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
-    multiTrain(name, Xtrain, ytrain, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
-    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1)
-    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2)
-    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, costFunc = "normLogErr")
-    multiTrain(name, 120, 1024, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2, costFunc = "normLogErr")
+    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1)
+    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 20, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, trainsample=0.1)
+    multiTrain(name, Xtrain, ytrain, Xtest, ytest, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
+    multiTrain(name, Xtrain, ytrain, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, sampleCols=[1, 2], dropout = 0.1f0, writefiles=false, reslayers=1, swa=true)
+    multiTrain(name, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1)
+    multiTrain(name, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2)
+    multiTrain(name, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 1, costFunc = "normLogErr")
+    multiTrain(name, 120, 512, [2, 2], 0.0f0, 1.0f0, 0.002f0, 0.1f0, 2, 2, costFunc = "normLogErr")
     println("TEST PASSED")
     println()
 

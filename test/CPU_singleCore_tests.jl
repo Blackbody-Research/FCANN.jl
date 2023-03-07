@@ -69,7 +69,7 @@ println()
 #full train test with data read and output
 function writeTestData(name, M, O)
     for p1 = ("X", "y"), p2 = ("train", "test")
-        l = (p2 == "train") ? 10000 : 1000
+        l = (p2 == "train") ? 1024 : 1024
         N = (p1 == "X") ? M : O
         writedlm(string(p1, p2, "_", name, ".csv"), rand(Float32, l, N))
     end
@@ -77,7 +77,7 @@ end
 
 function writeBinData(name, M, O)
     for p1 = ("X", "y"), p2 = ("train", "test")
-        l = (p2 == "train") ? 10000 : 1000
+        l = (p2 == "train") ? 1024 : 1024
         N = (p1 == "X") ? M : O
         writeArray(rand(Float32, l, N), string(p1, p2, "_", name, ".bin"))
     end
@@ -95,37 +95,37 @@ writeBinData(name, M, O)
 (Xtrain, Xtest, ytrain, ytest) = readBinInput(name)
 
 println("Training with 0 hidden layers")
-record, T, B = fullTrain(name, 150, 1024, Vector{Int64}(), 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false)
+record, T, B = fullTrain(name, 150, 512, Vector{Int64}(), 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 0 hidden layers and binary input read")
-record, T, B = fullTrain(name, 150, 1024, Vector{Int64}(), 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, binInput = true)
+record, T, B = fullTrain(name, 150, 512, Vector{Int64}(), 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, binInput = true)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers")
-record, T, B = fullTrain(name, 10, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1)
+record, T, B = fullTrain(name, 10, 512, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers and μP")
-fullTrain(name, 10, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, use_μP = true)
+fullTrain(name, 10, 512, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, use_μP = true)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers from previous endpoint")
-record, T, B = fullTrain(name, 150, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 2, startID = 1, writeFiles=false)
+record, T, B = fullTrain(name, 150, 512, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 2, startID = 1, writeFiles=false)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()
 
 println("Training with 2 hidden layers and 1 residual layer")
-record, T, B = fullTrain(name, 10, 1024, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, resLayers=1, writeFiles=false)
+record, T, B = fullTrain(name, 10, 512, [2, 2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, resLayers=1, writeFiles=false)
 @test(record[end] < record[1])
 println("TEST PASSED")
 println()
@@ -135,4 +135,9 @@ calcfeatureimpact(T, B, Xtest, ytest, num=1)
 calcfeatureimpact(T, B, Xtest, ytest, num=2)
 
 println("Training autoencoder")
-record, T, B = fullTrain(name, 10, 1024, [2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, inputdata = (Xtrain, Xtest))
+record, T, B = fullTrain(name, 10, 512, [2], 0.0f0, Inf, 0.002f0, 0.1f0, 1, writeFiles=false, inputdata = (Xtrain, Xtest))
+
+println("Running training trials")
+traintrials([(Xtrain, ytrain)], 512, 10, [2, 2], 0.0f0, Inf)
+traintrials([(Xtrain, ytrain)], 512, 10, [2, 2], 0.0f0, Inf, use_μP = true, costfunc = "normLogErr", reslayers = 1)
+traintrials([(Xtrain, ytrain), (Xtest, ytest)], 512, 10, [2, 2], 0.0f0, Inf)

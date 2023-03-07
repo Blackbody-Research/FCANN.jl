@@ -93,6 +93,68 @@ function formIndicString(R, L2, c, D, res)
 end
 
 """
+	preptraining(data::AbstractVector{T}, batchsize, numepochs, hidden, logcost; seed = 1234)  where T <: Tuple{Matrix{Float32}, Matrix{Float32}}
+
+Prepare allocations and variables that will be passed to a training program.  The random seed controls how the indices of batches are randomly selected.  These inputs define a set of variables and allocations that remain constant between training sessions.  The return value is a named tuple as follows: 
+	(θ_init = T0, β_init = B0, inputsize = input_layer_size, outputsize = output_layer_size, param_allocations = param_allocations, prepactivations = prepactivations, prepdata = prepdata)
+Values from this tuple can be passed along to train while varying all other training parameters such as learning rate, μP initialization, and regularization schemes.  Note that while the parameters are initialized, other programs should overwrite their values in place to use a different style initialization and to vary it with a random seed.
+"""
+function preptraining(data::AbstractVector{T}, batchsize, numepochs, hidden, logcost; seed = 1234) where T <: Tuple{Matrix{Float32}, Matrix{Float32}}
+	autoencoder = length(data[1]) == 1
+
+	input_layer_size = size(data[1][1], 2)
+	output_layer_size = autoencoder ? input_layer_size : size(data[1][2], 2)
+
+	f = logcost ? 2 : 1 #log style cost function that will produce double the output values
+	Random.seed!(seed)
+	T0, B0 = initializeparams_saxe(input_layer_size, hidden, f*output_layer_size)
+
+	param_allocations = form_parameter_allocations(T0, B0)
+	prepactivations= form_prep_activations(hidden, batchsize, T0)
+	
+	Random.seed!(seed)
+	batchinds = generatebatchinds(data[1][1], batchsize)
+    inputbatchData = generatebatches(data[1][1], batchinds)
+	if !autoencoder
+		outputbatchData = generatebatches(data[1][2], batchinds)
+		prepdata = (inputbatchData, outputbatchData)
+	else
+		prepdata = (inputbatchData,)
+	end
+
+	(θ_init = T0, β_init = B0, inputsize = input_layer_size, outputsize = output_layer_size, param_allocations = param_allocations, prepactivations = prepactivations, prepdata = prepdata)
+end
+
+"""
+	traintrials(data::AbstractVector{T}, batchsize, hidden, λ, c; ntrials = 10, seeds = 1:ntrials, kwargs...) where T <: Tuple{Matrix{Float32}, Matrix{Float32}})
+
+Conduct one or more trials of training a network with the same parameters and different random seeds.  Each seed will create a different parameter initialization and iteration through data batches.  To run the trials efficiently a number of allocations are made once and re-used for each trial.  The return value is a vector of training results where each result is a tuple in the following format: (θ_trained, β_trained, traincost, costrecord, timerecord, GFLOPS_per_epoch, other...).  other... will contain either just the epoch that had the lowest training cost, or, if a test set is also provided, the following: (testcost, testcostrecord, lastepoch, bestresultepoch)
+"""
+function traintrials(data::AbstractVector{T}, batchsize, numepochs, hidden, λ, c; backend = backend, ntrials = 10, seeds = 1:ntrials, costfunc = "absErr", use_μP = false, reslayers = 0, kwargs...) where T <: Tuple{Matrix{Float32}, Matrix{Float32}}
+	@assert length(seeds) == ntrials
+
+	logcost = occursin("Log", costfunc)
+
+	trainprep = preptraining(data, batchsize, numepochs, hidden, logcost)
+
+	autoencoder = length(data[1]) == 1
+
+	input_layer_size = size(data[1][1], 2)
+	output_layer_size = autoencoder ? input_layer_size : size(data[1][2], 2)
+
+	#need to add prep for the GPU backend so the prepared items are device rather than host allocated
+
+	[begin
+		Random.seed!(seed)
+		initializeparams_saxe!(trainprep.θ_init, trainprep.β_init, reslayers, use_μP = use_μP)
+
+		Random.seed!(seed)
+		eval(Symbol("ADAMAXTrainNN", backend))(data, batchsize, trainprep.θ_init, trainprep.β_init, numepochs, input_layer_size, hidden, λ, c; prepdata = trainprep.prepdata, prepactivations = trainprep.prepactivations, params = trainprep.param_allocations, costFunc = costfunc, kwargs...)
+	end
+	for seed in seeds]
+end
+
+"""
 	archEval(name, N, batchSize, hiddenList, alpha = 0.002f0)
 
 Train neural networks with architectures specified in 'hiddenList' computing the training and test set

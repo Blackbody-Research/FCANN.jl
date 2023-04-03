@@ -203,15 +203,7 @@ function getNetworkDims(T::Array{Array{Float32,2},1}, B::Array{Array{Float32,1},
 	return (M, H, O)
 end
 
-function writeParams(params::Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, filename::String)
-#write a list of NN parameters in binary representation to file.  There is a leading set of integers which will help
-#the read function determine how to reconstruct the T and B arrays.  The encoding is as follows: first value N indicates
-#how many hidden layers are in the network.  If n = 1 then 3 integers will preceed the parameters namely, M, H, and O.  
-#Larger values of n will mean more preceeding ints need to be read.
-	if isfile(filename)
-		rm(filename)
-	end
-	f = open(filename, "a")
+function writeparams!(f::IO, params)
 	for P in params
 		(T, B) = (P[1], P[2])
 		nnParams = theta2Params(B, T)
@@ -226,6 +218,18 @@ function writeParams(params::Array{Tuple{Array{Array{Float32,2},1},Array{Array{F
 		write(f, O)
 		write(f, nnParams)
 	end
+end
+
+function writeParams(params::Array{Tuple{Array{Array{Float32,2},1},Array{Array{Float32,1},1}},1}, filename::String)
+#write a list of NN parameters in binary representation to file.  There is a leading set of integers which will help
+#the read function determine how to reconstruct the T and B arrays.  The encoding is as follows: first value N indicates
+#how many hidden layers are in the network.  If n = 1 then 3 integers will preceed the parameters namely, M, H, and O.  
+#Larger values of n will mean more preceeding ints need to be read.
+	if isfile(filename)
+		rm(filename)
+	end
+	f = open(filename, "a")
+	writeparams!(f, params)
 	close(f)
 end
 
@@ -248,9 +252,15 @@ function writeArray(input::Array{Float32,2}, filename::String)
 end
 
 function readBinParams(filename::String)
-#read parameters in binary form from a file.  File may contain more than one
-#set of parameters in general. 
+	#read parameters in binary form from a file.  File may contain more than one
+	#set of parameters in general. 
 	f = open(filename)
+	out = readBinParams(f)
+	close(f)
+	return out
+end
+
+function readBinParams(f::IO)
 	#get length of params array
 	n = read(f, Int64)
 	M = read(f, Int64)

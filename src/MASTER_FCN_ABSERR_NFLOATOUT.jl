@@ -2743,7 +2743,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	cpu_name = strip(split(cpu_info, ':')[1])
 
 	gpu_name = if backend == :GPU
-		cuDeviceGetName(current_device)
+		cuDeviceGetName(Int32(current_device))
 	else
 		""
 	end

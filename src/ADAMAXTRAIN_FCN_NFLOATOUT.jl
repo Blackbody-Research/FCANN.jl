@@ -1012,10 +1012,11 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	params = form_parameter_allocations(T0, B0), #memory allocations that mimic the parameters and store values through training
 	onesVecBATCH = ones(Float32, batchSize),
 	trainsample=1.0, activation_list = fill(true, length(hidden_layers)), 
-	testbatchloading=false, use_μP = false)
+	testbatchloading=false, use_μP = false, batchinterval::Int64 = 0)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
+#If the batch interval is set to 0 then the default behavior is used which is recording cost every 10 epochs and how ever many batches that is.  Otherwise, record on each batchinterval 
 #Note that all floating point input variables must be float32 or single precision   
 
 	(Theta_grads,   
@@ -1100,6 +1101,14 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	numBatches = round(Int, ceil(m/batchSize))
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
     total_ops = fops + bops + pops
+
+	period = 10
+	#set batch interval to appropriate default value
+	if batchinterval <= 0
+		batchinterval = numBatches*period
+	end
+
+	recordlength = ceil(Int64, numBatches*N/batchinterval) + 1
 
     if trainsample == 1.0
     	batchset = 1:numBatches
@@ -1190,10 +1199,10 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	updateBest!(bestThetas, bestBiases, T0, B0)
 
 	period = 10
-	costRecord = Array{Float32}(undef, ceil(Int, N/period)+1)
+	costRecord = Array{Float32}(undef, recordlength)
 	costRecord[1] = currentOut
 	if testset
-		costRecordTest = Array{Float32}(undef, ceil(Int, N/period)+1)
+		costRecordTest = Array{Float32}(undef, recordlength)
 		costRecordTest[1] = testout
 	end
 
@@ -1251,81 +1260,77 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 				updateEst!(beta2, t, Thetas, Biases, T_avg, B_avg, T_est, B_est)
 			end
 			t += 1
-		end
-		timeRecord[epoch + 1] = time() - startTime
 
-		if swa && (epoch == 100)
-			#after 100 epochs reset params to the estimate and start doing SWA
-			updateBest!(Thetas, Biases, T_est, B_est)
-		end
-
-		if swa && (epoch > 100)
-			nModels += 1
-			updateAvg!(nModels, Thetas, Biases, T_est, B_est)
-		end
-
-
-		if epoch%period == 0
-			currentOut = calcout_batches(T_est, B_est)
-			costRecord[iter + 1] = currentOut
-
-			if testset
-				testout = calcout_test(T_est, B_est)
-				costRecordTest[iter + 1] = testout
-			end
-			
-			if (epoch <= minepoch) || ignorebest || (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
-				updateBest!(bestThetas, bestBiases, T_est, B_est)
-				bestCost = currentOut
-				testset && (bestCostTest = testout)
-				bestresultepoch = epoch
-				tfail = 0
-			else
-				tfail += 1
+			if swa && (epoch == 100)
+				#after 100 epochs reset params to the estimate and start doing SWA
+				updateBest!(Thetas, Biases, T_est, B_est)
 			end
 
-			if isempty(lrschedule)
-				if epoch > 100
-					#println(string("eta = ", eta))
-					eta = eta*F
-					if (testset ? testout : currentOut) > tol
-						tolpass = false
+			if swa && (epoch > 100)
+				nModels += 1
+				updateAvg!(nModels, Thetas, Biases, T_est, B_est)
+			end
+		
+			if t % batchinterval == 0
+				currentOut = calcout_batches(T_est, B_est)
+				costRecord[iter + 1] = currentOut
+	
+				if testset
+					testout = calcout_test(T_est, B_est)
+					costRecordTest[iter + 1] = testout
+				end
+				
+				if (epoch <= minepoch) || ignorebest || (testset && (testout < bestCostTest)) || (!testset && (currentOut < bestCost))
+					updateBest!(bestThetas, bestBiases, T_est, B_est)
+					bestCost = currentOut
+					testset && (bestCostTest = testout)
+					bestresultepoch = epoch
+					tfail = 0
+				else
+					tfail += 1
+				end
+	
+				if isempty(lrschedule)
+					if epoch > 100
+						#println(string("eta = ", eta))
+						eta = eta*F
+						if (testset ? testout : currentOut) > tol
+							tolpass = false
+						end
 					end
 				end
+				iter += 1
 			end
-			iter += 1
-		end
 
-	
-		currentTime = time()
-		#print status every 5 seconds
-		
-		if ((currentTime - lastReport) >= 5) & printProgress & printAnything
-			startEpoch = max(0, epoch-10)
-			#find average time per epoch over the last 10 epochs
-			epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
-			remainingEpochs = N - epoch
+			currentTime = time()
+			#print status every 5 seconds
+			
+			if ((currentTime - lastReport) >= 5) & printProgress & printAnything
+				startEpoch = max(0, epoch-10)
+				#find average time per epoch over the last 10 epochs
+				epochTime = (timeRecord[epoch + 1] - timeRecord[startEpoch + 1]) / (epoch-startEpoch)
+				remainingEpochs = N - epoch
 
-			timeRemainingEst = remainingEpochs*epochTime
+				timeRemainingEst = remainingEpochs*epochTime
 
-			#elapsed = currentTime - startTime
-			#percentComplete = epoch/N
-			#totalTimeEst = elapsed / percentComplete
-			#timeRemainingEst = totalTimeEst - elapsed
-			lastReport = currentTime
-			hoursLeft = floor(timeRemainingEst/(60*60))
-			minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
-			secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, digits=1)
-			if testset
-				println(string("On epoch ", epoch, " out of ", N, " best train and test cost is ", (round(bestCost, sigdigits=5), round(bestCostTest, sigdigits=5))))
-			else
-				println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, digits=8)))
+				#elapsed = currentTime - startTime
+				#percentComplete = epoch/N
+				#totalTimeEst = elapsed / percentComplete
+				#timeRemainingEst = totalTimeEst - elapsed
+				lastReport = currentTime
+				hoursLeft = floor(timeRemainingEst/(60*60))
+				minutesLeft = floor(timeRemainingEst/60 - hoursLeft*60)
+				secondsLeft = round(timeRemainingEst - minutesLeft*60 - hoursLeft*60*60, digits=1)
+				if testset
+					println(string("On epoch ", epoch, " out of ", N, " best train and test cost is ", (round(bestCost, sigdigits=5), round(bestCostTest, sigdigits=5))))
+				else
+					println(string("On epoch ", epoch, " out of ", N, " best cost is ", round(bestCost, digits=8)))
+				end
+				println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
 			end
-			println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
 		end
-		epoch += 1
-
-	
+		timeRecord[epoch + 1] = time() - startTime
+		epoch += 1	
 	end
 	lastepoch = epoch - 1
 	currentOut = calcout_batches(T_est, B_est)

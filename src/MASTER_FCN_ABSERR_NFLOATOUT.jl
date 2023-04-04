@@ -2697,6 +2697,16 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 	return fullMultiPerformance
 end
 
+"""
+	function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false, activation_list=fill(true, length(hidden)))
+
+Runs a training procedure with randomly generated data.  Required inputs are as follows:
+- M: input dimension size
+- hidden: vector specifying each hidden layer dimension
+- O: output dimension size
+- batchSize
+- N: number of training epochs
+"""
 function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false, activation_list=fill(true, length(hidden)))
 	#generate training set with m examples
 	m = 102400

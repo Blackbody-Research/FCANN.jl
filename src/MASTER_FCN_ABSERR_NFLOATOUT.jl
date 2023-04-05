@@ -2707,7 +2707,7 @@ Runs a training procedure with randomly generated data.  Required inputs are as 
 - batchSize
 - N: number of training epochs
 """
-function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false, activation_list=fill(true, length(hidden)))
+function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; backend = backend, multi = false, writeFile = true, numThreads = 0, printProg = false, kwargs...)
 	#generate training set with m examples
 	m = 102400
 	X = randn(Float32, m, M)
@@ -2725,13 +2725,16 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 		1
 	end
 
-	swastr = swa ? "SWA" : ""
+	swastr = (haskey(kwargs, :swa) && kwargs[:swa]) ? "SWA" : ""
 
 	numBatches = ceil(Int, m/batchSize)
 	
 	#number of total perations per batch
 	(fops, bops, pops) = calcOps(M, hidden, O, batchSize)
 	total_ops = fops + bops + pops
+
+	costFunc = haskey(kwargs, :costFunc) ? kwargs[:costFunc] : "absErr"
+	dropout = haskey(kwargs, :dropout) ? kwargs[:dropout] : false
 	
 	T0, B0 = if occursin("Log", costFunc)
 		initializeParams(M, hidden, 2*O)
@@ -2740,7 +2743,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end	
 	out = pmap(1:num) do _
 		BLAS.set_num_threads(numThreads)
-		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa, ignorebest=true, activation_list=activation_list)
+		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, kwargs...)
 	end
 	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]

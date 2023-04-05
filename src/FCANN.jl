@@ -57,8 +57,8 @@ function getBackend()
     backend
 end
 
-function checkNumGrad(lambda = 0.0f0; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list = fill(true, length(hidden_layers))) 
-    eval(Symbol("checkNumGrad", backend))(lambda, hidden_layers = hidden_layers, costFunc = costFunc, input_layer_size = input_layer_size, n = n, m = m, resLayers=resLayers, activation_list=activation_list)
+function checkNumGrad(lambda = 0.0f0; kwargs...)
+    eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
 end
 
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)

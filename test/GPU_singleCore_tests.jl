@@ -69,7 +69,7 @@ else
     println("TEST PASSED")
     println()
 
-    testTrain(M, [10, 10], O, batchSize, N; writeFile = false, numThreads = 0, printProg = true, activation_list = [false, true], reslayers=1, dropout = 0.2f0)
+    testTrain(M, [10, 10], O, batchSize, N; writeFile = false, numThreads = 0, printProg = true, activation_list = [false, true], resLayers=1, dropout = 0.2f0)
     println("TEST PASSED")
     println()
 

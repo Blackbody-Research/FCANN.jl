@@ -45,95 +45,64 @@ end
 
 function makeorthonormalrand(n::Integer, m::Integer)
 	if min(n, m) == 1
-		randn(n, m)
+		randn(Float32, n, m)
 	else
-		Q = rand(Haar(1), max(n, m))
-		Q = Q[1:n, 1:m]
-		Q .* sqrt(max(n, m)) #rescale to 1 variance because var(Q)=1/max(n, m)
+		o = max(n, m)
+		Q,R = qr(randn(Float32, o, o))
+		(Q*Diagonal(sign.(diag(R))))[1:n, 1:m] |> Matrix{Float32}
+		# Q = Matrix{Float32}(rand(Haar(1), max(n, m)))
+		# Q = Q[1:n, 1:m]
+		# Float32.(Q .* sqrt(max(n, m))) #rescale to 1 variance because var(Q)=1/max(n, m)
 	end
 end
 
-function initializeParams(input_layer_size, hidden_layers, output_layer_size, reslayers=0, use_μP = false)
-	num_hidden = length(hidden_layers)
-	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1)
-	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
-	Biases = Array{Vector{Float32}}(undef, num_hidden+1)
-	if num_hidden > 0
-		Thetas[1] = map(Float32, randn(hidden_layers[1], input_layer_size) .* (scale*input_layer_size)^(-.5f0))
-		Biases[1] = map(Float32, randn(hidden_layers[1]) .* (scale*input_layer_size)^(-.5f0))
-		
-		if num_hidden > 1
-			for i in 2:num_hidden
-				Thetas[i] = map(Float32, randn(hidden_layers[i], hidden_layers[i-1]) .* (scale*hidden_layers[i-1])^(-.5f0))
-				Biases[i] = map(Float32, randn(hidden_layers[i]) .* (scale*hidden_layers[i-1])^(-.5f0))
-			end
-		end
-		c = scale*hidden_layers[num_hidden]
-		f = use_μP ? 1.0f0 / c : c^(-0.5f0)
-		Thetas[num_hidden+1] = map(Float32, randn(output_layer_size, hidden_layers[num_hidden]) .* f)
-		Biases[num_hidden+1] = map(Float32, randn(output_layer_size) .* (scale*hidden_layers[num_hidden])^(-.5f0))
-	else
-		Thetas[1] = randn(Float32, output_layer_size, input_layer_size)*input_layer_size^(-.5f0)
-		Biases[1] = randn(Float32, output_layer_size)*input_layer_size^(-0.5f0)
-	end
-	return Thetas, Biases
-end
+initializeParams(inputsize::Integer, hiddenlayers::AbstractVector, outputsize::Integer, resLayers = 0; kwargs...) = initializeparams(inputsize, hiddenlayers, outputsize; resLayers = resLayers, kwargs...)
+initializeParams(Thetas::Vector{Matrix{Float32}}, Biases::Vector{Vector{Float32}}, resLayers = 0; kwargs...) = initializeparams!(Thetas, Biases; resLayers = resLayers, kwargs...)
 
-function initializeparams_saxe(input_layer_size, hidden_layers, output_layer_size, reslayers=0; use_μP = false)
-	num_hidden = length(hidden_layers)
-	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1) + 1
-	Thetas = Array{Matrix{Float32}}(undef, num_hidden+1)
-	Biases = Array{Vector{Float32}}(undef, num_hidden+1)
+function initializeparams(inputsize::Integer, hiddenlayers::AbstractVector{T}, outputsize::Integer; resLayers=0, use_μP = false, makerandmatrix = (args...) -> randn(Float32, args...), initvar::Float32 = 1.0f0, Thetas = Vector{Matrix{Float32}}(undef, length(hiddenlayers)+1), Biases = Vector{Vector{Float32}}(undef, length(hiddenlayers)+1)) where T <: Integer 
+	num_hidden = length(hiddenlayers)
+	scale = ((use_μP || resLayers == 0) ? 1 : num_hidden/(resLayers+1) + 1) * initvar #option to add a constant multiplier to the variance
 	if num_hidden > 0
-		Thetas[1] = map(Float32, makeorthonormalrand(hidden_layers[1], input_layer_size) .* (scale*input_layer_size)^(-.5f0))
-		Biases[1] = zeros(Float32, hidden_layers[1])
+		σ = (scale * inputsize)^(-.5f0)
+		Thetas[1] = makerandmatrix(hiddenlayers[1], inputsize) .* σ
+		Biases[1] = randn(Float32, hiddenlayers[1]) .* σ
 			if num_hidden > 1
 				for i in 2:num_hidden
-					Thetas[i] = map(Float32, makeorthonormalrand(hidden_layers[i], hidden_layers[i-1]) .* (scale*hidden_layers[i-1])^(-.5f0))
-					Biases[i] = zeros(Float32, hidden_layers[i])
+					σ = (scale * hiddenlayers[i-1])^(-.5f0)
+					Thetas[i] = makerandmatrix(hiddenlayers[i], hiddenlayers[i-1]) .* σ
+					Biases[i] = randn(Float32, hiddenlayers[i]) .* σ 
 				end
 			end
-		c = scale*hidden_layers[num_hidden]
-		f = use_μP ? 1.0f0 / c : c^(-0.5f0)
-		Thetas[num_hidden+1] = map(Float32, makeorthonormalrand(output_layer_size, hidden_layers[num_hidden]) .* f)
-		Biases[num_hidden+1] = zeros(Float32, output_layer_size)
+		if use_μP
+			#set output layer to 0 as recommended by Appendix D.2 of Tensor Programs V: Tuning Large Neural Networks via Zero-Shot Hyperparameter Transfer
+			Thetas[num_hidden+1] = zeros(Float32, outputsize, hiddenlayers[end])
+			Biases[num_hidden+1] = zeros(Float32, outputsize)
+		else
+			σ = (scale*hiddenlayers[end])^(-0.5f0)
+			Thetas[num_hidden+1] = makerandmatrix(outputsize, hiddenlayers[end]) .* σ 
+			Biases[num_hidden+1] = randn(Float32, outputsize) .* σ
+		end
 	else
-		Thetas[1] = Float32.(makeorthonormalrand(output_layer_size, input_layer_size)*input_layer_size^(-.5f0))
-		Biases[1] = zeros(Float32, output_layer_size)
+		σ = (scale * inputsize)^(-.5f0)
+		Thetas[1] = makerandmatrix(outputsize, inputsize) .* σ
+		Biases[1] = randn(Float32, outputsize) .* σ
 	end
 	return Thetas, Biases
 end
 
 #initialize parameters overwriting existing parameters
-function initializeparams_saxe!(Thetas, Biases, reslayers=0; use_μP = false)
-	num_hidden = length(Thetas) - 1
-	scale = (reslayers == 0) ? 1 : num_hidden/(reslayers+1) + 1
-	if num_hidden > 0
-		Thetas[1] .= map(Float32, makeorthonormalrand(size(Thetas[1])...) .* (scale*size(Thetas[1], 2))^(-.5f0))
-		Biases[1] .= zero(Float32)
-			if num_hidden > 1
-				for i in 2:num_hidden
-					Thetas[i] .= map(Float32, makeorthonormalrand(size(Thetas[i])...) .* (scale*size(Thetas[i], 2))^(-.5f0))
-					Biases[i] .= zero(Float32)
-				end
-			end
-		c = scale*size(Thetas[end], 2)
-		f = use_μP ? 1.0f0 / c : c^(-0.5f0)
-		Thetas[num_hidden+1] .= map(Float32, makeorthonormalrand(size(Thetas[num_hidden+1])...) .* f)
-		Biases[num_hidden+1] .= zero(Float32)
-	else
-		Thetas[1] .= Float32.(makeorthonormalrand(size(Thetas[1])...)*size(Thetas[1], 2)^(-.5f0))
-		Biases[1] .= zeros(Float32)
-	end
-	return Thetas, Biases
-end
+initializeparams!(Thetas, Biases; kwargs...) = initializeparams(getNetworkDims(Thetas, Biases)...; Thetas = Thetas, Biases = Biases, kwargs...)
+
+#for these use the orthonormal matrix generator
+initializeparams_saxe(args...; kwargs...) = initializeParams(args...; makerandmatrix = makeorthonormalrand, kwargs...)
+initializeparams_saxe!(args...; kwargs...) = initializeParams(args...; makerandmatrix = makeorthonormalrand, kwargs...) 
 
 function getNumParams(M, H, O)
 	num = 0
 	if length(H) > 0
 		num += M*H[1] + H[1]
 		if length(H) > 1
-			for i = 2:length(H)
+			for i = 2:lastindex(H)
 				num += H[i-1]*H[i] + H[i]
 			end
 		end
@@ -197,7 +166,7 @@ function getNetworkDims(T::Array{Array{Float32,2},1}, B::Array{Array{Float32,1},
 	H = if length(B) > 1
 		map(b -> length(b), B[1:end-1])
 	else
-		[]
+		Vector{Int64}()
 	end
 	O = length(B[end])
 	return (M, H, O)
@@ -267,7 +236,7 @@ function readBinParams(f::IO)
 	H = if n != 0
 		read!(f, Array{Int64}(undef, n)) # read(f, Int64, n)
 	else
-		[]
+		Vector{Int64}()	
 	end
 	O = read(f, Int64)
 	println(string("Got the following network dimensions: ", M, H, O))
@@ -282,7 +251,7 @@ function readBinParams(f::IO)
 		H = if n != 0
 			read!(f, Array{Int64}(undef, n)) #read(f, Int64, n)
 		else
-			[]
+			Vector{Int64}()
 		end
 		O = read(f, Int64)
 		l = getNumParams(M, H, O)

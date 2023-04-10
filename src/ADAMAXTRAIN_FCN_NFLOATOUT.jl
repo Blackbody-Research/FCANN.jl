@@ -73,7 +73,7 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 
 		if (length(modelOut) == length(dataOut))
 			@simd for i = 1:m*n
-				@inbounds delt[i] = costFuncs[costFunc](modelOut[i], dataOut[i])
+				@inbounds delt[i] = getfield(FCANN, Symbol(costFunc))(modelOut[i], dataOut[i])
 			end
 		else
 			error("output layer does not match data")
@@ -85,8 +85,8 @@ function calcError(modelOut::Array{Float32, 2}, dataOut::Array{Float32, 2}; cost
 		delt2 = similar(dataOut)
 		if (length(modelOut) == 2*length(dataOut))
 			@simd for i = 1:m*n
-				@inbounds delt1[i] = costFuncs[costFunc](modelOut[i], modelOut[i+(m*n)], dataOut[i])
-				@inbounds delt2[i] = costFuncs[costFunc2](modelOut[i], dataOut[i])
+				@inbounds delt1[i] = getfield(FCANN, Symbol(costFunc))(modelOut[i], modelOut[i+(m*n)], dataOut[i])
+				@inbounds delt2[i] = getfield(FCANN, Symbol(costFunc2))(modelOut[i], dataOut[i])
 			end
 		else
 			error("output layer does not match data")
@@ -707,12 +707,12 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 
 
 	Theta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
+	for i in eachindex(Theta_grads)
 		Theta_grads[i] = similar(T0[i])
 	end
 
 	Bias_grads = similar(B0)
-	for i = 1:length(B0)
+	for i in eachindex(B0) 
 		Bias_grads[i] = similar(B0[i])
 	end
 
@@ -766,23 +766,25 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 end
 
 function zeroParams!(T, B)
-	for i in 1:length(T)
+	for i in eachindex(T)
 		scal!(0.0f0, T[i])
 		scal!(0.0f0, B[i])
 	end
+	return nothing
 end
 
 function updateM_old!(beta1, mT, mB, TG, BG)
 	b2 = 1.0f0 - beta1
-	for i = 1:length(TG)
-		@simd for ii = 1:length(TG[i])
+	for i in eachindex(TG)
+		@simd for ii in eachindex(TG[i])
 			@inbounds mT[i][ii] = beta1*mT[i][ii] + b2*TG[i][ii]
 		end
 		
-		@simd for ii = 1:length(BG[i])
+		@simd for ii in eachindex(BG[i])
 			@inbounds mB[i][ii] = beta1*mB[i][ii] + b2*BG[i][ii]
 		end
 	end
+	return nothing
 end
 
 function updateM!(beta1, mT, mB, TG, BG)
@@ -794,26 +796,28 @@ function updateM!(beta1, mT, mB, TG, BG)
 end
 
 function updateV!(beta2, vT, vB, TG, BG)
-	for i = 1:length(TG)
-		@simd for ii = 1:length(TG[i])
+	for i in eachindex(TG)
+		@simd for ii in eachindex(TG[i]) 
 			@inbounds vT[i][ii] = max(beta2*vT[i][ii], abs(TG[i][ii]), 1.0f-16)
 		end
-		@simd for ii = 1:length(BG[i])
+		@simd for ii in eachindex(BG[i]) 
 			@inbounds vB[i][ii] = max(beta2*vB[i][ii], abs(BG[i][ii]), 1.0f-16)
 		end
 	end
+	return nothing
 end
 
 function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t, scales)
 	basescale = alpha/(1.0f0 - beta1^t)
-	for i = 1:length(T)
-		@simd for ii = 1:length(T[i])
+	for i in eachindex(T)
+		@simd for ii in eachindex(T[i])
 			@inbounds T[i][ii] = T[i][ii] - scales[i]*basescale*mT[i][ii]/vT[i][ii]
 		end
-		@simd for ii = 1:length(B[i])
-			@inbounds B[i][ii] = B[i][ii] - scales[i]*basescale*mB[i][ii]/vB[i][ii]
+		@simd for ii in eachindex(B[i])
+			@inbounds B[i][ii] = B[i][ii] - basescale*mB[i][ii]/vB[i][ii]
 		end
 	end
+	return nothing
 end
 
 function updateParams_old!(alpha, T, B, TG, BG)
@@ -825,6 +829,7 @@ function updateParams_old!(alpha, T, B, TG, BG)
 			@inbounds B[i][ii] = B[i][ii] - alpha*BG[i][ii]
 		end
 	end
+	return nothing
 end
 
 function updateParams!(alpha, T, B, TG, BG, scales)
@@ -832,6 +837,7 @@ function updateParams!(alpha, T, B, TG, BG, scales)
 		axpy!(-alpha*scales[i], TG[i], T[i])
 		axpy!(-alpha, BG[i], B[i])
 	end
+	return nothing
 end
 
 function updateEst_old!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
@@ -849,17 +855,19 @@ function updateEst_old!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
 			@inbounds B_est[i][ii] = scale*B_avg[i][ii]
 		end
 	end
+	return nothing
 end
 
 function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
 	scale = 1.0f0/(1.0f0 - beta2^t)
 	b2 = 1.0f0 - beta2
-	for i = 1:length(T)
+	for i in eachindex(T) 
 		axpby!(b2, T[i], beta2, T_avg[i])
 		T_est[i] .= scale .* T_avg[i] 
 		axpby!(b2, B[i], beta2, B_avg[i])
 		B_est[i] .= scale .* B_avg[i] 
 	end
+	return nothing
 end
 
 function updateAvg!(nModels, T, B, T_avg, B_avg)
@@ -869,11 +877,12 @@ function updateAvg!(nModels, T, B, T_avg, B_avg)
 		axpby!(F, T[i], a, T_avg[i])
 		axpby!(F, B[i], a, B_avg[i])
 	end
+	return nothing
 end
 
 function scaleParams!(T, B, c)
 	#project Thetas onto l2 ball of radius c
-	for i = 1:length(T)
+	for i in eachindex(T)
 		#calculate the squared sum of each row
 		fs = zeros(Float32, size(T[i], 1))
 		for k = 1:size(T[i], 2)
@@ -881,13 +890,13 @@ function scaleParams!(T, B, c)
 				@inbounds fs[j] = fs[j] + T[i][j, k].^2
 			end
 		end
-		@simd for j = 1:length(fs)
+		@simd for j in eachindex(fs)
 			@inbounds fs[j] = sqrt(fs[j])
 		end
 		
 		#rescale each row of T if the magnitude is too high
 		for k = 1:size(T[i], 2)
-			@simd for j = 1:length(fs)
+			@simd for j in eachindex(fs)
 				#if fs[j] > c
 				#	@inbounds T[i][j, k] = c*T[i][j, k]/fs[j]
 				#end
@@ -895,29 +904,32 @@ function scaleParams!(T, B, c)
 			end
 		end
 	end
+	return nothing
 end
 
 function apply!(f, A, B)
 #apply a function f(x, y) that takes two inputs and produces a single output to each pair 
 #of elements in A and B where A and B are collections of Arrays and saves the answer in B
-	for i = 1:length(A)
-		@simd for ii = 1:length(A[i])
+	for i in eachindex(A)
+		@simd for ii in eachindex(A[i])
 			@inbounds B[i][ii] = f(A[i][ii], B[i][ii])
 		end
 	end
+	return nothing
 end
 
 
 function updateBest!(bestT, bestB, newT, newB)
 #update best parameters when a new lowest cost is found 
-	for i = 1:length(bestB)
-		@simd for ii = 1:length(bestB[i])
+	for i in eachindex(bestB)
+		@simd for ii in eachindex(bestB[i])
 			@inbounds bestB[i][ii] = newB[i][ii]
 		end
-		@simd for ii = 1:length(bestT[i])
+		@simd for ii in eachindex(bestT[i])
 			@inbounds bestT[i][ii] = newT[i][ii]
 		end
 	end
+	return nothing
 end
 
 function generateBatches(data, batchsize)
@@ -937,18 +949,18 @@ function generateBatches(data, batchsize)
 	return batchData
 end
 
-function generatebatchinds(data, batchsize)
+function generatebatchinds(data::Matrix{Float32}, batchsize::Int64)
 	m = size(data, 1)
-	# if batchsize > m
-	# 	error("Your batchsize is larger than the total number of examples.")
-	# end
+	generatebatchinds(m, batchsize)
+end
+
+function generatebatchinds(m::Int64, batchsize::Int64)
+	numBatches = ceil(Int64, m/batchsize)
+	batchinds = Vector{Vector{Int64}}(undef, numBatches)
 	
-	numBatches = round(Int, ceil(m/batchsize))
-	batchinds = Vector{AbstractVector{Int64}}(undef, numBatches)
+	randInd = repeat(shuffle(collect(1:m)), ceil(Int64, batchsize/m)+1)
 	
-	randInd = repeat(shuffle(collect(1:m)), ceil(Int, batchsize/m)+1)
-	
-	for i = 1:numBatches
+	for i in eachindex(batchinds) 
 		batchinds[i] = randInd[(i-1)*batchsize + 1:i*batchsize]
 	end
 	return batchinds
@@ -964,19 +976,19 @@ function generatebatches(data, batchinds)
 	return batchdata
 end
 
-function generateBatches(input_data, output_data, batchsize)
+function generateBatches(input_data::Matrix{Float32}, output_data::Matrix{Float32}, batchsize::Int64)
 	m = size(output_data, 1)
 	# if batchsize > m
 	# 	error("Your batchsize is larger than the total number of examples.")
 	# end
 	
-	numBatches = round(Int, ceil(m/batchsize))
-	inputbatchData = Array{Matrix{Float32}}(undef, numBatches)
-	outputbatchData = Array{Matrix{Float32}}(undef, numBatches)
+	numBatches = ceil(Int64, m/batchsize)
+	inputbatchData = Vector{Matrix{Float32}}(undef, numBatches)
+	outputbatchData = Vector{Matrix{Float32}}(undef, numBatches)
 	
-	randInd = repeat(shuffle(collect(1:m)), ceil(Int, batchsize/m)+1)
+	randInd = repeat(shuffle(collect(1:m)), ceil(Int64, batchsize/m)+1)
 	
-	for i = 1:numBatches
+	for i in 1:numBatches
 		inputbatchData[i] = input_data[randInd[(i-1)*batchsize + 1:i*batchsize], :]
 		outputbatchData[i] = output_data[randInd[(i-1)*batchsize + 1:i*batchsize], :]
 	end
@@ -1004,10 +1016,107 @@ function form_prep_activations(hidden_layers, batchSize, T0)
 	(form_tanh_grads(hidden_layers, batchSize), form_activations(T0, batchSize), form_activations(T0, batchSize))
 end
 
-function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_layers, lambda, c; 
+#want to add function to perform multiple trials of training where the prep data and prep activations can be reused.  In this case the training data and the network architecture will be exactly the same between training runs so the memory allocations can be reused.  This would be ideal for training multiple trials of the same setup with a different random seed.  Reusing the memory would be more efficient in this case than trying to train with multiple threads which would involve passing a lot of data around.  Multiple threads or workers should be reserved for cases where training is done with different architectures or batch sizes.
+function train_trials(data, batchSize, hidden_layers; trial_lists::Dict{Symbol, T} = Dict([:N => [1000]]), kwargs...) where T <: AbstractVector
+	isempty(trial_lists) && error("trial_lists should have one or more elements to iterate over training settings")
+
+	redundantkeys = intersect(keys(trial_lists), keys(kwargs))
+
+	!isempty(redundantkeys) && error("The following training parameters are listed twice: $redundantkeys")
+
+	#if the input data only contains one matrix then consider input and output
+	#data to be the same and train an autoencoder
+	autoencoder = (length(data[1]) == 1)
+	input_data = data[1][1]
+	output_data = autoencoder ? input_data : data[1][2]
+
+	input_layer_size = size(input_data, 2)
+	output_layer_size = size(output_data, 2)
+
+	(θ, β) = initializeparams_saxe(input_layer_size, hidden_layers, output_layer_size)
+
+	prepactivations= form_prep_activations(hidden_layers, batchSize, θ)
+	params = form_parameter_allocations(θ, β)
+	onesVecBATCH = ones(Float32, batchSize)
+
+	batchinds = generatebatchinds(input_data, batchSize)
+    inputbatchData = generatebatches(input_data, batchinds)
+	prepdata = [inputbatchData]
+	if !autoencoder
+		outputbatchData = generatebatches(output_data, batchinds)
+		push!(prepdata, outputbatchData)
+	end
+
+	#parameters that can be varied while keeping memory allocations stable
+	valid_list_symbols = Set([:seed, :lambda, :c, :alpha, :R, :lrschedule, :dropout, :resLayers, :N, :tol, :patience, :swa, :ignorebest, :use_μP])
+
+	function makesets(pairs, keys)
+		isempty(keys) && return NamedTuple(pairs) 
+
+		k1 = first(keys)
+		otherkeys = setdiff(keys, [k1])
+
+		list1 = trial_lists[k1]
+		reduce(vcat, [begin	
+			newpairs = vcat(pairs, k1 => x)
+			makesets(newpairs, otherkeys) 
+		end
+		for x in list1])
+	end
+
+	drop(nt::NamedTuple, key::Symbol) = Base.structdiff(nt, NamedTuple{(key,)})
+	drop(nt:: NamedTuple, keys::NTuple{N,Symbol}) where {N} = Base.structdiff(nt, NamedTuple{keys})
+
+	getval(dict, sym, def) = haskey(dict, sym) ? dict[sym] : def
+
+	trainsets = makesets(Vector{Pair}(), intersect(keys(trial_lists), valid_list_symbols))
+
+	Dict(begin
+		N = getval(trainset, :N, 1000) 
+		seed = getval(trainset, :seed, 1)
+		reslayers = getval(trainset, :resLayers, 0)
+		use_μP = getval(trainset, :use_μP, false)
+		lambda = getval(trainset, :lambda, 0.0f0)
+		c = getval(trainset, :c, Inf)
+		
+		Random.seed!(seed)
+		initializeparams_saxe!(θ, β, reslayers, use_μP = use_μP)
+
+		# println("θ hash is $(hash(θ))")
+		trainkey = drop(trainset, (:N, :seed, :lambda, :c, :reslayers, :use_μP))
+
+		Random.seed!(seed)
+		# merge(trainkey, (N = N, seed = seed, reslayers = reslayers, use_μP = use_μP, lambda = lambda, c = c), kwargs...) => ADAMAXTrainNNCPU(data, batchSize, θ, β, N, input_layer_size, hidden_layers, lambda, c; prepdata = prepdata, prepactivations = prepactivations, params = params, onesVecBATCH = onesVecBATCH, resLayers = reslayers, use_μP = use_μP, trainkey..., kwargs...)
+		trainset => ADAMAXTrainNNCPU(data, batchSize, θ, β, N, input_layer_size, hidden_layers, lambda, c; prepdata = prepdata, prepactivations = prepactivations, params = params, onesVecBATCH = onesVecBATCH, resLayers = reslayers, use_μP = use_μP, trainkey..., kwargs...)
+		
+		#for the purpose of seeing the impact of reusing the training setup
+		# trainset => ADAMAXTrainNNCPU(data, batchSize, θ, β, N, input_layer_size, hidden_layers, lambda, c; resLayers = reslayers, use_μP = use_μP, trainkey..., kwargs...)
+	end
+	for trainset in trainsets)
+end
+
+
+function makeprepdata(data, batchSize)
+	autoencoder = (length(data[1]) == 1)
+
+	input_data = data[1][1]
+	output_data = autoencoder ? input_data : data[1][2]
+
+	batchinds = generatebatchinds(input_data, batchSize)
+	inputbatches = generatebatches(input_data, batchinds)
+
+	autoencoder && return (inputbatches,)
+
+	outputbatches = generatebatches(output_data, batchinds)
+	(inputbatches, outputbatches)
+end
+
+
+
+function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, hidden_layers, lambda, c; 
 	alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, 
 	tol=Inf, patience=3, swa=false, ignorebest=false, minepoch=0, 
-	prepdata = (), #data prepared in batches
+	prepdata = makeprepdata(data, batchSize), #data prepared in batches
 	prepactivations= form_prep_activations(hidden_layers, batchSize, T0), #allocations to store batch activations during training
 	params = form_parameter_allocations(T0, B0), #memory allocations that mimic the parameters and store values through training
 	onesVecBATCH = ones(Float32, batchSize),
@@ -1072,8 +1181,8 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	#set per layer learning rate scales.  it only differs from 1 in the case of using μP parametrization
 	scales = fill(1.0f0, length(T0))
 	if use_μP
-		for i in 2:length(T0)
-			scales[i] /= size(T0[i], 2) #this should be the input dimension for this layer
+		for i in 2:lastindex(T0)-1 
+			scales[i] /= size(T0[i], 2) #this should be the input dimension for this layer, it only differs from 1 for hidden layers that are not connected to the input or output 
 		end
 	end
 	
@@ -1098,7 +1207,7 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		println("-------------------------------------------------------------------")
 	end
 
-	numBatches = round(Int, ceil(m/batchSize))
+	numBatches = ceil(Int64, m/batchSize)
 	(fops, bops, pops) = calcOps(n, hidden_layers, n2, batchSize)
     total_ops = fops + bops + pops
 
@@ -1110,25 +1219,11 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 
 	recordlength = ceil(Int64, numBatches*N/batchinterval) + 1
 
-    if trainsample == 1.0
-    	batchset = 1:numBatches
+    batchset = if trainsample == 1.0
+    	collect(1:numBatches)
     else
-    	batchset = rand(1:numBatches, ceil(Int64, numBatches*trainsample))
+    	rand(1:numBatches, ceil(Int64, numBatches*trainsample))
     end
-
-
-    if isempty(prepdata)
-    	batchinds = generatebatchinds(input_data, batchSize)
-    	inputbatchData = generatebatches(input_data, batchinds)
-		if !autoencoder
-			outputbatchData = generatebatches(output_data, batchinds)
-		end
-	else
-		inputbatchData = prepdata[1]
-		if !autoencoder
-			outputbatchData = prepdata[2]
-		end
-	end
 
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
@@ -1146,21 +1241,21 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 	end
 
 	if autoencoder
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, prepdata[1][batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 	else
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, inputbatchData[batchset[end]], outputbatchData[batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+		nnCostFunction(T0, B0, input_layer_size, hidden_layers, prepdata[1][batchset[end]], prepdata[2][batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 	end
 	
 	function calcout_batches(T, B)
 		currentOut = 0.0f0 
-		for i = batchset
+		for i in batchset
 			if autoencoder
-				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, prepdata[1][i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 			else
-				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, inputbatchData[i], outputbatchData[i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, prepdata[1][i], prepdata[2][i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 			end
 		end
-		currentOut = currentOut/length(batchset)
+		currentOut = currentOut/lastindex(batchset)
 	end
 
 	currentOut = calcout_batches(T0, B0)
@@ -1240,9 +1335,9 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		for batch in shuffle(batchset)
 			if eta > 0
 				if autoencoder
-					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, prepdata[1][batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 				else
-					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, inputbatchData[batch], outputbatchData[batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, prepdata[1][batch], prepdata[2][batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 				end
 				if swa && (epoch > 100)
 					updateParams!(G, Thetas, Biases, Theta_grads, Bias_grads, scales)
@@ -1371,5 +1466,5 @@ function ADAMAXTrainNNCPU(data, batchSize, T0, B0, N, input_layer_size, hidden_l
 		(bestresultepoch,)
 	end
 
-	return (bestThetas, bestBiases, bestCost, [costRecord[1:iter]; currentOut], timeRecord, GFLOPS_per_epoch, testresults...)
+	return (deepcopy(bestThetas), deepcopy(bestBiases), bestCost, [costRecord[1:iter]; currentOut], timeRecord, GFLOPS_per_epoch, testresults...)
 end

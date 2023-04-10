@@ -8,7 +8,6 @@ using Printf
 using Random
 using Pkg
 using NVIDIALibraries
-using RandomMatrices
 
 #set default backend to CPU
 global backend = :CPU

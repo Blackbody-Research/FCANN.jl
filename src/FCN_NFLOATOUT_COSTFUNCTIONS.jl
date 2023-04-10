@@ -37,17 +37,21 @@ function cauchyLogErr(a1, a2, y)
 end
 
 function cauchyLogErrDeriv(a1, a2, y)
-	(exp(a2)*ifelse(a1 > y, 1.0f0, ifelse(a1 < y, -1.0f0, 0.0f0)), exp(a2)*abs(a1-y) - 1)
+	(exp(a2)*ifelse(a1 > y, 1.0f0, ifelse(a1 < y, -1.0f0, 0.0f0)), exp(a2)*abs(a1-y) - 1.0f0)
 end
 
 
 #names, functions, and function derivatives must all be in order here
-costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr")
+const costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr")
+const costDerivNames = Tuple(string(a, "Deriv") for a in costFuncNames)
+const derivlookup = Dict(zip(costFuncNames, costDerivNames))
 costFuncList = eval.(Symbol.(costFuncNames))
 costFuncDerivsList = eval.(Symbol.(map(a -> "$(a)Deriv", costFuncNames)))
+const costFunctions = [absErr, sqErr, normLogErr, cauchyLogErr]
+const costFunctionDerivatives = [absErrDeriv, sqErrDeriv, normLogErrDeriv, cauchyLogErrDeriv]
 #--------------------------------------------------------------------------
 
-function calcJ(m, n, delta, lambda, Thetas)
+function calcJ(m::Int64, n::Int64, delta::Matrix{Float32}, lambda::Float32, Thetas::Vector{Matrix{Float32}})
 	accum1 = 0.0f0
 	@simd for i = 1:m*n
 		@inbounds accum1 += delta[i]
@@ -56,23 +60,20 @@ function calcJ(m, n, delta, lambda, Thetas)
 
 	accum2 = 0.0f0
 	if lambda > 0.0f0
-		for i = 1:length(Thetas)
-			@simd for j = 1:length(Thetas[i])
+		for i in eachindex(Thetas)
+			@simd for j in eachindex(Thetas[i]) 
 				@inbounds accum2 += Thetas[i][j]*Thetas[i][j]
 			end
 		end
-		accum2 = accum2 * lambda/(2.0*m)
+		accum2 = accum2 * lambda/(2.0f0*m)
 	end
 	#println(string("cost is ", accum1+accum2))
 	return accum1 + accum2
 end
 
-costFuncs = Dict(zip(costFuncNames, costFuncList))
-costFuncDerivs = Dict(zip(costFuncNames, costFuncDerivsList))
-
 #in case output layer predicts a value and a range, check relative size
 #between the two to dispatch to the proper error function
-function calcDeltaOut!(costFuncDeriv, deltas, a, y, m, n)
+function calcDeltaOut!(costFuncDeriv::Function, deltas, a, y, m, n)
 #calculates derivative of the cost function
 	if length(a) == 2*length(y)
 		@simd for i = 1:m*n
@@ -89,27 +90,29 @@ function calcDeltaOut!(costFuncDeriv, deltas, a, y, m, n)
 	else
 		error("output layer does not match data")
 	end
+	return nothing
 end
 
-function calcFinalOut!(costFunc, a, y, m, n)
+function calcFinalOut!(costFunc::Function, a, y, m, n)
 	if length(a) == 2*length(y)
-		@simd for i = 1:m*n
+		@simd for i in eachindex(y)
 			@inbounds a[i] = costFunc(a[i], a[i+(m*n)], y[i])
 			#@inbounds a[i] = absErr(a[i], y[i])
 		end
 	elseif length(a) == length(y)
-		@simd for i = 1:m*n
+		@simd for i in eachindex(y)
 			@inbounds a[i] = costFunc(a[i], y[i])
 			#@inbounds a[i] = absErr(a[i], y[i])
 		end
 	else
 		error("output layer does not match data")
 	end
+	return nothing
 end
 
-function fillAs!(a::Array{Matrix{Float32}, 1}, biases::Array{Vector{Float32}, 1}, m)
-	for i = 1:length(a)
-		for j = 1:length(biases[i])
+function fillAs!(a::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, m::Int64)
+	for i in eachindex(a)
+		for j in eachindex(biases[i])
 			start = m*(j-1) + 1
 			b = biases[i][j]
 			@simd for k = start:start+m-1
@@ -117,20 +120,23 @@ function fillAs!(a::Array{Matrix{Float32}, 1}, biases::Array{Vector{Float32}, 1}
 			end
 		end
 	end
+	return nothing
 end
 
 function fillThetaGrads!(Theta_grads, Thetas)
-	for i = 1:length(Thetas)
-		@simd for j = 1:length(Thetas[i])
+	for i in eachindex(Thetas)
+		@simd for j in eachindex(Thetas[i])
 			@inbounds Theta_grads[i][j] = Thetas[i][j]
 		end
 	end
+	return nothing
 end
 
 function finishDelta!(delta, tanh_grad_z)
-	@simd for i = 1:length(delta)
+	@simd for i in eachindex(delta) 
 		@inbounds delta[i] = delta[i] * tanh_grad_z[i]
 	end
+	return nothing
 end
 
 
@@ -143,59 +149,63 @@ end
 
 function tanhGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32})
 	l = length(z)
-	@inbounds @simd for i = 1:l	
+	@inbounds @simd for i in eachindex(z)	
 		z[i] = 1.7159f0*fast_tanh(2.0f0*z[i]/3.0f0)
 	end
 	#z.=1.7159f0*fast_tanh.(2.0f0*z/3.0f0)
 
-	@inbounds @simd for i = 1:l 
+	@inbounds @simd for i in eachindex(z) 
 		tanh_grad_z[i] = 1.7159f0 * (1.0f0 - z[i]*z[i]/(1.7159f0*1.7159f0)) * 2.0f0 / 3.0f0
 	end
 	#tanh_grad_z.=1.7159f0 * (1.0f0 - z.*z/(1.7159f0*1.7159f0)) * 2.0f0 / 3.0f0
+	return nothing
 end
 
 function noactivationGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32}, D::Float32)
 	l = length(z)
 	F = 1.0f0/(1.0f0 - D) #added scaling factor so dropout trained network can be treated normally during inference
 	if D != 0
-		@inbounds for i = 1:l
+		@inbounds for i in eachindex(z)
 			tanh_grad_z[i] = Float32(rand() > D)*F
 			z[i] = tanh_grad_z[i]*z[i]
 		end
 	else
-		@inbounds for i in 1:l
+		@inbounds for i in eachindex(z)
 			tanh_grad_z[i] = 1.0f0
 		end
 	end
+	return nothing
 end
 
 function tanhGradient!(z::Matrix{Float32}, tanh_grad_z::Matrix{Float32}, D::Float32)
 	l = length(z)
 	F = 1.0f0/(1.0f0 - D) #added scaling factor so dropout trained network can be treated normally during inference
-	@inbounds for i = 1:l
+	@inbounds for i in eachindex(z) 
 		tanh_grad_z[i] = Float32(rand() > D)*F
 	end
 
-	@inbounds @simd for i = 1:l	
+	@inbounds @simd for i in eachindex(z)
 		z[i] = tanh_grad_z[i]*1.7159f0*fast_tanh(2.0f0*z[i]/3.0f0)
 	end
 
-	@inbounds @simd for i = 1:l 
+	@inbounds @simd for i in eachindex(z)
 		tanh_grad_z[i] = tanh_grad_z[i]*1.7159f0 * (1.0f0 - z[i]*z[i]/(1.7159f0*1.7159f0)) * 2.0f0 / 3.0f0
 	end	
+	return nothing
 end
 
 function tanhActivation!(z::Matrix{Float32})
-	@simd for i = 1:length(z)
+	@simd for i in eachindex(z)
 		@inbounds z[i] = 1.7159f0*fast_tanh(2.0f0*z[i]/3.0f0)
 	end
+	return nothing
 end
 
 function form_activations(Thetas::Vector{Matrix{Float32}}, m::Int64)
 	l = length(Thetas)
 	a = Array{Matrix{Float32}}(undef, l)
 
-	for i = 1:l
+	for i in eachindex(Thetas)
 		a[i] = Array{Float32}(undef, m, size(Thetas[i], 1))
 	end
 
@@ -206,7 +216,7 @@ function form_tanh_grads(hidden_layers::AbstractVector{Int64}, m::Int64)
 	num_hidden = length(hidden_layers)
 	tanh_grad_z = Array{Matrix{Float32}, 1}(undef, num_hidden)
 	if num_hidden > 0
-		for i in 1:num_hidden
+		for i in eachindex(hidden_layers)
 			tanh_grad_z[i] = Matrix{Float32}(undef, m, hidden_layers[i])
 		end
 	end
@@ -243,9 +253,10 @@ function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float3
 		end
 		gemm!('N', 'T', 1.0f0, a[end-1], thetas[end], 1.0f0, a[end])
 	end
+	return nothing
 end
 
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers::Vector{Int64}, X::Matrix{Float32}, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	num_hidden = length(hidden_layers)
 
@@ -253,19 +264,20 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	m = size(X, 1)
 	n = size(y, 2)
 	# F = 1.0f0 - D
-	
+	@assert !isempty(a)
+
 	if occursin("Log", costFunc)
-		@assert 2*n == size(a[end], 2)
+		@assert 2*n == size(last(a), 2)
 	else
-		@assert n == size(a[end], 2)
+		@assert n == size(last(a), 2)
 	end
 
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
 
 	#mean abs error cost function
-	calcFinalOut!(costFuncs[costFunc], a[end], y, m, n)
+	calcFinalOut!(getfield(FCANN, Symbol(costFunc)), last(a), y, m, n)
 
-	J = calcJ(m, n, a[end], lambda, Thetas)
+	J = calcJ(m, n, last(a), lambda, Thetas)
 end
 
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers::Vector, X::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
@@ -275,6 +287,8 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	#Setup some useful variables
 	(m, n) = size(X)
 	# F = 1.0f0 - D
+
+	@assert !isempty(a)
 	
 	if occursin("Log", costFunc)
 		@assert 2*n == size(a[end], 2)
@@ -285,9 +299,9 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
 
 	#mean abs error cost function
-	calcFinalOut!(costFuncs[costFunc], a[end], X, m, n)
+	calcFinalOut!(getfield(FCANN, Symbol(costFunc)), last(a), X, m, n)
 
-	J = calcJ(m, n, a[end], lambda, Thetas)
+	J = calcJ(m, n, last(a), lambda, Thetas)
 end
 
 function predict(Thetas, biases, X::Matrix{Float32}, resLayers::Int64 = 0; layerout=length(Thetas), activation_list::AbstractVector{Bool} = fill(true, length(Thetas) - 1))
@@ -420,6 +434,7 @@ function predictMulti!(multiParams, X::Matrix{Float32}, a, outputs, resLayers::I
 		forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list=activation_list)
 		outputs[i] .= a[end]
 	end
+	return nothing
 end
 
 function predictMultiBatches(multiParams, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0; layerout=length(multiParams[1][1]), activation_list=fill(true, length(multiParams[1][1])))
@@ -455,12 +470,15 @@ end
 
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
-	num_hidden = length(hidden_layers)
+	num_hidden = lastindex(hidden_layers)
+	# costFuncDeriv = Symbol(costFunc, "Deriv")
+	# derivfunc = getfield(FCANN, costFuncDeriv)
+	deriv = getfield(FCANN, Symbol(derivlookup[costFunc]))
 
 	if resLayers != 0
 		@assert num_hidden > 1 "Must have at least two hidden layers"
 		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
-		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+		@assert prod(hidden_layers .== first(hidden_layers)) "hidden layers do not share a dimension" 
 	end
 
 
@@ -511,7 +529,9 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 
 	#mean abs error cost function
-	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], y, m, n)
+	calcDeltaOut!(deriv, last(deltas), last(a), y, m, n)
+	#invoking the function explicitely removes the type instability but the above solution doesn't seem to affect performance at all
+	# calcDeltaOut!(absErrDeriv, last(deltas), last(a), y, m, n)
 
 	# println("deltas[end] CPU is $(deltas[end])")
 
@@ -541,9 +561,12 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+	return nothing
 end
 
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+
+	deriv = getfield(FCANN, Symbol(derivlookup[costFunc]))
 
 	num_hidden = length(hidden_layers)
 
@@ -601,7 +624,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 
 	#mean abs error cost function
-	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], X, m, n)
+	calcDeltaOut!(deriv, deltas[end], a[end], X, m, n)
 
 	# println("deltas[end] CPU is $(deltas[end])")
 
@@ -631,6 +654,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+	return nothing
 end
 
 
@@ -694,5 +718,5 @@ function nnCostFunctionAdv(Thetas::Array{Matrix{Float32},1}, biases::Array{Vecto
 		gemv!('T', 1.0f0/m, deltas[i], onesVec, 0.0f0, Bias_grads[i]) #calculate below line in place
 		#Bias_grads[i] = (ones(Float32, 1, m)*deltas[i]/m)[:]
 	end
-
+	return nothing
 end

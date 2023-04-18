@@ -56,12 +56,12 @@ function makeorthonormalrand(n::Integer, m::Integer)
 	end
 end
 
-initializeParams(inputsize::Integer, hiddenlayers::AbstractVector, outputsize::Integer, resLayers = 0; kwargs...) = initializeparams(inputsize, hiddenlayers, outputsize; resLayers = resLayers, kwargs...)
-initializeParams(Thetas::Vector{Matrix{Float32}}, Biases::Vector{Vector{Float32}}, resLayers = 0; kwargs...) = initializeparams!(Thetas, Biases; resLayers = resLayers, kwargs...)
+initializeParams(inputsize::Integer, hiddenlayers::AbstractVector, outputsize::Integer, resLayers::Integer = 0; kwargs...) = initializeparams(inputsize, hiddenlayers, outputsize; resLayers = resLayers, kwargs...)
+initializeParams(Thetas::Vector{Matrix{Float32}}, Biases::Vector{Vector{Float32}}; kwargs...) = initializeparams!(Thetas, Biases; kwargs...)
 
-function initializeparams(inputsize::Integer, hiddenlayers::AbstractVector{T}, outputsize::Integer; resLayers=0, use_μP = false, makerandmatrix = (args...) -> randn(Float32, args...), initvar::Float32 = 1.0f0, Thetas = Vector{Matrix{Float32}}(undef, length(hiddenlayers)+1), Biases = Vector{Vector{Float32}}(undef, length(hiddenlayers)+1)) where T <: Integer 
+function initializeparams(inputsize::Integer, hiddenlayers::AbstractVector{T}, outputsize::Integer; resLayers::Integer=0, use_μP::Bool = false, makerandmatrix = (args...) -> randn(Float32, args...), initvar::Float32 = 1.0f0, Thetas = Vector{Matrix{Float32}}(undef, length(hiddenlayers)+1), Biases = Vector{Vector{Float32}}(undef, length(hiddenlayers)+1)) where T <: Integer 
 	num_hidden = length(hiddenlayers)
-	scale = ((use_μP || resLayers == 0) ? 1 : num_hidden/(resLayers+1) + 1) * initvar #option to add a constant multiplier to the variance
+	scale = ((use_μP || (resLayers == 0)) ? 1 : num_hidden/(resLayers+1) + 1) * initvar #option to add a constant multiplier to the variance
 	if num_hidden > 0
 		σ = (scale * inputsize)^(-.5f0)
 		Thetas[1] = makerandmatrix(hiddenlayers[1], inputsize) .* σ
@@ -95,7 +95,7 @@ initializeparams!(Thetas, Biases; kwargs...) = initializeparams(getNetworkDims(T
 
 #for these use the orthonormal matrix generator
 initializeparams_saxe(args...; kwargs...) = initializeParams(args...; makerandmatrix = makeorthonormalrand, kwargs...)
-initializeparams_saxe!(args...; kwargs...) = initializeParams(args...; makerandmatrix = makeorthonormalrand, kwargs...) 
+initializeparams_saxe!(T, B; kwargs...) = initializeparams!(T, B; makerandmatrix = makeorthonormalrand, kwargs...) 
 
 function getNumParams(M, H, O)
 	num = 0

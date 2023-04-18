@@ -1016,42 +1016,56 @@ function form_prep_activations(hidden_layers, batchSize, T0)
 	(form_tanh_grads(hidden_layers, batchSize), form_activations(T0, batchSize), form_activations(T0, batchSize))
 end
 
+"""
+	preptraining(data::AbstractVector{T}, batchsize, numepochs, hidden, logcost; seed = 1234)  where T <: Tuple{Matrix{Float32}, Matrix{Float32}}
+
+Prepare allocations and variables that will be passed to a training program.  The random seed controls how the indices of batches are randomly selected.  These inputs define a set of variables and allocations that remain constant between training sessions.  The return value is a named tuple as follows: 
+	(θ_init = T0, β_init = B0, inputsize = input_layer_size, outputsize = output_layer_size, param_allocations = param_allocations, prepactivations = prepactivations, prepdata = prepdata)
+Values from this tuple can be passed along to train while varying all other training parameters such as learning rate, μP initialization, and regularization schemes.  Note that while the parameters are initialized, other programs should overwrite their values in place to use a different style initialization and to vary it with a random seed.
+"""
+function preptraining(data::AbstractVector{T}, batchsize, hidden, logcost; seed = 1234, initvar = 1.0f0) where T <: Tuple{Matrix{Float32}, Matrix{Float32}}
+	autoencoder = length(data[1]) == 1
+
+	input_layer_size = size(data[1][1], 2)
+	output_layer_size = autoencoder ? input_layer_size : size(data[1][2], 2)
+
+	f = logcost ? 2 : 1 #log style cost function that will produce double the output values
+	Random.seed!(seed)
+	T0, B0 = initializeparams_saxe(input_layer_size, hidden, f*output_layer_size, initvar = initvar)
+
+	param_allocations = form_parameter_allocations(T0, B0)
+	prepactivations= form_prep_activations(hidden, batchsize, T0)
+	
+	Random.seed!(seed)
+	prepdata = makeprepdata(data, batchsize)
+	
+
+	(θ_init = T0, β_init = B0, inputsize = input_layer_size, outputsize = output_layer_size, autoencoder = autoencoder, trainargs = (params = param_allocations, prepactivations = prepactivations, prepdata = prepdata))
+end
+
 #want to add function to perform multiple trials of training where the prep data and prep activations can be reused.  In this case the training data and the network architecture will be exactly the same between training runs so the memory allocations can be reused.  This would be ideal for training multiple trials of the same setup with a different random seed.  Reusing the memory would be more efficient in this case than trying to train with multiple threads which would involve passing a lot of data around.  Multiple threads or workers should be reserved for cases where training is done with different architectures or batch sizes.
-function train_trials(data, batchSize, hidden_layers; trial_lists::Dict{Symbol, T} = Dict([:N => [1000]]), kwargs...) where T <: AbstractVector
+function train_trials(data, batchsize, hidden_layers; trial_lists::Dict{Symbol, T} = Dict([:seed => 1:5]), costFunc = "sqErr", kwargs...) where T <: AbstractVector
 	isempty(trial_lists) && error("trial_lists should have one or more elements to iterate over training settings")
 
 	redundantkeys = intersect(keys(trial_lists), keys(kwargs))
 
 	!isempty(redundantkeys) && error("The following training parameters are listed twice: $redundantkeys")
 
-	#if the input data only contains one matrix then consider input and output
-	#data to be the same and train an autoencoder
-	autoencoder = (length(data[1]) == 1)
-	input_data = data[1][1]
-	output_data = autoencoder ? input_data : data[1][2]
+	logcost = occursin(costFunc, "Log") 
 
-	input_layer_size = size(input_data, 2)
-	output_layer_size = size(output_data, 2)
+	trainprep = preptraining(data, batchsize, hidden_layers, logcost)
 
-	(θ, β) = initializeparams_saxe(input_layer_size, hidden_layers, output_layer_size)
+	θ = trainprep.θ_init
+	β = trainprep.β_init
 
-	prepactivations= form_prep_activations(hidden_layers, batchSize, θ)
-	params = form_parameter_allocations(θ, β)
-	onesVecBATCH = ones(Float32, batchSize)
-
-	batchinds = generatebatchinds(input_data, batchSize)
-    inputbatchData = generatebatches(input_data, batchinds)
-	prepdata = [inputbatchData]
-	if !autoencoder
-		outputbatchData = generatebatches(output_data, batchinds)
-		push!(prepdata, outputbatchData)
-	end
+	onesVecBATCH = ones(Float32, batchsize)
 
 	#parameters that can be varied while keeping memory allocations stable
 	valid_list_symbols = Set([:seed, :lambda, :c, :alpha, :R, :lrschedule, :dropout, :resLayers, :N, :tol, :patience, :swa, :ignorebest, :use_μP])
 
+	#recursively generate training parameters by combining parameters from every list in trial_lists
 	function makesets(pairs, keys)
-		isempty(keys) && return NamedTuple(pairs) 
+		isempty(keys) && return [NamedTuple(pairs)]
 
 		k1 = first(keys)
 		otherkeys = setdiff(keys, [k1])
@@ -1064,30 +1078,35 @@ function train_trials(data, batchSize, hidden_layers; trial_lists::Dict{Symbol, 
 		for x in list1])
 	end
 
+	#remove a key or keys from a named tuple
 	drop(nt::NamedTuple, key::Symbol) = Base.structdiff(nt, NamedTuple{(key,)})
 	drop(nt:: NamedTuple, keys::NTuple{N,Symbol}) where {N} = Base.structdiff(nt, NamedTuple{keys})
 
+	#retrieve value from a dictionary, returning the default value if the key is missing
 	getval(dict, sym, def) = haskey(dict, sym) ? dict[sym] : def
 
+	#create vector of named tuples that contain each training run to perform
 	trainsets = makesets(Vector{Pair}(), intersect(keys(trial_lists), valid_list_symbols))
 
+	# return trainsets
+
+	train(data; N = 1000, lambda = 0.0f0, c = Inf32, kwargs...) = ADAMAXTrainNNCPU(data, batchsize, θ, β, N, trainprep.inputsize, hidden_layers, lambda, c; onesVecBATCH = onesVecBATCH, trainprep.trainargs..., kwargs...)
+
 	Dict(begin
-		N = getval(trainset, :N, 1000) 
 		seed = getval(trainset, :seed, 1)
-		reslayers = getval(trainset, :resLayers, 0)
-		use_μP = getval(trainset, :use_μP, false)
-		lambda = getval(trainset, :lambda, 0.0f0)
-		c = getval(trainset, :c, Inf)
+		use_μP = getval(trainset, :use_μP, false) |> Bool
 		
 		Random.seed!(seed)
-		initializeparams_saxe!(θ, β, reslayers, use_μP = use_μP)
+		initializeparams_saxe!(θ, β; use_μP = use_μP)
 
 		# println("θ hash is $(hash(θ))")
-		trainkey = drop(trainset, (:N, :seed, :lambda, :c, :reslayers, :use_μP))
+		trainkey = drop(trainset, (:seed, :use_μP))
 
 		Random.seed!(seed)
 		# merge(trainkey, (N = N, seed = seed, reslayers = reslayers, use_μP = use_μP, lambda = lambda, c = c), kwargs...) => ADAMAXTrainNNCPU(data, batchSize, θ, β, N, input_layer_size, hidden_layers, lambda, c; prepdata = prepdata, prepactivations = prepactivations, params = params, onesVecBATCH = onesVecBATCH, resLayers = reslayers, use_μP = use_μP, trainkey..., kwargs...)
-		trainset => ADAMAXTrainNNCPU(data, batchSize, θ, β, N, input_layer_size, hidden_layers, lambda, c; prepdata = prepdata, prepactivations = prepactivations, params = params, onesVecBATCH = onesVecBATCH, resLayers = reslayers, use_μP = use_μP, trainkey..., kwargs...)
+		trainset => train(data; use_μP = use_μP, trainkey..., kwargs...) 
+
+		# trainset => ADAMAXTrainNNCPU(data, batchsize, θ, β, N, trainprep.inputsize, hidden_layers, lambda, c; onesVecBATCH = onesVecBATCH, resLayers = reslayers, use_μP = use_μP, trainkey..., trainprep.trainargs..., kwargs...)
 		
 		#for the purpose of seeing the impact of reusing the training setup
 		# trainset => ADAMAXTrainNNCPU(data, batchSize, θ, β, N, input_layer_size, hidden_layers, lambda, c; resLayers = reslayers, use_μP = use_μP, trainkey..., kwargs...)
@@ -1105,13 +1124,25 @@ function makeprepdata(data, batchSize)
 	batchinds = generatebatchinds(input_data, batchSize)
 	inputbatches = generatebatches(input_data, batchinds)
 
-	autoencoder && return (inputbatches,)
+	autoencoder && return [(a,) for a in inputbatches]
 
 	outputbatches = generatebatches(output_data, batchinds)
-	(inputbatches, outputbatches)
+	collect(zip(inputbatches, outputbatches))
 end
 
+function adamax_batch_update_cpu!(α, params, means, vars, grads, t, scales; beta1 = 0.9f0, beta2 = 0.999f0)
+	updateM!(beta1, means..., grads...)
+	updateV!(beta2, vars..., grads...)		
+	updateParams!(α, beta1, params..., means..., vars..., t, scales)
+end
 
+function swa_batch_update_cpu!(α1, α2, params, means, vars, grads, t, scales, swa_start_batch; kwargs...)
+	if t > swa_start_batch
+		updateParams!(α2, params..., grads..., scales)
+	else
+		adamax_batch_update_cpu!(α1, params, means, vars, grads, t, scales; kwargs...)
+	end
+end
 
 function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, hidden_layers, lambda, c; 
 	alpha=0.002f0, R = 0.1f0, lrschedule = Vector{Float32}(), printProgress = false, printAnything=true, dropout = 0.0f0, costFunc = "absErr", resLayers = 0, 
@@ -1121,12 +1152,14 @@ function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, h
 	params = form_parameter_allocations(T0, B0), #memory allocations that mimic the parameters and store values through training
 	onesVecBATCH = ones(Float32, batchSize),
 	trainsample=1.0, activation_list = fill(true, length(hidden_layers)), 
-	testbatchloading=false, use_μP = false, batchinterval::Int64 = 0)
+	testbatchloading=false, use_μP = false, batchinterval::Int64 = 0, batchmax = typemax(Int64), examplemax = typemax(Int64), swa_start_batch = ceil(Int64, size(data[1][1], 1)/batchSize)*100)
 #train fully connected neural network with floating point vector output.  Requires the following inputs: training data, training output, batchsize
 #initial Thetas, initial Biases, max epochs to train, input_layer_size, vector of hidden layer sizes, l2 regularization parameter lambda, max norm parameter c, and
 #a training rate alpha.  An optional dropout factor is set to 0 by default but can be set to a 32 bit float between 0 and 1.
 #If the batch interval is set to 0 then the default behavior is used which is recording cost every 10 epochs and how ever many batches that is.  Otherwise, record on each batchinterval 
 #Note that all floating point input variables must be float32 or single precision   
+
+	kwargs_cost = (costFunc = costFunc, resLayers = resLayers, activation_list = activation_list)
 
 	(Theta_grads,   
 	Bias_grads, 
@@ -1228,47 +1261,27 @@ function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, h
 	#create memory objects used in cost function
 	num_hidden = length(hidden_layers)
 
-	(tanh_grad_zBATCH, aBATCH, deltasBATCH) = if isempty(prepactivations)
-		form_prep_activations(hidden_layers, batchSize, T0)
-	else
-		prepactivations
-	end
-
-	numLayers = length(T0)
+	(tanh_grad_zBATCH, aBATCH, deltasBATCH) = prepactivations
 
 	if testset
 		aTEST = form_activations(T0, mtest)
 	end
 
-	if autoencoder
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, prepdata[1][batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-	else
-		nnCostFunction(T0, B0, input_layer_size, hidden_layers, prepdata[1][batchset[end]], prepdata[2][batchset[end]], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-	end
+	f_cost(T, B, batchdata) = nnCostFunction(T, B, input_layer_size, hidden_layers, batchdata..., lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout; kwargs_cost...)
+
+	f_cost(T0, B0, prepdata[batchset[end]])
 	
 	function calcout_batches(T, B)
 		currentOut = 0.0f0 
 		for i in batchset
-			if autoencoder
-				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, prepdata[1][i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-			else
-				currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, prepdata[1][i], prepdata[2][i], 0.0f0, aBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-			end
+			currentOut += nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, prepdata[i]..., 0.0f0, aBATCH, dropout; kwargs_cost...)
 		end
 		currentOut = currentOut/lastindex(batchset)
 	end
 
 	currentOut = calcout_batches(T0, B0)
 	
-	if testset
-		function calcout_test(T, B)
-			if autoencoder
-				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-			else
-				nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, input_test, output_test, 0.0f0, aTEST, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-			end
-		end
-	end
+	calcout_test(T, B) =  nnCostFunctionNOGRAD(T, B, input_layer_size, hidden_layers, data[2]..., 0.0f0, aTEST, dropout; kwargs_cost...)
 
 	testset && (testout = calcout_test(T0, B0))
 
@@ -1309,7 +1322,6 @@ function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, h
 
 	bestCost = currentOut
 	testset && (bestCostTest = testout)
-	rollingAvgCost = currentOut
 
 	iter = 1
 	epoch = 1
@@ -1326,6 +1338,8 @@ function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, h
 	nModels = 0
 
 	t = 1
+
+	#can choose to stop training after a set number of epochs, batches, or examples
 	while (epoch <= minepoch) || ((epoch <= N) && (tfail <= patience) && tolpass)
 	#while epoch <= N
 		#run through an epoch in batches with randomized order
@@ -1334,12 +1348,9 @@ function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, h
 		end
 		for batch in shuffle(batchset)
 			if eta > 0
-				if autoencoder
-					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, prepdata[1][batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-				else
-					nnCostFunction(Thetas, Biases, input_layer_size, hidden_layers, prepdata[1][batch], prepdata[2][batch], lambda, Theta_grads, Bias_grads, tanh_grad_zBATCH, aBATCH, deltasBATCH, onesVecBATCH, dropout, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
-				end
-				if swa && (epoch > 100)
+				f_cost(Thetas, Biases, prepdata[batch])
+				
+				if swa && (t > swa_start_batch)
 					updateParams!(G, Thetas, Biases, Theta_grads, Bias_grads, scales)
 				else
 					updateM!(beta1, mT, mB, Theta_grads, Bias_grads)
@@ -1351,17 +1362,17 @@ function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, h
 				end
 			end
 			#use recent time average of parameter changes for estimate
-			if !swa || (epoch <= 100)
+			if !swa || (epoch <= swa_start_batch)
 				updateEst!(beta2, t, Thetas, Biases, T_avg, B_avg, T_est, B_est)
 			end
 			t += 1
 
-			if swa && (epoch == 100)
+			if swa && (epoch == swa_start_batch)
 				#after 100 epochs reset params to the estimate and start doing SWA
 				updateBest!(Thetas, Biases, T_est, B_est)
 			end
 
-			if swa && (epoch > 100)
+			if swa && (epoch > swa_start_batch)
 				nModels += 1
 				updateAvg!(nModels, Thetas, Biases, T_est, B_est)
 			end
@@ -1423,6 +1434,9 @@ function ADAMAXTrainNNCPU(data, batchSize::Int64, T0, B0, N, input_layer_size, h
 				end
 				println(string("Estimated remaining time = ", hoursLeft, " hours, ", minutesLeft, " minutes, ", secondsLeft, " seconds."))
 			end
+
+			(t > batchmax) && break
+			(t*batchSize > examplemax) && break
 		end
 		timeRecord[epoch + 1] = time() - startTime
 		epoch += 1	

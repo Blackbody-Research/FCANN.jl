@@ -607,7 +607,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 end
 
-function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)))
+function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true)
 
 	Random.seed!(1234)
 
@@ -681,19 +681,21 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 		numGrad[i] = (outplus - outminus)/(2.0f0*e)
 	end
 
-	println("GPU Cost  CPU Cost" )
-	println(string(costGPU, "  ", costCPU))
-
-	println("___________________")
-	
-	println("Num Grads  GPU Grads CPU Grads")
-	for i = 1:length(numGrad)
-		@printf "%0.6f  %0.6f %0.6f \n" numGrad[i] funcGrad[i] funcGradCPU[i]
-	end
 	GPUErr = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
 	GPUCPUErr = norm(funcGradCPU .- funcGrad)/norm(funcGradCPU .+ funcGrad)
-	println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
-	println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
+	if printmsg
+		println("GPU Cost  CPU Cost" )
+		println(string(costGPU, "  ", costCPU))
+
+		println("___________________")
+		
+		println("Num Grads  GPU Grads CPU Grads")
+		for i = 1:length(numGrad)
+			@printf "%0.6f  %0.6f %0.6f \n" numGrad[i] funcGrad[i] funcGradCPU[i]
+		end
+		println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
+		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
+	end
 
 	return GPUErr
 end

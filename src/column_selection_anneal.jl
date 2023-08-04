@@ -121,7 +121,7 @@ function run_temp_calibrate(model, input_data::Matrix{Float32}, output_data::Mat
 	calibrate_gibbs_temp(model, input_data, output_data, input_data_copy, a, v, initialcols, colsrecord, err; printstep = printiter, updateinterval = updateinterval, chi = chi, multiout=multiout)
 end
 
-function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a, v, currentcols, colsrecord::RecordType{T}, currenterr; printstep = true, updateinterval = 2.0, chi = 0.9, multiout=Vector{Matrix{Float32}}()) where T <: AbstractFloat where N
+function calibrate_gibbs_temp(model, input_data::Matrix{Float32}, output_data::Matrix{Float32}, input_data_copy::Matrix{Float32}, a, v, currentcols, colsrecord::RecordType{T}, currenterr; printstep = true, updateinterval = 2.0, chi = 0.9, multiout=Vector{Matrix{Float32}}()) where T <: AbstractFloat
 	
 	##########Set up initial values and print first iteration##############################
 	t_stepstart = time()

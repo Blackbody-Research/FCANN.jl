@@ -1,21 +1,9 @@
 using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
-
-if length(cuda_versions) > 1
-    println("Using the latest available version of the cuda toolkit installed by default.  To switch to an earlier cuda version, edit config file above with one of the installed versions: $(cuda_versions)")
-end 
-
-@using_nvidialib_settings 
-println("Using the following cuda settings: $(NVIDIALibraries.get_nvlib_settings()) saved to $(joinpath(pwd(), "nvlib_julia.conf")).")
+@using_nvidialib_settings() 
 
 costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")
 
-#for cuda version 8 tensor ops are not available so default to regular GEMM algorithm
-algo = try
-	CUBLAS_GEMM_DEFAULT_TENSOR_OP
-catch
-	CUBLAS_GEMM_DFALT
-end
 
 function cu_module_load()
 	#------use nvcc to compile .ptx files from .cu kernels and load module------------

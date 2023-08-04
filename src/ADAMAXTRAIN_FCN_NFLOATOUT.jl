@@ -689,7 +689,7 @@ function calcfeatureimpact(multiparams::Vector{U}, input_data::Matrix{Float32}, 
 end
 
 
-function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLayers = 0, m = 1000, input_layer_size = 3, n = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)))
+function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLayers = 0, m = 1000, input_layer_size = 3, n = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true)
 	Random.seed!(1234)
 	#if using log likelihood cost function then need to double output layer size
 	#relative to output example size
@@ -755,13 +755,14 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 		numGrad[i] = (outplus - outminus)/(2.0f0*e)
 	end
 
-	
-	println("Num Grads  Func Grads")
-	for i = 1:length(numGrad)
-		@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
-	end
 	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
-	println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
+	if printmsg	
+		println("Num Grads  Func Grads")
+		for i = 1:length(numGrad)
+			@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
+		end
+		println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
+	end
 	return err
 end
 

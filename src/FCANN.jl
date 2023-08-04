@@ -14,22 +14,6 @@ using RandomMatrices
 global backend = :CPU
 global backendList = [:CPU]
 
-#get cuda toolkit versions if any
-println("Checking for cuda toolkit versions")
-cuda_versions = try
-    if Sys.islinux()
-        map(VersionNumber,
-            map((function(name::String)
-                return name[6:end]
-            end), 
-                collect(i for i in readdir("/usr/local/")
-                    if occursin("cuda-", i))))
-    else
-        get_cuda_toolkit_versions()
-    end
-catch
-    []
-end
 
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
 include("column_selection_anneal.jl")
@@ -57,8 +41,8 @@ function getBackend()
     backend
 end
 
-function checkNumGrad(lambda = 0.0f0; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list = fill(true, length(hidden_layers))) 
-    eval(Symbol("checkNumGrad", backend))(lambda, hidden_layers = hidden_layers, costFunc = costFunc, input_layer_size = input_layer_size, n = n, m = m, resLayers=resLayers, activation_list=activation_list)
+function checkNumGrad(lambda = 0.0f0; kwargs...)
+    eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
 end
 
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
@@ -132,7 +116,33 @@ end
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput, calcfeatureimpact, ADAMAXTrainNNCPU, traintrials, preptraining
 
 function __init__()
-   if includecuda
+    #get cuda toolkit versions if any
+    println("Checking for cuda toolkit versions")
+    cuda_versions = try
+        if Sys.islinux()
+            map(VersionNumber,
+                map((function(name::String)
+                    return name[6:end]
+                end), 
+                    collect(i for i in readdir("/usr/local/")
+                        if occursin("cuda-", i))))
+        else
+            get_cuda_toolkit_versions()
+        end
+    catch
+        []
+    end
+
+    if isempty(cuda_versions)
+        println("No cuda toolkit appears to be installed.  If this sytem has an NVIDIA GPU, install the cuda toolkit and add nvcc to the system path to use the GPU backend.")
+        println("Available backends are: CPU")
+    elseif cuda_versions[end] > VersionNumber("10.1")
+        println("The lastest cuda toolkit installed is $(cuda_versions[end]) which exceeds the latest supported version of 10.1")
+        if length(cuda_versions) > 1
+            println("Using the latest available version of the cuda toolkit installed by default.  To switch to an earlier cuda version, edit config file above with one of the installed versions: $(cuda_versions)")
+        end 
+    else
+        # println("Using the following cuda settings: $(NVIDIALibraries.get_nvlib_settings()) saved to $(joinpath(pwd(), "nvlib_julia.conf")).")
         try 
             println("Checking nvcc compiler in system path")
             run(`nvcc --version`)
@@ -165,6 +175,14 @@ function __init__()
             #make error kernels available in global scope
             create_errorfunction_dicts(costfunc_md) 
 
+            #for cuda version 8 tensor ops are not available so default to regular GEMM algorithm
+            global algo = try
+                CUBLAS_GEMM_DEFAULT_TENSOR_OP
+            catch
+                CUBLAS_GEMM_DFALT
+            end
+
+            println("Verifying correct gradients")
             #verify that cost function works
             checkNumGradGPU(1.0f0)
 
@@ -175,8 +193,6 @@ function __init__()
             println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
         end
-    else
-        println("Available backends are: CPU")
     end
 
     # else
@@ -203,6 +219,31 @@ function __init__()
         end
     end    
     atexit(f)
+end
+
+using PrecompileTools
+
+@setup_workload begin
+    M = 1
+    hidden = [1]
+    O = 1
+    batchSize = 1024
+    N = 150
+    @compile_workload begin
+        checkNumGrad()
+        if in(:GPU, backendList)
+            setBackend(:GPU)
+            checkNumGrad()
+        end
+        setBackend(:CPU)
+        checkNumGrad(1.0f0)
+        checkNumGrad(1.0f0, resLayers=1)
+        checkNumGrad(0.0f0, costFunc = "sqErr")
+        checkNumGrad(0.0f0, costFunc = "normLogErr")
+        checkNumGrad(0.0f0, costFunc = "cauchyLogErr")
+        checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
+        testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
+    end
 end
 
 end # module

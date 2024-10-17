@@ -1,6 +1,10 @@
 using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
-@using_nvidialib_settings() 
+try
+	@using_nvidialib_settings()
+catch
+	println("Could not load cuda functions for specific version")
+end
 
 costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")
 
@@ -90,7 +94,7 @@ function getTypes(x)
     end
 end
 
-function run_kernel(kernel::CUfunction, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL))
+function run_kernel(kernel, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL))
 	K = 16
 	threads = Cuint.((K, K))
 	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
@@ -98,7 +102,7 @@ function run_kernel(kernel::CUfunction, N::Int64, M::Int64, inputs...; stream = 
     # cuCtxSynchronize()
 end
 
-function run_kernel_1D(kernel::CUfunction, N::Int64, inputs...; stream = CUstream(C_NULL))
+function run_kernel_1D(kernel, N::Int64, inputs...; stream = CUstream(C_NULL))
 	K = 256
 	threads = Cuint.((K,))
 	blocks = Cuint.((ceil(Int, N/K),))
@@ -164,7 +168,7 @@ function clear_gpu_data(device_array::Vector{CUDAArray})
 end
 
 
-function cublasSaxpy(handle::cublasHandle_t, alpha::Float32, x::CUDAArray, y::CUDAArray)::Nothing
+function cublasSaxpy(handle, alpha::Float32, x::CUDAArray, y::CUDAArray)::Nothing
     @assert ((x.element_type == Float32) &&
             (y.element_type == Float32))
    	
@@ -196,7 +200,7 @@ function cublasSaxpy(handle::cublasHandle_t, alpha::Float32, x::CUDAArray, y::CU
     @assert (result == cudaSuccess) ("cublasSaxpy() error: " * cublasGetErrorName(result))
 end
 
-function cublasSscal(handle::cublasHandle_t, alpha::Float32, x::CUDAArray)::Nothing
+function cublasSscal(handle, alpha::Float32, x::CUDAArray)::Nothing
     @assert (x.element_type == Float32)
     
     dims = length(x.size)

@@ -1,13 +1,16 @@
 using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
-try
+function check_cuda_presence()
+    Sys.isapple() && return isdir("/Developer/NVIDIA/") && !isempty("/Developer/NVIDIA/")
+    Sys.islinux() && return !isempty(collect(i for i in readdir("/usr/local") if occursin("cuda-", i)))
+    Sys.iswindows() && return isdir("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA") && !isempty(readdir("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA"))
+end
+
+if check_cuda_presence()
 	@using_nvidialib_settings()
-catch
-	println("Could not load cuda functions for specific version")
 end
 
 costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")
-
 
 function cu_module_load()
 	#------use nvcc to compile .ptx files from .cu kernels and load module------------

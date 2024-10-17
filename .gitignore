@@ -6,4 +6,5 @@
 *.conf
 *.csv
 *.bin
+.vscode/*
 Manifest.toml

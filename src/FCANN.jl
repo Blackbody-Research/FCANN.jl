@@ -118,18 +118,9 @@ export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTune
 function __init__()
     #get cuda toolkit versions if any
     println("Checking for cuda toolkit versions")
-    cuda_versions = try
-        if Sys.islinux()
-            map(VersionNumber,
-                map((function(name::String)
-                    return name[6:end]
-                end), 
-                    collect(i for i in readdir("/usr/local/")
-                        if occursin("cuda-", i))))
-        else
-            get_cuda_toolkit_versions()
-        end
-    catch
+    cuda_versions = if check_cuda_presence()
+        get_cuda_toolkit_versions()
+    else
         []
     end
 

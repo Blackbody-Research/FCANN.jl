@@ -220,20 +220,18 @@ using PrecompileTools
     O = 1
     batchSize = 1024
     N = 150
+    __init__()
     @compile_workload begin
-        checkNumGrad()
-        if in(:GPU, backendList)
-            setBackend(:GPU)
-            checkNumGrad()
+        for backend in backendList
+            setBackend(backend)
+            checkNumGrad(1.0f0)
+            checkNumGrad(1.0f0, resLayers=1)
+            checkNumGrad(0.0f0, costFunc = "sqErr")
+            checkNumGrad(0.0f0, costFunc = "normLogErr")
+            checkNumGrad(0.0f0, costFunc = "cauchyLogErr")
+            checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
+            testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
         end
-        setBackend(:CPU)
-        checkNumGrad(1.0f0)
-        checkNumGrad(1.0f0, resLayers=1)
-        checkNumGrad(0.0f0, costFunc = "sqErr")
-        checkNumGrad(0.0f0, costFunc = "normLogErr")
-        checkNumGrad(0.0f0, costFunc = "cauchyLogErr")
-        checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
-        testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
     end
 end
 

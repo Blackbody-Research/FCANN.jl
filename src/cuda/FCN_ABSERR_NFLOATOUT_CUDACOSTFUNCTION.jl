@@ -1,9 +1,24 @@
 using NVIDIALibraries, NVIDIALibraries.DeviceArray
 
+const apple_dir = "/Developer/NVIDIA"
+get_apple_files() = readdir(apple_dir)
+const linux_dir = "/usr/local/"
+get_linux_files = filter(x -> occursin("cuda-", x), readdir(linux_dir))
+const windows_dir = "C::\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA"
+get_windows_files() = readdir(windows_dir)
+checkdir(dir) = isdir(dir) && !isempty(dir)
 function check_cuda_presence()
-    Sys.isapple() && return isdir("/Developer/NVIDIA/") && !isempty("/Developer/NVIDIA/")
-    Sys.islinux() && return !isempty(collect(i for i in readdir("/usr/local") if occursin("cuda-", i)))
-    Sys.iswindows() && return isdir("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA") && !isempty(readdir("C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA"))
+    Sys.isapple() && return checkdir(apple_dir)
+    Sys.islinux() && return checkdir(linux_dir) && !isempty(filter(x -> occursin("cuda-", x), readdir(linux_dir)))
+    Sys.iswindows() && return checkdir(windows_dir)
+end
+
+function get_cuda_toolkit_versions()::Array{VersionNumber, 1}
+    # Determine installed CUDA toolkit versions
+	Sys.iswindows() && return map(VersionNumber, windows_dir)
+	Sys.islinux() && return map(n -> VersionNumber(n[6:end]), filter(x -> occursin("cuda-", x), readdir(linux_dir)))
+	Sys.isapple() && return map(n -> VersionNumber(n[6:end]), apple_dir)
+	error("get_cuda_toolkit_versions() error: unexpected operating system!")
 end
 
 if check_cuda_presence()
@@ -14,21 +29,43 @@ costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul"
 
 function cu_module_load()
 	#------use nvcc to compile .ptx files from .cu kernels and load module------------
-    filepath = joinpath(@__DIR__, "NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.cu")
-    cost_md = if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-        cuModuleLoad("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-    else
-        run(`nvcc -ptx $filepath`)
-        cuModuleLoad("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-    end
+	name = "NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS"
+    filepath = joinpath(@__DIR__, "$name.cu")
+    # cost_md = if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+		# path = relpath("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
+		# cuModuleLoad(path)
+    # else
+	run(`nvcc -ptx $filepath`)
+	load = false
+	cost_md = false
+	while !load
+		try
+			cost_md = cuModuleLoad(joinpath(pwd(), "$name.ptx"))
+			load = true
+		catch
+		end
+		sleep(0.01)
+	end
+    # end
 
+	name = "ADAMAX_INTRINSIC_KERNELS" 
     filepath = joinpath(@__DIR__, "ADAMAX_INTRINSIC_KERNELS.cu")
-    adamax_md = if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
-        cuModuleLoad("ADAMAX_INTRINSIC_KERNELS.ptx")
-    else
-        run(`nvcc -ptx $filepath`)
-        cuModuleLoad("ADAMAX_INTRINSIC_KERNELS.ptx")
-    end
+    # adamax_md = if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
+		# path = relpath("ADAMAX_INTRINSIC_KERNELS.ptx")	
+        # cuModuleLoad(path)
+    # else
+    run(`nvcc -ptx $filepath`)
+	load = false
+	adamax_md = false
+	while !load
+		try
+			adamax_md = cuModuleLoad(joinpath(pwd(), "$name.ptx"))
+			load = true
+		catch
+		end
+		sleep(0.01)
+	end
+    # end
     #------------------------------------------------------------------------
     (adamax_md, cost_md)
 end
@@ -36,13 +73,41 @@ end
 function create_kernels(md, knames)
 #create module kernels in global scope
 	for kname in knames
-         @eval global $(Symbol(kname)) = cuModuleGetFunction($md, $kname)
+		success = false
+		fptr = false
+		t = time()
+		while !success && (time() - t < 10)
+			try
+				fptr = cuModuleGetFunction(md, kname)
+				success = true
+			catch
+			end
+			sleep(0.01)
+		end
+		isa(fptr, Bool) && error("During error function name loading, failed to load function $kname in module $md")
+         @eval global $(Symbol(kname)) = $fptr# cuModuleGetFunction($md, $kname)
     end
 end
 
+function load_module_patient(md, kname; tlimit = 10)
+	success = false
+	fptr = false
+	t = time()
+	while !success && (time() - t < tlimit)
+		try
+			fptr = cuModuleGetFunction(md, kname)
+			success = true
+		catch
+		end
+		sleep(0.01)
+	end
+	isa(fptr, Bool) && error("During cost function and adamax loading, failed to load function $kname in module $md")
+	return fptr
+end
+
 function create_errorfunction_dicts(cost_md)
-	err_kernel_list = map(kname -> cuModuleGetFunction(cost_md, kname), costFuncNames)
-    err_deriv_kernel_list = map(kname -> cuModuleGetFunction(cost_md, string(kname, "Deriv")), costFuncNames)
+	err_kernel_list = map(kname -> load_module_patient(cost_md, kname), costFuncNames)
+    err_deriv_kernel_list = map(kname -> load_module_patient(cost_md, string(kname, "Deriv")), costFuncNames)
 
     #make error kernels available in global scope
     global costFuncKs = Dict(zip(costFuncNames, err_kernel_list))

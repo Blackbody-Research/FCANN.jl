@@ -41,8 +41,12 @@ function getBackend()
     backend
 end
 
-function checkNumGrad(lambda = 0.0f0; kwargs...)
+function checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
+end
+
+function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)
+    eval(Symbol("checkNumGrad", backend))(lambda, output_index; kwargs...)
 end
 
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
@@ -232,6 +236,8 @@ using PrecompileTools
             checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
             testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
         end
+        setBackend(:CPU)
+        checkNumGrad(1)
     end
 end
 

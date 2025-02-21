@@ -1,4 +1,5 @@
 println("-----------------------Testing CPU Single Core-------------------------------------")
+setBackend(:CPU)
 println("Testing numerical gradient vs backpropagation")
 println("---------------------------------------------")
 println("Lambda = 0, no hidden layers")
@@ -45,6 +46,12 @@ println()
 
 println("Skipping activation functions")
 err = checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
+println("Indexed output")
+err = checkNumGrad(1)
 @test(err < 0.015)
 println("TEST PASSED")
 println()

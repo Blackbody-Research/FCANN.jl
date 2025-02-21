@@ -131,7 +131,7 @@ function calcOutputCPU(input_data, T, B; layerout = length(T), resLayers = 0, au
 			out2 = predict(T, B, input_data[(numBatches-1)*maxB+1:m, :], resLayers, layerout=layerout, activation_list=activation_list)
 			[out1; out2]
 		end
-		if autoencoder
+		if autoencoder 
 			errs = calcError(out, input_data, costFunc = costFunc)
 			return (out, errs)
 		else
@@ -186,11 +186,6 @@ end
 
 function calcOutputCPU!(input_data, output_data, T, B, a; costFunc = "absErr", resLayers = 0, activation_list = fill(true, length(T)-1))
 #calculate network output given input data and a set of network parameters.
-#calculation is performed on the GPU and then returned to system memory
-	#Setup some useful variables
-	m = size(input_data, 1)
-	n = size(output_data, 2)
-			
 	predict!(T, B, input_data, a, resLayers, activation_list=activation_list)
 	errs = calcError(a[end], output_data, costFunc = costFunc)
 	return errs
@@ -306,12 +301,6 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 		length(multiParams[1][2][end])
 	end
 
-	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
-		"sqErr"
-	else
-		"absErr"
-	end
-
 	membuffer = min(1E9, Sys.total_memory()*0.01)
 
 	#if copying the input data will result in needing to break up the data into smaller batches to preserve system memory, then it isn't worth it
@@ -404,12 +393,6 @@ function calcMultiOutCPU!(input_data, output_data, multiParams, a, multiOut; dro
 	#Setup some useful variables
 	m = size(input_data, 1)
 	n = size(output_data, 2)
-
-	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
-		"sqErr"
-	else
-		"absErr"
-	end
 
 	predictMulti!(multiParams, input_data, a, multiOut, resLayers, activation_list=activation_list)
 
@@ -707,12 +690,12 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 
 
 	Theta_grads = similar(T0)
-	for i = 1:length(Theta_grads)
+	for i = eachindex(Theta_grads)
 		Theta_grads[i] = similar(T0[i])
 	end
 
 	Bias_grads = similar(B0)
-	for i = 1:length(B0)
+	for i = eachindex(B0)
 		Bias_grads[i] = similar(B0[i])
 	end
 
@@ -749,6 +732,77 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 	
 		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
 		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
+		
+		perturb[i] = 0.0f0  #restore perturb vector to 0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+	if printmsg	
+		println("Num Grads  Func Grads")
+		for i = 1:length(numGrad)
+			@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
+		end
+		println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
+	end
+	return err
+end
+
+#check numerical gradient for case of output gradient being one of the indices rather than a cost function
+function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true)
+	Random.seed!(1234)
+
+	@assert output_index <= output_layer_size "The output index ($output_index) must be less than or equal to the number of outputs ($output_layer_size)"
+	X = map(Float32, randn(m, input_layer_size))
+
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+	Theta_grads = similar(T0)
+	for i in eachindex(Theta_grads)
+		Theta_grads[i] = similar(T0[i])
+	end
+
+	Bias_grads = similar(B0)
+	for i in eachindex(B0)
+		Bias_grads[i] = similar(B0[i])
+	end
+
+	onesVec = ones(Float32, m)
+
+	numLayers = length(T0)
+	
+	a = Array{Matrix{Float32}}(undef, num_hidden+1)
+	if num_hidden > 0
+		for i = 1:num_hidden
+			a[i] = Array{Float32}(undef, m, hidden_layers[i])
+		end
+	end
+	a[end] = Array{Float32}(undef, m, output_layer_size)
+
+	tanh_grad_z = deepcopy(a)
+	deltas = deepcopy(a)
+
+	# e = 1f-3
+	params = theta2Params(B0, T0)
+	l = length(params)
+	perturb = zeros(Float32, l)
+	numGrad = Array{Float32}(undef, l)
+
+	nnCostFunction(T0, B0, hidden_layers, X, output_index, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; resLayers = resLayers, activation_list=activation_list)
+	
+	funcGrad = theta2Params(Bias_grads, Theta_grads)
+
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+		
+	
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output_index, lambda, a, resLayers = resLayers, activation_list=activation_list)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output_index, lambda, a, resLayers = resLayers, activation_list=activation_list)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 

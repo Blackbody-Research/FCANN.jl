@@ -242,26 +242,42 @@ function form_tanh_grads(hidden_layers::AbstractVector{Int64}, m::Int64)
 	return tanh_grad_z
 end
 
-function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers::Vector, X::Matrix{Float32}, resLayers::Int64=0; activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
-	m = size(X, 1)
+#computes the forward pass of the network without any checks and no option to remove activation functions on certain layers
+function forwardNOGRAD_base!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X::Matrix{Float32}, resLayers::Int64)
 	l = length(thetas)
-	n = size(thetas[end], 1)
-	num_hidden = length(hidden_layers)
-	@assert num_hidden == l-1
+	m = size(X, 1)
+	fillAs!(a, biases, m)
+	gemm!('N', 'T', 1.0f0, X, thetas[1], 1.0f0, a[1])
 
-	if resLayers != 0
-		@assert num_hidden > 1 "Must have at least two hidden layers"
-		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
-		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	if l > 1
+		tanhActivation!(a[1])
+		if (l-1) > 1
+			@inbounds for i = 2:l-1
+				gemm!('N', 'T', 1.0f0, a[i-1], thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && ((i - 1) % resLayers) == 0
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
+				tanhActivation!(a[i])
+			end
+		end
+		gemm!('N', 'T', 1.0f0, a[end-1], thetas[end], 1.0f0, a[end])
 	end
+end
 
+#computes the forward pass of the network without any checks, allowing optionality to provide a list of Bools showing which if any layers are not active
+function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X::Matrix{Float32}, resLayers::Int64, activation_list::AbstractVector{B}) where B <: Bool
+	isempty(activation_list) && return forwardNOGRAD_base!(a, thetas, biases, X, resLayers)
+	
+	l = length(thetas)
+	m = size(X, 1)
 	fillAs!(a, biases, m)
 	gemm!('N', 'T', 1.0f0, X, thetas[1], 1.0f0, a[1])
 
 	if l > 1
 		activation_list[1] && tanhActivation!(a[1])
 		if (l-1) > 1
-			for i = 2:l-1
+			@inbounds for i = 2:l-1
 				gemm!('N', 'T', 1.0f0, a[i-1], thetas[i], 1.0f0, a[i])
 				if (resLayers != 0) && ((i - 1) % resLayers) == 0
 					#calculate residual skip every resLayers layers past the first hidden layer
@@ -274,10 +290,22 @@ function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float3
 	end
 end
 
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
-
+#checks that hidden layers are compatible
+function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X::Matrix{Float32}, resLayers::Int64=0; activation_list = Vector{Bool}(), kwargs...)
+	l = length(thetas)
 	num_hidden = length(hidden_layers)
+	@assert num_hidden == l-1
 
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== first(hidden_layers)) "hidden layers do not share a dimension" 
+	end
+
+	forwardNOGRAD!(a, thetas, biases, X, resLayers, activation_list; kwargs...)
+end
+
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X::Matrix{Float32}, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	#Setup some useful variables
 	m = size(X, 1)
 	n = size(y, 2)
@@ -297,10 +325,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(m, n, a[end], lambda, Thetas)
 end
 
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers::Vector, X::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
-
-	num_hidden = length(hidden_layers)
-
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	#Setup some useful variables
 	(m, n) = size(X)
 	# F = 1.0f0 - D
@@ -319,7 +344,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(m, n, a[end], lambda, Thetas)
 end
 
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers::Vector, X::Matrix{Float32}, output_index::Integer, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X::Matrix{Float32}, output_index::Integer, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)))
 
 	num_hidden = length(hidden_layers)
 
@@ -328,50 +353,35 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(a[end], size(X, 1), output_index, lambda, Thetas)
 end
 
-function predict(Thetas, biases, X::Matrix{Float32}, resLayers::Int64 = 0; layerout=length(Thetas), activation_list::AbstractVector{Bool} = fill(true, length(Thetas) - 1))
+function predict!(Thetas, biases, X::Matrix{Float32}, a::Vector{Matrix{Float32}}, resLayers::Int64 = 0; kwargs...)
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
 #that applies scaling during training so the network can be used with the same functions
 	# Useful values
-	m = size(X, 1)
 	l = length(Thetas)
 	num_hidden = l-1
-	
-	h = [length(B) for B in biases]
 	hidden_layers = if num_hidden==0
 		Vector{Int64}()
 	else
-		h[1:l-1]
+		(length(biases[i]) for i in 1:num_hidden)
 	end
 	#dropout scale factor
 	# F = (1.0f0 - D)
-	a = form_activations(Thetas, m)
 
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
-	return a[layerout]
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; kwargs...)
 end
 
-function predict!(Thetas, biases, X::Matrix{Float32}, a::Vector{Matrix{Float32}}, resLayers::Int64 = 0; activation_list = fill(true, length(Thetas)-1))
+function predict(Thetas, biases, X::Matrix{Float32}, resLayers::Int64 = 0; layerout=length(Thetas), kwargs...)
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
 #that applies scaling during training so the network can be used with the same functions
 	# Useful values
 	m = size(X, 1)
-	l = length(Thetas)
-	num_hidden = l-1
-	
-	h = [length(B) for B in biases]
-	hidden_layers = if num_hidden==0
-		Vector{Int64}()
-	else
-		h[1:l-1]
-	end
-	#dropout scale factor
-	# F = (1.0f0 - D)
-
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
+	a = form_activations(Thetas, m)
+	predict!(Thetas, biases, X, a, resLayers; kwargs...)
+	return a[layerout]
 end
 
 function predictBatches(Thetas, biases, batches::Vector{Matrix{Float32}}, resLayers::Int64 = 0; layerout=length(Thetas), activation_list = fill(true, length(Thetas)-1))

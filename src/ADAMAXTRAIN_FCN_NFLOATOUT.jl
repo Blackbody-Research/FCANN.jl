@@ -263,7 +263,7 @@ function calcMultiOutCPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 		# println(string("Running multi prediction using ", numTasks, " parallel tasks"))
 		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs()-1, numTasks)))))
 		if length(multiParams) > numTasks
-			partitionInds = rem.(1:length(multiParams), numTasks) .+ 1
+			partitionInds = rem.(eachindex(multiParams), numTasks) .+ 1
 			multiParamsPartition = [multiParams[findall(i -> i == n, partitionInds)] for n in 1:numTasks]
 			reduce(vcat, pmap(a -> predictMulti(a, input_data, resLayers, activation_list=activation_list), multiParamsPartition))
 		else
@@ -361,7 +361,7 @@ function calcMultiOutCPU(input_data, multiParams; dropout = 0.0f0, costFunc = "a
 		# println(string("Running multi prediction using ", numTasks, " parallel tasks"))
 		BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs()-1, numTasks)))))
 		if length(multiParams) > numTasks
-			partitionInds = rem.(1:length(multiParams), numTasks) .+ 1
+			partitionInds = rem.(eachindex(multiParams), numTasks) .+ 1
 			multiParamsPartition = [multiParams[findall(i -> i == n, partitionInds)] for n in 1:numTasks]
 			reduce(vcat, pmap(a -> predictMulti(a, input_data, resLayers, activation_list=activation_list), multiParamsPartition))
 		else
@@ -703,14 +703,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 
 	numLayers = length(T0)
 	
-	a = Array{Matrix{Float32}}(undef, num_hidden+1)
-	if num_hidden > 0
-		for i = 1:num_hidden
-			a[i] = Array{Float32}(undef, m, hidden_layers[i])
-		end
-	end
-	a[end] = Array{Float32}(undef, m, output_layer_size)
-
+	a = form_activations(T0, m)
 	tanh_grad_z = deepcopy(a)
 	deltas = deepcopy(a)
 
@@ -741,7 +734,7 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
 	if printmsg	
 		println("Num Grads  Func Grads")
-		for i = 1:length(numGrad)
+		for i = eachindex(numGrad)
 			@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
 		end
 		println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
@@ -749,12 +742,17 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 	return err
 end
 
-#check numerical gradient for case of output gradient being one of the indices rather than a cost function
-function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true)
+#check numerical gradient for case of output gradient being one of the indices rather than a cost function 
+function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), printmsg = true, output_vector=false, force_matrix=false)
 	Random.seed!(1234)
 
 	@assert output_index <= output_layer_size "The output index ($output_index) must be less than or equal to the number of outputs ($output_layer_size)"
-	X = map(Float32, randn(m, input_layer_size))
+	
+	X = if (m == 1) && !force_matrix
+		Float32.(randn(input_layer_size))
+	else
+		map(Float32, randn(m, input_layer_size))
+	end
 
 	num_hidden = length(hidden_layers)
 
@@ -770,17 +768,17 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		Bias_grads[i] = similar(B0[i])
 	end
 
-	onesVec = ones(Float32, m)
+	if m > 1 || force_matrix
+		onesVec = ones(Float32, m)
+	end
 
 	numLayers = length(T0)
 	
-	a = Array{Matrix{Float32}}(undef, num_hidden+1)
-	if num_hidden > 0
-		for i = 1:num_hidden
-			a[i] = Array{Float32}(undef, m, hidden_layers[i])
-		end
+	a = if force_matrix || m > 1
+		form_activations(T0, m)
+	else
+		form_activations(T0)
 	end
-	a[end] = Array{Float32}(undef, m, output_layer_size)
 
 	tanh_grad_z = deepcopy(a)
 	deltas = deepcopy(a)
@@ -791,8 +789,18 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	nnCostFunction(T0, B0, hidden_layers, X, output_index, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; resLayers = resLayers, activation_list=activation_list)
-	
+	base_args = if output_vector && (m > 1 || force_matrix)
+		(T0, B0, hidden_layers, X, fill(output_index, m), lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	else
+		(T0, B0, hidden_layers, X, output_index, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	end
+	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+	if (m == 1) && !force_matrix 
+		nnCostFunction(base_args...; kwargs...)
+	else
+		nnCostFunction(base_args..., onesVec; kwargs...)
+	end
+
 	funcGrad = theta2Params(Bias_grads, Theta_grads)
 
 	for i = 1:l
@@ -801,8 +809,8 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
 	
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output_index, lambda, a, resLayers = resLayers, activation_list=activation_list)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output_index, lambda, a, resLayers = resLayers, activation_list=activation_list)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output_index, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output_index, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
@@ -812,7 +820,7 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
 	if printmsg	
 		println("Num Grads  Func Grads")
-		for i = 1:length(numGrad)
+		for i = eachindex(numGrad)
 			@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
 		end
 		println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
@@ -821,7 +829,7 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 end
 
 function zeroParams!(T, B)
-	for i in 1:length(T)
+	for i in eachindex(T)
 		scal!(0.0f0, T[i])
 		scal!(0.0f0, B[i])
 	end
@@ -829,12 +837,12 @@ end
 
 function updateM_old!(beta1, mT, mB, TG, BG)
 	b2 = 1.0f0 - beta1
-	for i = 1:length(TG)
-		@simd for ii = 1:length(TG[i])
+	for i = eachindex(TG)
+		@simd for ii = eachindex(TG[i])
 			@inbounds mT[i][ii] = beta1*mT[i][ii] + b2*TG[i][ii]
 		end
 		
-		@simd for ii = 1:length(BG[i])
+		@simd for ii = eachindex(BG[i])
 			@inbounds mB[i][ii] = beta1*mB[i][ii] + b2*BG[i][ii]
 		end
 	end
@@ -849,11 +857,11 @@ function updateM!(beta1, mT, mB, TG, BG)
 end
 
 function updateV!(beta2, vT, vB, TG, BG)
-	for i = 1:length(TG)
-		@simd for ii = 1:length(TG[i])
+	for i = eachindex(TG)
+		@simd for ii = eachindex(TG[i])
 			@inbounds vT[i][ii] = max(beta2*vT[i][ii], abs(TG[i][ii]), 1.0f-16)
 		end
-		@simd for ii = 1:length(BG[i])
+		@simd for ii = eachindex(BG[i])
 			@inbounds vB[i][ii] = max(beta2*vB[i][ii], abs(BG[i][ii]), 1.0f-16)
 		end
 	end
@@ -861,22 +869,22 @@ end
 
 function updateParams!(alpha, beta1, T, B, mT, mB, vT, vB, t, scales)
 	basescale = alpha/(1.0f0 - beta1^t)
-	for i = 1:length(T)
-		@simd for ii = 1:length(T[i])
+	for i = eachindex(T)
+		@simd for ii = eachindex(T[i])
 			@inbounds T[i][ii] = T[i][ii] - scales[i]*basescale*mT[i][ii]/vT[i][ii]
 		end
-		@simd for ii = 1:length(B[i])
+		@simd for ii = eachindex(B[i])
 			@inbounds B[i][ii] = B[i][ii] - scales[i]*basescale*mB[i][ii]/vB[i][ii]
 		end
 	end
 end
 
 function updateParams_old!(alpha, T, B, TG, BG)
-	for i = 1:length(T)
-		@simd for ii = 1:length(T[i])
+	for i = eachindex(T)
+		@simd for ii = eachindex(T[i])
 			@inbounds T[i][ii] = T[i][ii] - alpha*TG[i][ii]
 		end
-		@simd for ii = 1:length(B[i])
+		@simd for ii = eachindex(B[i])
 			@inbounds B[i][ii] = B[i][ii] - alpha*BG[i][ii]
 		end
 	end
@@ -890,16 +898,16 @@ function updateParams!(alpha, T, B, TG, BG, scales)
 end
 
 function updateEst_old!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
-	for i = 1:length(T)
+	for i = eachindex(T)
 		(N, M) = size(T[i])
 		scale = 1.0f0/(1.0f0 - beta2^t)
 		b2 = 1.0f0 - beta2
 
-		@simd for ii = 1:length(T[i])
+		@simd for ii = eachindex(T[i])
 			@inbounds T_avg[i][ii] = beta2*T_avg[i][ii] + b2*T[i][ii]
 			@inbounds T_est[i][ii] = scale*T_avg[i][ii]
 		end
-		@simd for ii = 1:length(B[i])
+		@simd for ii = eachindex(B[i])
 			@inbounds B_avg[i][ii] = beta2*B_avg[i][ii] + b2*B[i][ii]
 			@inbounds B_est[i][ii] = scale*B_avg[i][ii]
 		end
@@ -909,7 +917,7 @@ end
 function updateEst!(beta2, t, T, B, T_avg, B_avg, T_est, B_est)
 	scale = 1.0f0/(1.0f0 - beta2^t)
 	b2 = 1.0f0 - beta2
-	for i = 1:length(T)
+	for i = eachindex(T)
 		axpby!(b2, T[i], beta2, T_avg[i])
 		T_est[i] .= scale .* T_avg[i] 
 		axpby!(b2, B[i], beta2, B_avg[i])
@@ -928,7 +936,7 @@ end
 
 function scaleParams!(T, B, c)
 	#project Thetas onto l2 ball of radius c
-	for i = 1:length(T)
+	for i = eachindex(T)
 		#calculate the squared sum of each row
 		fs = zeros(Float32, size(T[i], 1))
 		for k = 1:size(T[i], 2)
@@ -936,13 +944,13 @@ function scaleParams!(T, B, c)
 				@inbounds fs[j] = fs[j] + T[i][j, k].^2
 			end
 		end
-		@simd for j = 1:length(fs)
+		@simd for j = eachindex(fs)
 			@inbounds fs[j] = sqrt(fs[j])
 		end
 		
 		#rescale each row of T if the magnitude is too high
 		for k = 1:size(T[i], 2)
-			@simd for j = 1:length(fs)
+			@simd for j = eachindex(fs)
 				#if fs[j] > c
 				#	@inbounds T[i][j, k] = c*T[i][j, k]/fs[j]
 				#end
@@ -955,8 +963,8 @@ end
 function apply!(f, A, B)
 #apply a function f(x, y) that takes two inputs and produces a single output to each pair 
 #of elements in A and B where A and B are collections of Arrays and saves the answer in B
-	for i = 1:length(A)
-		@simd for ii = 1:length(A[i])
+	for i = eachindex(A)
+		@simd for ii = eachindex(A[i])
 			@inbounds B[i][ii] = f(A[i][ii], B[i][ii])
 		end
 	end
@@ -965,11 +973,11 @@ end
 
 function updateBest!(bestT, bestB, newT, newB)
 #update best parameters when a new lowest cost is found 
-	for i = 1:length(bestB)
-		@simd for ii = 1:length(bestB[i])
+	for i = eachindex(bestB)
+		@simd for ii = eachindex(bestB[i])
 			@inbounds bestB[i][ii] = newB[i][ii]
 		end
-		@simd for ii = 1:length(bestT[i])
+		@simd for ii = eachindex(bestT[i])
 			@inbounds bestT[i][ii] = newT[i][ii]
 		end
 	end

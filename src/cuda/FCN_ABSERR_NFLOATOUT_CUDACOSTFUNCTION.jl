@@ -22,7 +22,11 @@ function get_cuda_toolkit_versions()::Array{VersionNumber, 1}
 end
 
 if check_cuda_presence()
-	@using_nvidialib_settings()
+	try
+		@using_nvidialib_settings()
+	catch e
+		println("Failed to load nvlib settings due to $e")
+	end
 end
 
 costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")

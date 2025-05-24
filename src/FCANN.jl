@@ -123,7 +123,11 @@ function __init__()
     #get cuda toolkit versions if any
     println("Checking for cuda toolkit versions")
     cuda_versions = if check_cuda_presence()
-        get_cuda_toolkit_versions()
+        try
+            get_cuda_toolkit_versions()
+        catch e
+            []
+        end
     else
         []
     end

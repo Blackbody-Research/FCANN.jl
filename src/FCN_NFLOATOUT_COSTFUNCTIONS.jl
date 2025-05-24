@@ -160,7 +160,7 @@ struct CrossEntropyLoss <: LossType end
 calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, index) where {T<:Real, N} = calcDeltaOut!(deltas, index)
 
 #perform the calculation of a softmax put derivative where the maximum value of each example is subtracted before computing the softmax to ensure numerical stability.  this case is for a single example so the deltas and activations are vectors rather than matrices. there is also only a single index for the output since there is only one example
-function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, index::Integer) where {T<:Real, I<:Integer}
+function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, index::Integer) where {T<:Real}
 	n = length(a)
 	
 	#compute maximum activation value

@@ -9,7 +9,7 @@ get_windows_files() = readdir(windows_dir)
 checkdir(dir) = isdir(dir) && !isempty(readdir(dir))
 function check_cuda_presence()
     Sys.isapple() && return checkdir(apple_dir)
-    Sys.islinux() && return checkdir(linux_dir) && !isempty(filter(x -> occursin("cuda-", x), readdir(linux_dir)))
+    Sys.islinux() && return (checkdir(linux_dir) && !isempty(filter(x -> occursin("cuda-", x), readdir(linux_dir))))
     Sys.iswindows() && return checkdir(windows_dir)
 end
 

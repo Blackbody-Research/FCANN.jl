@@ -21,10 +21,23 @@ function get_cuda_toolkit_versions()::Array{VersionNumber, 1}
 	error("get_cuda_toolkit_versions() error: unexpected operating system!")
 end
 
-if check_cuda_presence()
-	println("CUDA detected, attempting to load nvlib settings")
-	@using_nvidialib_settings()
+macro using_nvidialib_settings_safe()
+	if check_cuda_presence()
+		if (!isfile("nvlib_julia.conf"))
+			set_default_nvlib_settings()
+		end
+		return Expr(:block,
+					collect(Expr(:using, Expr(:., i...))
+							for i in collect(map(Symbol, i)
+											for i in collect(split(i, ".")
+															for i in NVIDIALibraries.get_nvlib_settings())))...)														
+	else
+		return :()
+	end
 end
+															
+@using_nvidialib_settings_safe()
+
 
 costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")
 

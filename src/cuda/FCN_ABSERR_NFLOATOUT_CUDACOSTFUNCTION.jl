@@ -3,10 +3,10 @@ using NVIDIALibraries, NVIDIALibraries.DeviceArray
 const apple_dir = "/Developer/NVIDIA"
 get_apple_files() = readdir(apple_dir)
 const linux_dir = "/usr/local/"
-get_linux_files = filter(x -> occursin("cuda-", x), readdir(linux_dir))
+get_linux_files() = filter(x -> occursin("cuda-", x), readdir(linux_dir))
 const windows_dir = "C::\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA"
 get_windows_files() = readdir(windows_dir)
-checkdir(dir) = isdir(dir) && !isempty(dir)
+checkdir(dir) = isdir(dir) && !isempty(readdir(dir))
 function check_cuda_presence()
     Sys.isapple() && return checkdir(apple_dir)
     Sys.islinux() && return checkdir(linux_dir) && !isempty(filter(x -> occursin("cuda-", x), readdir(linux_dir)))
@@ -22,11 +22,8 @@ function get_cuda_toolkit_versions()::Array{VersionNumber, 1}
 end
 
 if check_cuda_presence()
-	try
-		@using_nvidialib_settings()
-	catch e
-		println("Failed to load nvlib settings due to $e")
-	end
+	println("CUDA detected, attempting to load nvlib settings")
+	@using_nvidialib_settings()
 end
 
 costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")

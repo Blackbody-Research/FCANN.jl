@@ -3,12 +3,63 @@ using LinearAlgebra.BLAS
 # import Base.BLAS: gemv!
 
 #-----------------Types of Cost Functions---------------------------------
+"""
+    absErr(a, y)
+
+Compute the absolute error between predicted value `a` and true value `y`.
+
+# Arguments
+- `a::Float32`: Predicted/model output value
+- `y::Float32`: True/target value
+
+# Returns
+- `Float32`: Absolute difference |a - y|
+
+# Description
+Primary cost function for measuring prediction error in the neural network.
+Used for both single values and element-wise in matrices for batch processing.
+Part of the mean absolute error (MAE) cost metric when averaged across all outputs.
+
+# See also
+[`sqErr`](@ref): Squared error cost function
+[`normLogErr`](@ref): Log-likelihood based error for probabilistic outputs
+[`absErrDeriv`](@ref): Derivative of absolute error for gradient computations
+"""
 function absErr(a, y)
-	abs(a-y)
+    abs(a-y)
 end
 
+"""
+    absErrDeriv(a, y)
+
+Compute the derivative of the absolute error with respect to the predicted value.
+
+# Arguments
+- `a::Float32`: Predicted/model output value
+- `y::Float32`: True/target value
+
+# Returns
+- `Float32`: Derivative value: +1 if a > y, -1 if a < y, 0 if a == y
+
+# Description
+Calculates the gradient of the absolute error cost function for backpropagation.
+Returns the sign of the difference between predicted and true values, making it 
+suitable for gradient-based optimization where the exact magnitude of the error
+is less important than its direction.
+
+# Mathematical Details
+The derivative is discontinuous at a = y, but this generally doesn't cause issues
+in practice for neural network training. The derivative is defined as:
+- +1 when a > y (prediction too high)
+- -1 when a < y (prediction too low)
+- 0 when a = y (perfect prediction)
+
+# See also
+[`absErr`](@ref): The corresponding cost function
+[`sqErrDeriv`](@ref): Derivative of squared error alternative
+"""
 function absErrDeriv(a, y)
-	ifelse(a > y, 1.0f0, ifelse(a < y, -1.0f0, 0.0f0))
+    ifelse(a > y, 1.0f0, ifelse(a < y, -1.0f0, 0.0f0))
 end
 
 function sqErr(a, y)
@@ -450,8 +501,44 @@ function form_tanh_grads(hidden_layers::AbstractVector{Int64}, m::Int64)
 	return tanh_grad_z
 end
 
-#computes the forward pass of the network without any checks and no option to remove activation functions on certain layers in the case of a single example
-function forwardNOGRAD_base!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, x::Vector{Float32}, resLayers::Int64)
+"""
+    forwardNOGRAD_base!(a, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, x, resLayers::Int64)
+
+Compute a forward pass through a neural network without gradient computations, using either tanh activation
+functions or residual connections between layers.
+
+# Methods
+    forwardNOGRAD_base!(a::Vector{Vector{Float32}}, thetas, biases, x::Vector{Float32}, resLayers)
+
+Process a single input example through the network.
+
+    forwardNOGRAD_base!(a::Vector{Matrix{Float32}}, thetas, biases, X::Matrix{Float32}, resLayers)
+
+Process multiple input examples simultaneously through the network.
+
+# Arguments
+- `a`: Pre-allocated vector of activation arrays (vectors for single example, matrices for batch)
+- `thetas::Vector{Matrix{Float32}}`: Weight matrices for each layer
+- `biases::Vector{Vector{Float32}}`: Bias vectors for each layer
+- `x`: Input data (vector for single example, matrix with examples as rows for batch)
+- `resLayers::Int64`: Number of layers between residual connections (0 for no residual connections)
+
+# Effects
+- Updates the activation arrays in `a` in-place
+- Applies tanh activation to hidden layers
+- If `resLayers > 0`, adds residual connections every `resLayers` layers
+
+# Notes
+- Residual connections require at least two hidden layers
+- When using residual connections, hidden layers must have matching dimensions
+
+# See also
+[`forwardNOGRAD!`](@ref): Higher-level version with activation function options and checks
+[`tanhActivation!`](@ref): The activation function used in hidden layers
+[`form_activations`](@ref): Creates the activation array structure
+[`nnCostFunctionNOGRAD`](@ref): Cost computation without gradients using this forward pass
+"""
+function forwardNOGRAD_base!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, x, resLayers::Int64)
 	l = length(thetas)
 	fillAs!(a, biases)
 	gemv!('N', 1.0f0, thetas[1], x, 1.0f0, a[1])
@@ -472,8 +559,8 @@ function forwardNOGRAD_base!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{F
 	end
 end
 
-#computes the forward pass of the network without any checks and no option to remove activation functions on certain layers
-function forwardNOGRAD_base!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X::Matrix{Float32}, resLayers::Int64)
+
+function forwardNOGRAD_base!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X, resLayers::Int64)
 	l = length(thetas)
 	m = size(X, 1)
 	fillAs!(a, biases, m)
@@ -496,7 +583,7 @@ function forwardNOGRAD_base!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{F
 end
 
 #computes the forward pass of the network without any checks, allowing optionality to provide a list of Bools showing which if any layers are not active in the case of one example
-function forwardNOGRAD!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, x::Vector{Float32}, resLayers::Int64, activation_list::AbstractVector{B}) where B <: Bool
+function forwardNOGRAD!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, x, resLayers::Int64, activation_list::AbstractVector{B}) where B <: Bool
 	isempty(activation_list) && return forwardNOGRAD_base!(a, thetas, biases, x, resLayers)
 	
 	l = length(thetas)
@@ -520,7 +607,7 @@ function forwardNOGRAD!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{Float3
 end
 
 #computes the forward pass of the network without any checks, allowing optionality to provide a list of Bools showing which if any layers are not active
-function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X::Matrix{Float32}, resLayers::Int64, activation_list::AbstractVector{B}) where B <: Bool
+function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X, resLayers::Int64, activation_list::AbstractVector{B}) where B <: Bool
 	isempty(activation_list) && return forwardNOGRAD_base!(a, thetas, biases, X, resLayers)
 	
 	l = length(thetas)
@@ -545,7 +632,7 @@ function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float3
 end
 
 #checks that hidden layers are compatible
-function forwardNOGRAD!(a::Vector{Array{Float32, N}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X::Array{Float32, N}, resLayers::Int64=0; activation_list = Vector{Bool}(), kwargs...) where N
+function forwardNOGRAD!(a::Vector{Array{Float32, N}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, resLayers::Int64=0; activation_list = Vector{Bool}(), kwargs...) where N
 	l = length(thetas)
 	num_hidden = length(hidden_layers)
 	@assert num_hidden == l-1
@@ -560,7 +647,7 @@ function forwardNOGRAD!(a::Vector{Array{Float32, N}}, thetas::Vector{Matrix{Floa
 end
 
 #calculate forward pass for dataset with an input and output matrix and a cost function that updates a matrix with the some function of the input and output element
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X::Matrix{Float32}, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	#Setup some useful variables
 	m = size(X, 1)
 	n = size(y, 2)
@@ -580,7 +667,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(m, n, a[end], lambda, Thetas)
 end
 
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	#Setup some useful variables
 	(m, n) = size(X)
 	# F = 1.0f0 - D
@@ -600,7 +687,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #forward pass where the output gradient is either the output at a particular index or the cross entropy loss of the softmax of the output activations with a desired output index
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X::Array{Float32, N}, output::Union{Integer, Vector{I}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex()) where {I <: Integer, N}
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output::Union{Integer, Vector{I}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex()) where {I <: Integer, N}
 
 	num_hidden = length(hidden_layers)
 
@@ -611,7 +698,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(a[end], output, lambda, Thetas)
 end
 
-function predict!(Thetas, biases, X::Array{Float32, N}, a::Vector{Array{Float32, N}}, resLayers::Int64 = 0; kwargs...) where N
+function predict!(Thetas, biases, X, a::Vector{Array{Float32, N}}, resLayers::Int64 = 0; kwargs...) where N
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
@@ -630,7 +717,7 @@ function predict!(Thetas, biases, X::Array{Float32, N}, a::Vector{Array{Float32,
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; kwargs...)
 end
 
-function predict(Thetas, biases, X::Array{Float32, N}, resLayers::Int64 = 0; layerout=length(Thetas), kwargs...) where N
+function predict(Thetas, biases, X, resLayers::Int64 = 0; layerout=length(Thetas), kwargs...) where N
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function
@@ -1043,7 +1130,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 end
 
 #Single example cost functoin with output as an index.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::Vector, x::Vector{Float32}, output::Integer, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Vector{Float32}, 1}, a::Array{Vector{Float32}, 1}, deltas::Array{Vector{Float32}, 1}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex())
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::Vector, x, output::Integer, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Vector{Float32}, 1}, a::Array{Vector{Float32}, 1}, deltas::Array{Vector{Float32}, 1}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex())
 	num_hidden = length(hidden_layers)
 
 	if resLayers != 0

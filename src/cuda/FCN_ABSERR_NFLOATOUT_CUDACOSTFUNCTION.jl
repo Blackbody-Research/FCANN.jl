@@ -300,10 +300,45 @@ function cublasSscal(handle, alpha::Float32, x::CUDAArray)::Nothing
     @assert (result == cudaSuccess) ("cublasSscal() error: " * cublasGetErrorName(result))
 end
 
-function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64=0; activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function forwardNOGRAD_base!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64; input_orientation::Char = 'N')
 #modifies d_a with forward activations
 	num_hidden = length(hidden_layers)
-	m = d_X.size[1]
+	m = d_X.size[ifelse(input_orientation == 'N', 1, 2)]
+
+	for i = 1:num_hidden
+		run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
+	end
+
+	run_kernel(fill_cols, m, d_a[end].size[2], d_a[end], d_biases[end])
+
+	cublasGemmEx(cublas_handle, algo, input_orientation, 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+
+	if num_hidden > 0
+
+		run_kernel(tanhActivation, m, hidden_layers[1], d_a[1])
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])	
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
+				run_kernel(tanhActivation, m, hidden_layers[i], d_a[i])
+			end
+		end
+		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+	end
+	# cuCtxSynchronize()
+end
+
+function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64=0; activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+#modifies d_a with forward activations
+	num_hidden = length(hidden_layers)
+	m = d_X.size[ifelse(input_orientation == 'N', 1, 2)]
 
 	if resLayers != 0
 		@assert num_hidden > 1 "Must have at least two hidden layers"
@@ -319,7 +354,7 @@ function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_b
 
 	run_kernel(fill_cols, m, d_a[end].size[2], d_a[end], d_biases[end])
 
-	cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	cublasGemmEx(cublas_handle, algo, input_orientation, 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 
 	if num_hidden > 0

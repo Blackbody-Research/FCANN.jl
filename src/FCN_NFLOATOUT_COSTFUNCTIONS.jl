@@ -560,11 +560,11 @@ function forwardNOGRAD_base!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{F
 end
 
 
-function forwardNOGRAD_base!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X, resLayers::Int64)
+function forwardNOGRAD_base!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X, resLayers::Int64; input_orientation::Char = 'N')
 	l = length(thetas)
-	m = size(X, 1)
+	m = size(X, ifelse(input_orientation == 'N', 1, 2))
 	fillAs!(a, biases, m)
-	gemm!('N', 'T', 1.0f0, X, thetas[1], 1.0f0, a[1])
+	gemm!(input_orientation, 'T', 1.0f0, X, thetas[1], 1.0f0, a[1])
 
 	if l > 1
 		tanhActivation!(a[1])
@@ -607,13 +607,13 @@ function forwardNOGRAD!(a::Vector{Vector{Float32}}, thetas::Vector{Matrix{Float3
 end
 
 #computes the forward pass of the network without any checks, allowing optionality to provide a list of Bools showing which if any layers are not active
-function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X, resLayers::Int64, activation_list::AbstractVector{B}) where B <: Bool
-	isempty(activation_list) && return forwardNOGRAD_base!(a, thetas, biases, X, resLayers)
+function forwardNOGRAD!(a::Vector{Matrix{Float32}}, thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, X, resLayers::Int64, activation_list::AbstractVector{B}; input_orientation::Char = 'N') where B <: Bool
+	isempty(activation_list) && return forwardNOGRAD_base!(a, thetas, biases, X, resLayers; input_orientation = input_orientation)
 	
 	l = length(thetas)
-	m = size(X, 1)
+	m = size(X, ifelse(input_orientation == 'N', 1, 2))
 	fillAs!(a, biases, m)
-	gemm!('N', 'T', 1.0f0, X, thetas[1], 1.0f0, a[1])
+	gemm!(input_orientation, 'T', 1.0f0, X, thetas[1], 1.0f0, a[1])
 
 	if l > 1
 		activation_list[1] && tanhActivation!(a[1])

@@ -1211,7 +1211,9 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 		i = i - 1
 	end
 
-	gemm!('N', 'T', 1.0f0, deltas[1], x, lambda, Theta_grads[1])
+	#now x is the input vector so this should be gemv! rather than gemm!
+	# gemm!('N', 'T', 1.0f0, deltas[1], x, lambda, Theta_grads[1]) 
+	gemv!('N', 1.0f0, deltas[1], x, lambda, Theta_grads[1])
 	copy!(Bias_grads[1], deltas[1])
 	# gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]

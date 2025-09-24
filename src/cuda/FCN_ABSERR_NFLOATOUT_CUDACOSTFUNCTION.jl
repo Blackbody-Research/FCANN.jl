@@ -377,7 +377,7 @@ function forwardNOGRAD_vector_base!(d_a::Vector{CUDAArray}, d_thetas::Vector{CUD
 			end
 		end
 
-		cublasSgemv('N', 1.0f0, d_thetas[end], d_a[end-1], 1.0f0, d_a[end])
+		cublasSgemv(cublas_handle, 'N', 1.0f0, d_thetas[end], d_a[end-1], 1.0f0, d_a[end])
 	end
 	# cuCtxSynchronize()
 end

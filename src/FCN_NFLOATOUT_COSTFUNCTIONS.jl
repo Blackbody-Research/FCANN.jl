@@ -70,6 +70,11 @@ function sqErrDeriv(a, y)
 	2*(a - y)
 end
 
+outputIndex = Returns(nothing)
+outputIndexDeriv = Returns(nothing)
+crossEntropy = Returns(nothing)
+crossEntropyDeriv = Returns(nothing)
+
 #the exponential of a2 is the sigma parameter, this ensures it is always positive
 function normLogErr(a1, a2, y)
 	0.5f0*exp(2*a2)*a1^2 - exp(2*a2)*a1*y + 0.5f0*exp(2*a2)*y*y - a2 + 0.9189385332
@@ -93,7 +98,7 @@ end
 
 
 #names, functions, and function derivatives must all be in order here
-costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr")
+costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr", "outputIndex", "crossEntropy")
 costFuncList = eval.(Symbol.(costFuncNames))
 costFuncDerivsList = eval.(Symbol.(map(a -> "$(a)Deriv", costFuncNames)))
 #--------------------------------------------------------------------------
@@ -717,7 +722,7 @@ function predict!(Thetas, biases, X, a::Vector{Array{Float32, N}}, resLayers::In
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; kwargs...)
 end
 
-function predict(Thetas, biases, X, resLayers::Int64 = 0; layerout=length(Thetas), kwargs...) where N
+function predict(Thetas, biases, X, resLayers::Int64 = 0; layerout=length(Thetas), kwargs...) 
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function

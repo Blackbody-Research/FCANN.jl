@@ -55,8 +55,29 @@ else
     println("TEST PASSED")
     println()
 
+    println("Indexed output one example")
+    err = checkNumGrad(1; m = 1)
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
 
+    println("Indexed output, one example, res layer = 1")
+    err = checkNumGrad(1; m = 1, resLayers=1)
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+    println("Cross entropy loss one example")
+    err = checkNumGrad(1; m = 1, loss_type = CrossEntropyLoss())
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
 
+    println("Cross entropy loss one example, res layer = 1")
+    err = checkNumGrad(1; m = 1, resLayers = 1, loss_type = CrossEntropyLoss())
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+    
     #basic test train with 1 input, 1 output, 1 neuron
     println("Testing simple ANN training version 1")
     println("-------------------------------------")

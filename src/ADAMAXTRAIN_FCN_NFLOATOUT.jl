@@ -934,7 +934,7 @@ function updateAvg!(nModels, T, B, T_avg, B_avg)
 	end
 end
 
-function scaleParams!(T, B, c)
+function scaleParams!(T, B, c::Real)
 	#project Thetas onto l2 ball of radius c
 	for i = eachindex(T)
 		#calculate the squared sum of each row

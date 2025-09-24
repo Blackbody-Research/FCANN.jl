@@ -151,9 +151,21 @@ function __init__()
             cuInit(0)
 
             #get device list and set default device to 0
+            println("Getting list of devices")
             deviceNum = cuDeviceGetCount()
             global devlist = [cuDeviceGet(a) for a in 0:deviceNum-1]
+            println("Found the following cuda devices: $devlist and setting default device to 0")
             global current_device = devlist[1]
+
+            println("finding device properties")
+            global device_multiprocessor_count = Dict(begin
+                prop_ref = Ref{cudaDeviceProp}()
+                prop_ptr = convert(Ptr{cudaDeviceProp}, Base.pointer_from_objref(prop_ref))
+                cudaGetDeviceProperties(prop_ptr, devlist[i])
+                prop = unsafe_load(prop_ptr)
+                devlist[i] => prop.multiProcessorCount
+            end
+            for i in eachindex(devlist))
 
             #set device for kernel and variable loading to default device
             cudaSetDevice(current_device)
@@ -161,9 +173,11 @@ function __init__()
             #create primary context handle on default device
             # global ctx = cuDevicePrimaryCtxRetain(current_device)
 
+            println("Creating cublas handle")
             #create cublas handle to reference for calls on the default device
             global cublas_handle = cublasCreate_v2()
 
+            println("Loading cuda kernels")
             (adamax_md, costfunc_md) = cu_module_load()
             # eval(cu_module_load)
 
@@ -237,6 +251,8 @@ using PrecompileTools
             checkNumGrad(0.0f0, costFunc = "sqErr")
             checkNumGrad(0.0f0, costFunc = "normLogErr")
             checkNumGrad(0.0f0, costFunc = "cauchyLogErr")
+            checkNumGrad(1, m = 1)
+            checkNumGrad(1, m = 1, loss_type = CrossEntropyLoss())
             checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
             testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
         end

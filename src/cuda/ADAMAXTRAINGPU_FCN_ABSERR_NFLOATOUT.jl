@@ -72,12 +72,14 @@ function calcError(modelOut::NVIDIALibraries.DeviceArray.CUDAArray, dataOut::NVI
 		"absErr"
 	end
 
+	logcost = occursin("Log", costFunc)
+
 	#array to store error values per example
 	if costFunc2 == costFunc
 		delt = device_copy(modelOut)
 
 		if (m == o) && (n == p)
-			run_kernel(costFuncKs[costFunc], m, n, delt, dataOut)
+			run_kernel_1D(costFuncKs[costFunc], m * n, delt, dataOut)
 		else
 			error("output layer does not match data")
 		end
@@ -89,11 +91,15 @@ function calcError(modelOut::NVIDIALibraries.DeviceArray.CUDAArray, dataOut::NVI
 		delt2 = device_copy(modelOut)
 		if (m == o) && (p == 2*n)
 			delt = device_copy(modelOut)
-			run_kernel(costFuncKs[costFunc], m, n, delt, dataOut)
+			if logcost
+				run_kernel_1D(costFuncKs[costFunc], m, n, delt, dataOut)
+			else
+				run_kernel_1D(costFuncKs[costFunc], m * n, delt, dataOut)
+			end
 			err1 = sum(host_allocate(delt))/m
 			deallocate!(delt)
 			delt = device_copy(modelOut)
-			run_kernel(costFuncKs[costFunc2], m, n, delt, dataOut)
+			run_kernel_1D(costFuncKs[costFunc2], m * n, delt, dataOut)
 			err2 = sum(host_allocate(delt)[:, 1:n])/m #needed b/c only the first n columns of delt2 contain valid errors
 			deallocate!(delt)
 		else
@@ -463,7 +469,7 @@ function calcfeatureimpact(d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, input
 			v .= view(input_data, :, ind)
 			shuffle!(MersenneTwister(1), v)
 			memcpy!(d_v, v)
-			run_kernel(swap_matrix_col, length(v), ind, d_input_data, d_v)
+			run_kernel_1D(swap_matrix_col, length(v), ind, d_input_data, d_v)
 		end
 	end
 	println()
@@ -700,15 +706,137 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 	return GPUErr
 end
 
+function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, e = 1f-3, activation_list=fill(true, length(hidden_layers)), printmsg = true, loss_type::LossType = OutputIndex(), output_vector = false, force_matrix = false)
+	Random.seed!(1234)
+
+	@assert output_index <= output_layer_size "The output index ($output_index) must be less than or equal to the number of outputs ($output_layer_size)"
+
+	X = if (m == 1) && !force_matrix
+		Float32.(randn(input_layer_size))
+	else
+		map(Float32, randn(m, input_layer_size))
+	end
+	d_X = cuda_allocate(X)
+
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+	d_Thetas = device_allocate(T0) 
+	d_Biases = device_allocate(B0) 
+
+	Theta_grads = deepcopy(T0) 
+	TGCPU = deepcopy(T0) 
+
+	Bias_grads = deepcopy(B0) 
+	BGCPU = deepcopy(B0)
+
+	d_Theta_grads = device_allocate(Theta_grads)
+	d_Bias_grads = device_allocate(Bias_grads)
+
+	if m > 1 || force_matrix
+		onesVec = ones(Float32, m)
+		d_ones = cuda_allocate(onesVec)
+	end
+
+	a = if force_matrix || m > 1
+		form_activations(T0, m)
+	else
+		form_activations(T0)
+	end
+
+	d_a = device_allocate(a)
+
+	tanh_grad_z = deepcopy(a)
+	deltas = deepcopy(a)
+
+	d_tanh_grad_z = device_allocate(tanh_grad_z)
+	d_deltas = device_allocate(deltas)
+
+	numLayers = length(T0)
+
+	params = theta2Params(B0, T0)
+	l = length(params)
+	perturb = zeros(Float32, l)
+	numGrad = Array{Float32}(undef, l)
+
+	output = if output_vector && (m > 1 || force_matrix)
+		fill(output_index, m)
+	else
+		output_index
+	end
+
+	base_args_cpu = (T0, B0, hidden_layers, X, output, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas)
+
+	base_args_gpu = if output_vector && (m > 1 || force_matrix)
+		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, output, lambda)
+	else
+		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, output, lambda)
+	end
+	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+
+	if (m == 1) && !force_matrix
+		nnCostFunction(base_args_cpu...; kwargs...)
+	else
+		nnCostFunction(base_args_cpu..., onesVec; kwargs...)
+	end
+
+	nnCostFunction(base_args_gpu...; kwargs...)
+
+	costGPU = if (m > 1 || force_matrix)
+		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, output, lambda; kwargs...)
+	else
+		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_X, output, lambda; kwargs...)
+	end
+
+	costCPU = nnCostFunctionNOGRAD(T0, B0, hidden_layers, X, output, lambda, a; kwargs...)
+	
+	GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
+
+	funcGrad = theta2Params(Bias_grads, Theta_grads)
+	funcGradCPU = theta2Params(BGCPU, TGCPU)
+
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+		
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output, lambda, a; kwargs...)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output, lambda, a; kwargs...)
+		
+		perturb[i] = 0.0f0  #restore perturb vector to 0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	GPUErr = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+	GPUCPUErr = norm(funcGradCPU .- funcGrad)/norm(funcGradCPU .+ funcGrad)
+	if printmsg
+		println("GPU Cost  CPU Cost" )
+		println(string(costGPU, "  ", costCPU))
+
+		println("___________________")
+		
+		println("Num Grads  GPU Grads CPU Grads")
+		for i = 1:length(numGrad)
+			@printf "%0.6f  %0.6f %0.6f \n" numGrad[i] funcGrad[i] funcGradCPU[i]
+		end
+		println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
+		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
+	end
+
+	return GPUErr
+end
+
 # checkNumGradGPU(0.0f0)
 
-function scaleThetas!(d_Thetas::Vector{CUDAArray}, d_Theta_grads::Vector{CUDAArray}, d_onesVecParams::Vector{CUDAArray}, d_normVecParams::Vector{CUDAArray}, c)
+function scaleThetas!(d_Thetas::Vector{CUDAArray}, d_Theta_grads::Vector{CUDAArray}, d_onesVecParams::Vector{CUDAArray}, d_normVecParams::Vector{CUDAArray}, c::Real)
 	for i = 1:length(d_Thetas)
 		#get rows and columns of input matrix
 		(N, M) = d_Thetas[i].size
 		
 		#square each element of Theta
-		run_kernel(elSq2, N, M, d_Thetas[i], d_Theta_grads[i])
+		run_kernel_1D(elSq2, N * M, d_Thetas[i], d_Theta_grads[i])
 		#CUDArt.launch(elSq, blocks(N, M), threads, (N, M, d_Thetas[i]))
 		
 		#generate vector of row sums using blas operations
@@ -726,17 +854,17 @@ function updateParams!(alpha, beta1, beta2, t, d_Thetas::Vector{CUDAArray}, d_Th
 		(N, M) = d_Thetas[i].size
 		
 		#launch kernel to update Thetas
-		run_kernel(updateParams, N, M, scales[i]*alpha, beta1, beta2, t, d_Thetas[i], d_Theta_grads[i], d_mT[i], d_vT[i])
+		run_kernel_1D(updateParams, N * M, scales[i]*alpha, beta1, beta2, t, d_Thetas[i], d_Theta_grads[i], d_mT[i], d_vT[i])
 		N = d_Biases[i].size[1]
 		M = 1
 		#launch kernel to update Biases
-		run_kernel(updateParams, N, M, alpha, beta1, beta2, t, d_Biases[i], d_Bias_grads[i], d_mB[i], d_vB[i])
+		run_kernel_1D(updateParams, N * M, alpha, beta1, beta2, t, d_Biases[i], d_Bias_grads[i], d_mB[i], d_vB[i])
 		#CUDArt.launch(updateParams, blocks(N, M), threads, (N, M, alpha, beta1, beta2, t, d_Biases[i], d_Bias_grads[i], d_mB[i], d_vB[i]))
 	end
 	cuCtxSynchronize()
 end
 
-function updateParams!(alpha, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_TG::Vector{CUDAArray}, d_BG::Vector{CUDAArray}, scales)
+function updateParams!(alpha, d_T::Vector{CUDAArray}, d_B::Vector{CUDAArray}, d_TG::Vector{CUDAArray}, d_BG::Vector{CUDAArray}, scales::Vector)
 	for i in eachindex(d_T)
 		cublasSaxpy(cublas_handle, -alpha*scales[i], d_TG[i], d_T[i])
 		cublasSaxpy(cublas_handle, -alpha, d_BG[i], d_B[i])
@@ -750,12 +878,12 @@ function updateEst!(beta2, t, d_Thetas::Vector{CUDAArray}, d_Biases::Vector{CUDA
 		scale = 1.0f0/(1.0f0 - beta2^t)
 		
 		#launch kernel to update Thetas
-		run_kernel(updateEst, N, M, beta2, scale, d_Thetas[i], d_Theta_avg[i], d_Theta_est[i])
+		run_kernel_1D(updateEst, N * M, beta2, scale, d_Thetas[i], d_Theta_avg[i], d_Theta_est[i])
 		
 		N = d_Biases[i].size[1]
 		M = 1
 		#launch kernel to update Biases
-		run_kernel(updateEst, N, M, beta2, scale, d_Biases[i], d_Bias_avg[i], d_Bias_est[i])
+		run_kernel_1D(updateEst, N * M, beta2, scale, d_Biases[i], d_Bias_avg[i], d_Bias_est[i])
 	end
 	cuCtxSynchronize()	
 end

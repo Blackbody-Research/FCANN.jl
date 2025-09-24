@@ -363,7 +363,7 @@ function forwardNOGRAD_vector_base!(d_a::Vector{CUDAArray}, d_thetas::Vector{CUD
 	for i = eachindex(d_a)
 		memcpy!(d_a[i], d_biases[i])
 	end
-	cublasSgemv!(cublas_handle, 'N', 1f0, d_thetas[1], d_x, 1f0, d_a[1])
+	cublasSgemv(cublas_handle, 'N', 1f0, d_thetas[1], d_x, 1f0, d_a[1])
 	if num_hidden > 0
 		run_kernel_1D(tanhActivation, hidden_layers[1], d_a[1])
 		if num_hidden > 1

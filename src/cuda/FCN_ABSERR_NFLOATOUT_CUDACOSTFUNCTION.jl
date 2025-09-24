@@ -357,15 +357,15 @@ function cublasSger(handle, alpha::Float32, x::CUDAArray, y::CUDAArray, z::CUDAA
 	@assert (result == cudaSuccess) ("cublasSger() error: " * cublasGetErrorName(result))
 end
 
-function forwardNOGRAD_vector_base!(d_a::Vector{CUDAArray}, d_thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_x::CUDAArray, resLayers::Int64)
+function forwardNOGRAD_vector_base!(d_a::Vector{CUDAArray}, d_thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, d_x::CUDAArray, resLayers::Int64)
 #modifies d_a with forward activations
-	num_hidden = length(hidden_layers)
+	num_hidden = length(d_a) - 1
 	for i = eachindex(d_a)
 		memcpy!(d_a[i], d_biases[i])
 	end
 	cublasSgemv(cublas_handle, 'N', 1f0, d_thetas[1], d_x, 1f0, d_a[1])
 	if num_hidden > 0
-		run_kernel_1D(tanhActivation, hidden_layers[1], d_a[1])
+		run_kernel_1D(tanhActivation, d_a[1].size[1], d_a[1])
 		if num_hidden > 1
 			for i = 2:num_hidden
 				cublasSgemv(cublas_handle, 'N', 1.0f0, d_thetas[i], d_a[i-1], 1.0f0, d_a[i])
@@ -373,7 +373,7 @@ function forwardNOGRAD_vector_base!(d_a::Vector{CUDAArray}, d_thetas::Vector{CUD
 					#calculate residual skip every resLayers layers past the first hidden layer
 					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
 				end
-				run_kernel_1D(tanhActivation, hidden_layers[i], d_a[i])
+				run_kernel_1D(tanhActivation, d_a[i].size[1], d_a[i])
 			end
 		end
 
@@ -382,14 +382,14 @@ function forwardNOGRAD_vector_base!(d_a::Vector{CUDAArray}, d_thetas::Vector{CUD
 	# cuCtxSynchronize()
 end
 
-function forwardNOGRAD_base!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64; input_orientation::Char = 'N')
+function forwardNOGRAD_base!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, d_X::CUDAArray, resLayers::Int64; input_orientation::Char = 'N')
 #modifies d_a with forward activations
-	length(d_X.size) == 1 && return forwardNOGRAD_vector_base!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
-	num_hidden = length(hidden_layers)
+	length(d_X.size) == 1 && return forwardNOGRAD_vector_base!(d_a, d_Thetas, d_biases, d_X, resLayers)
+	num_hidden = length(d_a) - 1
 	m = d_X.size[ifelse(input_orientation == 'N', 1, 2)]
 
 	for i = 1:num_hidden
-		run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
+		run_kernel(fill_cols, m, d_a[i].size[2], d_a[i], d_biases[i])
 	end
 
 	run_kernel(fill_cols, m, d_a[end].size[2], d_a[end], d_biases[end])
@@ -409,7 +409,7 @@ function forwardNOGRAD_base!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}
 					#calculate residual skip every resLayers layers past the first hidden layer
 					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
 				end
-				run_kernel_1D(tanhActivation, m*hidden_layers[i], d_a[i])
+				run_kernel_1D(tanhActivation, m*d_a[i].size[2], d_a[i])
 			end
 		end
 		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
@@ -418,7 +418,6 @@ function forwardNOGRAD_base!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}
 	# cuCtxSynchronize()
 end
 
-
 function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64 = 0; activation_list::AbstractVector{B} = Vector{Bool}(), kwargs...) where B<:Bool
 	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list; kwargs...)
 end
@@ -426,7 +425,7 @@ end
 function forwardNOGRAD!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64, activation_list::AbstractVector{B}; input_orientation::Char = 'N') where B<:Bool
 #modifies d_a with forward activations
 	length(d_X.size) == 1 && return forwardNOGRAD_vector!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list)
-	isempty(activation_list) && return forwardNOGRAD_base!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; input_orientation = input_orientation)
+	isempty(activation_list) && return forwardNOGRAD_base!(d_a, d_Thetas, d_biases, d_X, resLayers; input_orientation = input_orientation)
 
 	num_hidden = length(hidden_layers)
 	m = d_X.size[ifelse(input_orientation == 'N', 1, 2)]
@@ -474,7 +473,7 @@ end
 
 function forwardNOGRAD_vector!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, hidden_layers::Vector, d_X::CUDAArray, resLayers::Int64, activation_list::AbstractVector{B}) where B<:Bool
 #modifies d_a with forward activations
-	isempty(activation_list) && return forwardNOGRAD_vector_base!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers)
+	isempty(activation_list) && return forwardNOGRAD_vector_base!(d_a, d_Thetas, d_biases, d_X, resLayers)
 	num_hidden = length(hidden_layers)
 
 	if resLayers != 0

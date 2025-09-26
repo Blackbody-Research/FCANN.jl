@@ -399,7 +399,7 @@ function forwardNOGRAD_base!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArray}
 
 	if num_hidden > 0
 
-		run_kernel_1D(tanhActivation, m*hidden_layers[1], d_a[1])
+		run_kernel_1D(tanhActivation, m*d_a[1].size[2], d_a[1])
 
 		if num_hidden > 1
 			for i = 2:num_hidden

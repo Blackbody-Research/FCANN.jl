@@ -315,8 +315,8 @@ function cublasSaxpy(handle, alpha::Float32, x::CUDAArray, y::CUDAArray)::Nothin
     if (n != n2) || (m != y.size[1])
     	throw(DimentionMismatch("The dimensions of x, $((m, n)) does nto equal the dimensions of y $((y.size[1], n2))"))
     end
-    tmp = [alpha]
-    local result::cublasStatus_t = cublasSaxpy_v2(handle, num, pointer(tmp), Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy)
+    α = pointer([alpha])
+    local result::cublasStatus_t = cublasSaxpy_v2(handle, num, α, Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy)
     @assert (result == cudaSuccess) ("cublasSaxpy() error: " * cublasGetErrorName(result))
 end
 
@@ -327,8 +327,8 @@ function cublasSscal(handle, alpha::Float32, x::CUDAArray)::Nothing
     # get increments for x and y
     local incx::Cint = 1
 
-    tmp = [alpha]
-    local result::cublasStatus_t = cublasSscal_v2(handle, num, pointer(tmp), Ptr{Float32}(x.ptr), incx)
+    α = pointer([alpha])
+    local result::cublasStatus_t = cublasSscal_v2(handle, num, α, Ptr{Float32}(x.ptr), incx)
     @assert (result == cudaSuccess) ("cublasSscal() error: " * cublasGetErrorName(result))
 end
 
@@ -352,8 +352,8 @@ function cublasSger(handle, alpha::Float32, x::CUDAArray, y::CUDAArray, z::CUDAA
 
 	local lda::Cint = max(1, m)
 
-	tmp = [alpha]
-	local result::cublasStatus_t = cublasSger_v2(handle, m, n, pointer(tmp), Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy, Ptr{Float32}(z.ptr), lda)
+	α = pointer([alpha])
+	local result::cublasStatus_t = cublasSger_v2(handle, m, n, α, Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy, Ptr{Float32}(z.ptr), lda)
 	@assert (result == cudaSuccess) ("cublasSger() error: " * cublasGetErrorName(result))
 end
 

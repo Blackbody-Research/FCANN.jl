@@ -324,33 +324,36 @@ function cublasSaxpy(handle, alpha::Float32, x::CUDAArray, y::CUDAArray)::Nothin
     @assert ((x.element_type == Float32) &&
             (y.element_type == Float32))
    	
-   	dims = length(x.size)
-    local m::Cint = x.size[1]
+	local α::Vector{Float32} = [alpha]
+	GC.@preserve α begin
+		dims = length(x.size)
+		local m::Cint = x.size[1]
 
-    local n::Cint
+		local n::Cint
 
-    if dims > 1
-    	n = x.size[2]
-    	n2 = y.size[2]
-    else
-    	n = 1
-    	n2 = 1
-    end
+		if dims > 1
+			n = x.size[2]
+			n2 = y.size[2]
+		else
+			n = 1
+			n2 = 1
+		end
 
-    local num = Cint(m*n)
+		local num = Cint(m*n)
 
-    # get increments for x and y
-    local incx::Cint = 1
-    local incy::Cint = 1
+		# get increments for x and y
+		local incx::Cint = 1
+		local incy::Cint = 1
 
-    # check if dimensions are wrong
-    if (n != n2) || (m != y.size[1])
-    	throw(DimentionMismatch("The dimensions of x, $((m, n)) does nto equal the dimensions of y $((y.size[1], n2))"))
-    end
-    local α::Ptr{Float32} = pointer([alpha])
-    local result::cublasStatus_t = cublasSaxpy_v2(handle, num, α, Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy)
-    @assert (result == cudaSuccess) ("cublasSaxpy() error: " * cublasGetErrorName(result))
-	return nothing
+		# check if dimensions are wrong
+		if (n != n2) || (m != y.size[1])
+			throw(DimentionMismatch("The dimensions of x, $((m, n)) does nto equal the dimensions of y $((y.size[1], n2))"))
+		end
+
+		local result::cublasStatus_t = cublasSaxpy_v2(handle, num, pointer(α), Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy)
+		@assert (result == cudaSuccess) ("cublasSaxpy() error: " * cublasGetErrorName(result))
+		return nothing
+	end
 end
 
 function cublasSscal(handle, alpha::Ptr{Float32}, x::CUDAArray)::Nothing
@@ -367,16 +370,17 @@ end
 
 function cublasSscal(handle, alpha::Float32, x::CUDAArray)::Nothing
 	@assert (x.element_type == Float32)
-	local num = Cint(prod(x.size))
-
-	# get increments for x and y
-	local incx::Cint = 1
-	local input::Ptr{Float32} = Ptr{Float32}(x.ptr)
 	local α_vec::Vector{Float32} = [alpha]
-	local α::Ptr{Float32} = pointer(α_vec)
-	local result::cublasStatus_t = cublasSscal_v2(handle, num, α, input, incx)
-	@assert (result == cudaSuccess) ("cublasSscal() error: " * cublasGetErrorName(result))
-	return nothing
+	GC.@preserve α_vec begin
+		local num = Cint(prod(x.size))
+
+		# get increments for x and y
+		local incx::Cint = 1
+		local input::Ptr{Float32} = Ptr{Float32}(x.ptr)
+		local result::cublasStatus_t = cublasSscal_v2(handle, num, pointer(α_vec), input, incx)
+		@assert (result == cudaSuccess) ("cublasSscal() error: " * cublasGetErrorName(result))
+		return nothing
+	end
 end
 
 function cublasSger(handle, alpha::Ptr{Float32}, x::CUDAArray, y::CUDAArray, z::CUDAArray)::Nothing
@@ -418,16 +422,18 @@ function cublasSger(handle, alpha::Float32, x::CUDAArray, y::CUDAArray, z::CUDAA
 	@assert x.size[1] == m "cublasSger() error: length of x ($(x.size[1])) must equal number of rows of z ($m)"
 	@assert y.size[1] == n "cublasSger() error: length of y ($(y.size[1])) must equal number of columns of z ($n)"
 
-	# get increments for x and y
-	local incx::Cint = 1
-	local incy::Cint = 1
+	local α::Vector{Float32} = [alpha]
+	GC.@preserve α begin
+		# get increments for x and y
+		local incx::Cint = 1
+		local incy::Cint = 1
 
-	local lda::Cint = max(1, m)
+		local lda::Cint = max(1, m)
 
-    local α::Ptr{Float32} = pointer([alpha])
-	local result::cublasStatus_t = cublasSger_v2(handle, m, n, α, Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy, Ptr{Float32}(z.ptr), lda)
-	@assert (result == cudaSuccess) ("cublasSger() error: " * cublasGetErrorName(result))
-	return nothing
+		local result::cublasStatus_t = cublasSger_v2(handle, m, n, pointer(α), Ptr{Float32}(x.ptr), incx, Ptr{Float32}(y.ptr), incy, Ptr{Float32}(z.ptr), lda)
+		@assert (result == cudaSuccess) ("cublasSger() error: " * cublasGetErrorName(result))
+		return nothing
+	end
 end
 
 function forwardNOGRAD_vector_base!(d_a::Vector{CUDAArray}, d_thetas::Vector{CUDAArray}, d_biases::Vector{CUDAArray}, d_x::CUDAArray, resLayers::Int64)

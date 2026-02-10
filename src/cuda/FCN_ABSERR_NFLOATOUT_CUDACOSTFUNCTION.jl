@@ -1,4 +1,5 @@
-using NVIDIALibraries, NVIDIALibraries.DeviceArray, NVIDIALibraries.set_default_nvlib_settings
+using NVIDIALibraries, NVIDIALibraries.DeviceArray
+import NVIDIALibraries.set_default_nvlib_settings
 
 const apple_dir = "/Developer/NVIDIA"
 get_apple_files() = readdir(apple_dir)

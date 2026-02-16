@@ -701,14 +701,14 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #calculate forward pass for dataset with an input matrix, output vector, and output index indicator.  The function output is trying to match the values in the output vector per example at the output index given by the indicator
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Vector{Float32}, output_indices::Vector{I}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers))) where I <: Integer
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Vector{Float32}, output_indices::Vector{I}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), kwargs...) where I <: Integer
 	#Setup some useful variables
 	m = size(X, 1)
 	# F = 1.0f0 - D
 	
 	occursin("Log", costFunc) && error("log cost function is not compatible with output index format")
 
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
 
 	#mean abs error cost function
 	calcFinalOut!(costFuncs[costFunc], a[end], y, output_indices, m)
@@ -716,7 +716,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(m, a[end], lambda, Thetas)
 end
 
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), kwargs...)
 	#Setup some useful variables
 	(m, n) = size(X)
 	# F = 1.0f0 - D
@@ -727,7 +727,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 		@assert n == size(a[end], 2)
 	end
 
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
 
 	#mean abs error cost function
 	calcFinalOut!(costFuncs[costFunc], a[end], X, m, n)
@@ -736,11 +736,11 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #forward pass where the output gradient is either the output at a particular index or the cross entropy loss of the softmax of the output activations with a desired output index
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output::Union{Integer, Vector{I}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex()) where {I <: Integer, N}
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output::Union{Integer, Vector{I}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {I <: Integer, N}
 
 	num_hidden = length(hidden_layers)
 
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
 
 	calcFinalOut!(loss_type, a[end], output)
 
@@ -900,7 +900,7 @@ function predictMultiBatches(multiParams, batches::Vector{Matrix{Float32}}, resL
 	for params in multiParams]
 end
 
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	num_hidden = length(hidden_layers)
 
@@ -912,7 +912,8 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 
 	#Setup some useful variables
-	m = size(X, 1)
+	mdim = input_orientation == 'N' ? 1 : 2
+	m = size(X, mdim)
 	n = size(y, 2)
 	         
 	if lambda > 0.0f0
@@ -922,7 +923,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 	fillAs!(a, biases, m)
 
-	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+	gemm!(input_orientation, 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
 
 	if length(Thetas) > 1
 		if activation_list[1]
@@ -990,7 +991,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Vector{Float32}, indices::Vector{I}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers))) where I <: Integer
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Vector{Float32}, indices::Vector{I}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N') where I <: Integer
 
 	num_hidden = length(hidden_layers)
 
@@ -1000,9 +1001,9 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 		@assert all(h == hidden_layers[1] for h in hidden_layers) "hidden layers do not share a dimension" 
 	end
 
-
+	mdim = input_orientation == 'N' ? 1 : 2
 	#Setup some useful variables
-	m = size(X, 1)
+	m = size(X, mdim)
 	         
 	if lambda > 0.0f0
 		fillThetaGrads!(Theta_grads, Thetas)
@@ -1011,7 +1012,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 	fillAs!(a, biases, m)
 
-	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+	gemm!(input_orientation, 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
 
 	if length(Thetas) > 1
 		if activation_list[1]
@@ -1078,7 +1079,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	num_hidden = length(hidden_layers)
 
@@ -1090,7 +1091,11 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 
 	#Setup some useful variables
-	(m, n) = size(X)
+	if input_orientation == 'N'
+		(m, n) = size(X)
+	else
+		(n, m) = size(X)
+	end
 	         
 	if lambda > 0.0f0
 		fillThetaGrads!(Theta_grads, Thetas)
@@ -1099,7 +1104,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 	fillAs!(a, biases, m)
 
-	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+	gemm!(input_orientation, 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
 
 	if length(Thetas) > 1
 		if activation_list[1]
@@ -1168,7 +1173,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 end
 
 #output is either an index or list of indices.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::Vector, X::Matrix{Float32}, output::Union{Integer, Vector{Int64}}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex())
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::Vector, X::Matrix{Float32}, output::Union{Integer, Vector{Int64}}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), input_orientation::Char = 'N')
 	num_hidden = length(hidden_layers)
 
 	if resLayers != 0
@@ -1179,7 +1184,11 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 
 	#Setup some useful variables
-	(m, input_size) = size(X)
+	if input_orientation == 'N'
+		(m, input_size) = size(X)
+	else
+		(input_size, m) = size(X)
+	end
 	(m2, output_size) = size(a[end])
 	
 	@assert m == m2
@@ -1191,7 +1200,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 	fillAs!(a, biases, m)
 
-	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+	gemm!(input_orientation, 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
 
 	if length(Thetas) > 1
 		if activation_list[1]

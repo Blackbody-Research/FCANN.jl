@@ -742,6 +742,72 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 	return err
 end
 
+function checkNumGradCPU(lambda::T, costFunc::AbstractString; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true) where {T <: Real}
+	Random.seed!(1234)
+	#log likelihood cost function is not usable for this gradient where a single output index is selected from the outputs
+	occursin("Log", costFunc) && error("Cannot use log likelihood cost function when output is a single index output selection")
+	
+	X = map(Float32, randn(m, input_layer_size))
+	y = map(Float32, randn(m))
+	indices = [rand(1:output_layer_size) for i in 1:m]
+
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+
+	Theta_grads = similar(T0)
+	for i = eachindex(Theta_grads)
+		Theta_grads[i] = similar(T0[i])
+	end
+
+	Bias_grads = similar(B0)
+	for i = eachindex(B0)
+		Bias_grads[i] = similar(B0[i])
+	end
+
+	onesVec = ones(Float32, m)
+
+	numLayers = length(T0)
+	
+	a = form_activations(T0, m)
+	tanh_grad_z = deepcopy(a)
+	deltas = deepcopy(a)
+
+	# e = 1f-3
+	params = theta2Params(B0, T0)
+	l = length(params)
+	perturb = zeros(Float32, l)
+	numGrad = Array{Float32}(undef, l)
+
+	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, indices, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+	
+	funcGrad = theta2Params(Bias_grads, Theta_grads)
+
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+	
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, indices, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, indices, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
+		
+		perturb[i] = 0.0f0  #restore perturb vector to 0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+	if printmsg	
+		println("Num Grads  Func Grads")
+		for i = eachindex(numGrad)
+			@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
+		end
+		println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
+	end
+	return err
+end
+
 #check numerical gradient for case of output gradient being one of the indices rather than a cost function 
 function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), printmsg = true, output_vector=false, force_matrix=false)
 	Random.seed!(1234)

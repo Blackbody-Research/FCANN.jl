@@ -49,6 +49,10 @@ function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwar
     eval(Symbol("checkNumGrad", backend))(lambda, output_index; kwargs...)
 end
 
+function checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)
+    eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
+end
+
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
     batchSizes = [512, 1024, 2048, 4096, 8192]
     Ns = filter(a -> (a >= minN) && (a <= maxN), [32, 64, 128, 256, 512, 1024, 2048])

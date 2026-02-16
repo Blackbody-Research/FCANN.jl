@@ -125,6 +125,19 @@ function calcJ(m::Integer, n::Integer, delta::M, lambda::T, Thetas::Vector{M}) w
 	return accum1 + accum2
 end
 
+#if the number of output columns is not included, the values are all stored in the first column and correspond to the loss with just a single element from each example
+function calcJ(m::Integer, delta::M, lambda::T, Thetas::Vector{M}) where {T<:Real, M <: Matrix{T}}
+	accum1 = zero(T)
+	@inbounds @simd for i in 1:m
+		accum1 += delta[i, 1]
+	end
+	accum1 /= m
+	iszero(lambda) && return accum1
+	accum2 = lambda*calculate_l2(Thetas) / (T(2) * m)
+	#println(string("cost is ", accum1+accum2))
+	return accum1 + accum2
+end
+
 #calculate output for output which is just selecting one of the indices from the available outputs
 function calcJ(delta::M, output_index::Integer, lambda::T, Thetas::Vector{M}) where {T<:Real, M<:Matrix{T}}
 	m = size(delta, 1)
@@ -183,6 +196,15 @@ function calcDeltaOut!(costFuncDeriv::Function, deltas::Matrix{Float32}, a::Matr
 		end
 	else
 		error("output layer does not match data")
+	end
+end
+
+function calcDeltaOut!(costFuncDeriv::Function, deltas::Matrix{Float32}, a::Matrix{Float32}, y::Vector{Float32}, indices::Vector{I}, m::Integer) where I<:Integer
+	deltas .= zero(Float32)
+	#calculates derivative of the cost function
+	@inbounds @simd for i in 1:m
+		j = indices[i]
+		deltas[i, j] = costFuncDeriv(a[i, j], y[i])
 	end
 end
 
@@ -310,6 +332,12 @@ function calcFinalOut!(costFunc::Function, a::Matrix{T}, y::Matrix{T}, m::Intege
 		end
 	else
 		error("output layer does not match data")
+	end
+end
+
+function calcFinalOut!(costFunc::Function, a::Matrix{T}, y::Vector{T}, output_indices::Vector{I}, m::Integer) where {T<:AbstractFloat, I<:Integer}
+	@simd for i = 1:m
+		@inbounds a[i, 1] = costFunc(a[i, output_indices[i]], y[i])
 	end
 end
 
@@ -672,6 +700,22 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(m, n, a[end], lambda, Thetas)
 end
 
+#calculate forward pass for dataset with an input matrix, output vector, and output index indicator.  The function output is trying to match the values in the output vector per example at the output index given by the indicator
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Vector{Float32}, output_indices::Vector{I}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers))) where I <: Integer
+	#Setup some useful variables
+	m = size(X, 1)
+	# F = 1.0f0 - D
+	
+	occursin("Log", costFunc) && error("log cost function is not compatible with output index format")
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
+
+	#mean abs error cost function
+	calcFinalOut!(costFuncs[costFunc], a[end], y, output_indices, m)
+
+	J = calcJ(m, a[end], lambda, Thetas)
+end
+
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	#Setup some useful variables
 	(m, n) = size(X)
@@ -918,6 +962,94 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 	# println("deltas[end] CPU is $(deltas[end])")
 
+
+	i = num_hidden
+	
+	while i >= 1
+		gemm!('T', 'N', 1.0f0/m, deltas[i+1], a[i], lambda/m, Theta_grads[i+1])
+		gemv!('T', 1.0f0/m, deltas[i+1], onesVec, 0.0f0, Bias_grads[i+1])
+		#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+		if (resLayers != 0) && ((i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0))
+			#replace deltas[i] with deltas[i+resLayers]
+			# scal!(length(deltas[i]), 0.0f0, deltas[i], 1)
+			# axpy!(1.0f0, deltas[i+resLayers], deltas[i]) 
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			#propagate derivative back to deltas from the original input to the residual layers
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 1.0f0, deltas[i])
+			# gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i])
+		else
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
+		end
+		finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
+		i = i - 1
+	end
+
+
+	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
+	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+end
+
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector, X::Matrix{Float32}, y::Vector{Float32}, indices::Vector{I}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers))) where I <: Integer
+
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert all(h == hidden_layers[1] for h in hidden_layers) "hidden layers do not share a dimension" 
+	end
+
+
+	#Setup some useful variables
+	m = size(X, 1)
+	         
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+
+	fillAs!(a, biases, m)
+
+	gemm!('N', 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	if length(Thetas) > 1
+		if activation_list[1]
+			if D == 0.0f0
+				tanhGradient!(a[1], tanh_grad_z[1])
+			else
+				tanhGradient!(a[1], tanh_grad_z[1], D)
+			end
+		else
+			noactivationGradient!(a[1], tanh_grad_z[1], D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
+				if activation_list[i]
+					if D == 0.0f0
+						tanhGradient!(a[i], tanh_grad_z[i])
+					else
+						tanhGradient!(a[i], tanh_grad_z[i], D)
+					end
+				else
+					noactivationGradient!(a[i], tanh_grad_z[i], D)
+				end
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+
+	#mean abs error cost function
+	calcDeltaOut!(costFuncDerivs[costFunc], deltas[end], a[end], y, indices, m)
+
+	# println("deltas[end] CPU is $(deltas[end])")
 
 	i = num_hidden
 	

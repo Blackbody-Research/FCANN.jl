@@ -80,6 +80,9 @@ err = checkNumGrad(1; m = 1, loss_type = CrossEntropyLoss())
 println("TEST PASSED")
 println()
 
+println("Squared error with output index")
+err = checkNumGrad(0f0, "sqErr")
+
 #basic test train with 1 input, 1 output, 1 neuron
 println("Testing simple ANN training version 1")
 println("-------------------------------------")

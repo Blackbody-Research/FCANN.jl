@@ -780,7 +780,7 @@ function checkNumGradCPU(lambda::T, costFunc::AbstractString; hidden_layers=[5, 
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, indices, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+	nnCostFunction(T0, B0, hidden_layers, X, y, indices, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
 	
 	funcGrad = theta2Params(Bias_grads, Theta_grads)
 

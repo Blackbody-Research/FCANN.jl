@@ -680,9 +680,9 @@ function forwardNOGRAD!(a::Vector{Array{Float32, N}}, thetas::Vector{Matrix{Floa
 end
 
 #calculate forward pass for dataset with an input and output matrix and a cost function that updates a matrix with the some function of the input and output element
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 	#Setup some useful variables
-	m = size(X, 1)
+	m = input_orientation == 'N' ? size(X, 1) : size(X, 2)
 	n = size(y, 2)
 	# F = 1.0f0 - D
 	
@@ -692,7 +692,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 		@assert n == size(a[end], 2)
 	end
 
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list)
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers, activation_list = activation_list; input_orientation = input_orientation)
 
 	#mean abs error cost function
 	calcFinalOut!(costFuncs[costFunc], a[end], y, m, n)
@@ -701,14 +701,14 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #calculate forward pass for dataset with an input matrix, output vector, and output index indicator.  The function output is trying to match the values in the output vector per example at the output index given by the indicator
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Vector{Float32}, output_indices::Vector{I}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), kwargs...) where I <: Integer
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Vector{Float32}, output_indices::Vector{I}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N', kwargs...) where I <: Integer
 	#Setup some useful variables
-	m = size(X, 1)
+	m = input_orientation == 'N' ? size(X, 1) : size(X, 2)
 	# F = 1.0f0 - D
 	
 	occursin("Log", costFunc) && error("log cost function is not compatible with output index format")
 
-	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, input_orientation = input_orientation, kwargs...)
 
 	#mean abs error cost function
 	calcFinalOut!(costFuncs[costFunc], a[end], y, output_indices, m)

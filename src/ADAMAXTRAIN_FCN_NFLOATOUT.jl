@@ -742,12 +742,12 @@ function checkNumGradCPU(lambda; hidden_layers=[5, 5], costFunc="absErr", resLay
 	return err
 end
 
-function checkNumGradCPU(lambda::T, costFunc::AbstractString; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true) where {T <: Real}
+function checkNumGradCPU(lambda::T, costFunc::AbstractString; input_orientation::Char = 'N', hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true) where {T <: Real}
 	Random.seed!(1234)
 	#log likelihood cost function is not usable for this gradient where a single output index is selected from the outputs
 	occursin("Log", costFunc) && error("Cannot use log likelihood cost function when output is a single index output selection")
 	
-	X = map(Float32, randn(m, input_layer_size))
+	X = input_orientation == 'N' ? map(Float32, randn(m, input_layer_size)) : map(Float32, randn(input_layer_size, m))
 	y = map(Float32, randn(m))
 	indices = [rand(1:output_layer_size) for i in 1:m]
 
@@ -780,7 +780,7 @@ function checkNumGradCPU(lambda::T, costFunc::AbstractString; hidden_layers=[5, 
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	nnCostFunction(T0, B0, hidden_layers, X, y, indices, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list)
+	nnCostFunction(T0, B0, hidden_layers, X, y, indices, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec, costFunc=costFunc, resLayers = resLayers, activation_list=activation_list, input_orientation = input_orientation)
 	
 	funcGrad = theta2Params(Bias_grads, Theta_grads)
 
@@ -789,8 +789,8 @@ function checkNumGradCPU(lambda::T, costFunc::AbstractString; hidden_layers=[5, 
 		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 	
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, indices, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, indices, lambda, a, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, indices, lambda, a; costFunc = costFunc, resLayers = resLayers, activation_list=activation_list, input_orientation = input_orientation)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, indices, lambda, a; costFunc = costFunc, resLayers = resLayers, activation_list=activation_list, input_orientation = input_orientation)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 

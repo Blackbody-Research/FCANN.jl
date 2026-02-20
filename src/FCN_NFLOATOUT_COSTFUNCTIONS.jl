@@ -986,7 +986,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 
 
-	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemm!('T', input_orientation, 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
@@ -1074,7 +1074,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 
 
-	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemm!('T', input_orientation, 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
@@ -1167,7 +1167,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 
 
-	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemm!('T', input_orientation, 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
@@ -1270,7 +1270,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 
 
-	gemm!('T', 'N', 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemm!('T', input_orientation, 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
 	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end

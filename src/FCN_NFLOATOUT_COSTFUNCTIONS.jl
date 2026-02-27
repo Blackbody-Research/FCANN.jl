@@ -810,7 +810,7 @@ function predict!(Thetas, biases, X, a::Vector{Array{Float32, N}}, resLayers::In
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; kwargs...)
 end
 
-function predict(Thetas, biases, X, resLayers::Int64 = 0; layerout=length(Thetas), kwargs...) 
+function predict(Thetas, biases, X::Array{Float32, N}, resLayers::Int64 = 0; layerout=length(Thetas), kwargs...) where N
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
 #that had dropout applied to them are scaled by (1-D).  No longer necessary with new dropout cost function

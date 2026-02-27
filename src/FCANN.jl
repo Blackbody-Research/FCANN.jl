@@ -50,7 +50,13 @@ function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwar
 end
 
 function checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
+    # eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
+    checkNumGradCPU(lambda, err_name; kwargs...)
+end
+
+function checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)
+    # eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
+    checkNumGradCPU(lambda, input_orientation; kwargs...)
 end
 
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
@@ -258,7 +264,10 @@ using PrecompileTools
             checkNumGrad(1, m = 1)
             checkNumGrad(1, m = 1, loss_type = CrossEntropyLoss())
             checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
-            testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
+            checkNumGrad(0f0, "sqErr")
+            checkNumGrad(0f0, 'N')
+            checkNumGrad(0f0, 'T')
+            # testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
         end
         setBackend(:CPU)
         checkNumGrad(1)

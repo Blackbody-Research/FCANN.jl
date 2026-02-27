@@ -82,6 +82,21 @@ println()
 
 println("Squared error with output index")
 err = checkNumGrad(0f0, "sqErr")
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
+println("Cross Entropy Loss with Output Index and normal orientation")
+err = checkNumGrad(0f0, 'N')
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
+println("Cross Entropy Loss with Output Index and transposed orientation")
+err = checkNumGrad(0f0, 'T')
+@test(err < 0.015)
+println("TEST PASSED")
+println()
 
 #basic test train with 1 input, 1 output, 1 neuron
 println("Testing simple ANN training version 1")

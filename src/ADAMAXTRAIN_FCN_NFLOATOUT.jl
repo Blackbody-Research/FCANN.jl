@@ -894,6 +894,77 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	return err
 end
 
+#check numerical gradient for case of output gradient being one of the indices rather than a cost function 
+function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true)
+	Random.seed!(1234)
+	X = if input_orientation == 'N'
+		map(Float32, randn(m, input_layer_size))
+	else
+		map(Float32, randn(input_layer_size, m))
+	end
+
+	output_indices = [rand(1:output_layer_size) for i in 1:m]
+	output_values = map(Float32, randn(m))
+
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+	Theta_grads = similar(T0)
+	for i in eachindex(Theta_grads)
+		Theta_grads[i] = similar(T0[i])
+	end
+
+	Bias_grads = similar(B0)
+	for i in eachindex(B0)
+		Bias_grads[i] = similar(B0[i])
+	end
+
+	onesVec = ones(Float32, m)
+	
+	numLayers = length(T0)
+	
+	a = form_activations(T0, m)
+	tanh_grad_z = deepcopy(a)
+	deltas = deepcopy(a)
+
+	# e = 1f-3
+	params = theta2Params(B0, T0)
+	l = length(params)
+	perturb = zeros(Float32, l)
+	numGrad = Array{Float32}(undef, l)
+
+	base_args = (T0, B0, hidden_layers, X, output_indices, output_values, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+
+	nnCostFunction(base_args..., onesVec; kwargs...)
+
+	funcGrad = theta2Params(Bias_grads, Theta_grads)
+
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+		
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output_indices, output_values, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output_indices, output_values, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+		
+		perturb[i] = 0.0f0  #restore perturb vector to 0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+	if printmsg	
+		println("Num Grads  Func Grads")
+		for i = eachindex(numGrad)
+			@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
+		end
+		println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
+	end
+	return err
+end
+
 function zeroParams!(T, B)
 	for i in eachindex(T)
 		scal!(0.0f0, T[i])

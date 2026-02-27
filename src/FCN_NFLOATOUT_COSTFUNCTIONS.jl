@@ -166,6 +166,20 @@ function calcJ(delta::M, output_indices::Vector{I}, lambda::T, Thetas::Vector{M}
 	return accum1 + accum2
 end
 
+#calculate output for output which is just selecting one of the indices from the available outputs and there is a separate output value for each example that is multiplied with the typical loss function
+function calcJ(delta::M, output_indices::Vector{I}, output_values::Vector{T}, lambda::T, Thetas::Vector{M}) where {I<:Integer, T<:Real, M<:Matrix{T}}
+	m = size(delta, 1)
+	accum1 = zero(T) 
+	@inbounds @simd for i = 1:m
+		accum1 += output_values[i]*delta[i, output_indices[i]]
+	end
+	accum1 = accum1 / m
+	iszero(lambda) && return accum1
+	accum2 = lambda*calculate_l2(Thetas) / (T(2) * m)
+	#println(string("cost is ", accum1+accum2))
+	return accum1 + accum2
+end
+
 #calculate output for output which is just selecting one of the indices from the available outputs
 function calcJ(delta::V, output_index::Integer, lambda::T, Thetas::Vector{M}) where {T<:Real, V<:Vector{T}, M<:Matrix{T}}
 	accum1 = delta[output_index]
@@ -306,6 +320,20 @@ function crossEntropyDeltaOut!(deltas::Matrix{T}, indices::Vector{I}) where {T<:
 	end
 end
 
+#finish the calculation started above when there is a separate index per example and an additional value for each example that is multiplied with the typical loss function
+function crossEntropyDeltaOut!(deltas::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:Real, I<:Integer}
+	#subtract 1 for the desired index with p=1 for that example
+	@inbounds @simd for i in eachindex(indices)
+		deltas[i, indices[i]] -= one(T)
+	end
+
+	for j in 1:size(deltas, 2)
+		@inbounds @simd for i in 1:size(deltas, 1)
+			deltas[i, j] *= values[i]
+		end
+	end
+end
+
 #finish the calculation started above when there is a single index per example
 function crossEntropyDeltaOut!(deltas::Matrix{T}, index::Integer) where {T<:Real}
 	#subtract 1 for the desired index with p=1 for that example
@@ -317,6 +345,11 @@ end
 function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index) where {T<:Real} 
 	crossEntropyDeltaOut!(deltas, a)
 	crossEntropyDeltaOut!(deltas, index)
+end
+
+function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:Real, I<:Integer} 
+	crossEntropyDeltaOut!(deltas, a)
+	crossEntropyDeltaOut!(deltas, indices, values)
 end
 
 function calcFinalOut!(costFunc::Function, a::Matrix{T}, y::Matrix{T}, m::Integer, n::Integer) where T<:AbstractFloat
@@ -747,6 +780,17 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(a[end], output, lambda, Thetas)
 end
 
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output_index::Union{Integer, Vector{I}}, output_value::Union{Float32, Vector{Float32}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {I <: Integer, N}
+
+	num_hidden = length(hidden_layers)
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
+
+	calcFinalOut!(loss_type, a[end], output_index)
+
+	J = calcJ(a[end], output_index, output_value, lambda, Thetas)
+end
+
 function predict!(Thetas, biases, X, a::Vector{Array{Float32, N}}, resLayers::Int64 = 0; kwargs...) where N
 #PREDICT Predict the value of an input given a trained neural network trained with dropout
 #factor D.  D is assumed to be 0 by default meaning no dropout.  The incoming weights to neurons
@@ -1172,8 +1216,23 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
+function get_input_dims(x::Matrix{Float32}, input_orientation::Char)
+	if input_orientation == 'N'
+		(m, input_size) = size(x)
+	else
+		(input_size, m) = size(x)
+	end
+	return m, input_size
+end
+
+function get_input_dims(x::Vector, ::Char)
+	m = length(x)
+	input_size = length(x[1])
+	return m, input_size
+end
+
 #output is either an index or list of indices.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X::Matrix{Float32}, output::Union{Integer, Vector{Int64}}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), input_orientation::Char = 'N') where I <: Integer
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, output::Union{Integer, Vector{Int64}}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), input_orientation::Char = 'N') where I <: Integer
 	num_hidden = length(hidden_layers)
 
 	if resLayers != 0
@@ -1184,11 +1243,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 
 	#Setup some useful variables
-	if input_orientation == 'N'
-		(m, input_size) = size(X)
-	else
-		(input_size, m) = size(X)
-	end
+	(m, input_size) = get_input_dims(X, input_orientation)
 	(m2, output_size) = size(a[end])
 	
 	@assert m == m2
@@ -1245,6 +1300,104 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	# end
 
 	calcDeltaOut!(loss_type, deltas[end], a[end], output)	
+
+	# println("deltas[end] CPU is $(deltas[end])")
+
+	i = num_hidden
+	
+	while i >= 1
+		gemm!('T', 'N', 1.0f0/m, deltas[i+1], a[i], lambda/m, Theta_grads[i+1])
+		gemv!('T', 1.0f0/m, deltas[i+1], onesVec, 0.0f0, Bias_grads[i+1])
+		#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+		if (resLayers != 0) && ((i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0))
+			#replace deltas[i] with deltas[i+resLayers]
+			# scal!(length(deltas[i]), 0.0f0, deltas[i], 1)
+			# axpy!(1.0f0, deltas[i+resLayers], deltas[i]) 
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			#propagate derivative back to deltas from the original input to the residual layers
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 1.0f0, deltas[i])
+			# gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i])
+		else
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
+		end
+		finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
+		i = i - 1
+	end
+
+
+	gemm!('T', input_orientation, 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
+	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+end
+
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, output_indices::Vector{Int64}, output_values::Vector{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), input_orientation::Char = 'N') where I <: Integer
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert all(h == hidden_layers[1] for h in hidden_layers) "hidden layers do not share a dimension" 
+	end
+
+
+	#Setup some useful variables
+	(m, input_size) = get_input_dims(X, input_orientation)
+	(m2, output_size) = size(a[end])
+	
+	@assert m == m2 "output batch size of $m2 does not match input batch size of $m"
+
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+
+	fillAs!(a, biases, m)
+
+	gemm!(input_orientation, 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	if length(Thetas) > 1
+		if activation_list[1]
+			if D == 0.0f0
+				tanhGradient!(a[1], tanh_grad_z[1])
+			else
+				tanhGradient!(a[1], tanh_grad_z[1], D)
+			end
+		else
+			noactivationGradient!(a[1], tanh_grad_z[1], D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
+				
+				if activation_list[i]
+					if D == 0.0f0
+						tanhGradient!(a[i], tanh_grad_z[i])
+					else
+						tanhGradient!(a[i], tanh_grad_z[i], D)
+					end
+				else
+					noactivationGradient!(a[i], tanh_grad_z[i], D)
+				end
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+	
+	#this fixes whatever is going wrong with calcDeltaOut! below.  Somehow not all the values of deltas[end] are getting set to 0
+	# deltas[end] .= 0f0
+	# if isinteger(output)
+	# 	deltas[end][:, output] .= 1f0
+	# else
+	# 	deltas[end][:, output] .= 1f0 
+	# end
+
+	calcDeltaOut!(loss_type, deltas[end], a[end], output_indices, output_values)	
 
 	# println("deltas[end] CPU is $(deltas[end])")
 

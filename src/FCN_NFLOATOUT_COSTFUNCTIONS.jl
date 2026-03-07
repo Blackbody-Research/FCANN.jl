@@ -71,9 +71,17 @@ function sqErrDeriv(a, y)
 end
 
 outputIndex = Returns(nothing)
+outputIndexBatch = Returns(nothing)
 outputIndexDeriv = Returns(nothing)
+outputIndexBatchDeriv = Returns(nothing)
 crossEntropy = Returns(nothing)
 crossEntropyDeriv = Returns(nothing)
+crossEntropyBatch = Returns(nothing)
+crossEntropyBatchDeriv = Returns(nothing)
+sqErrIndex = Returns(nothing)
+sqErrIndexDeriv = Returns(nothing)
+absErrIndex = Returns(nothing)
+absErrIndexDeriv = Returns(nothing)
 
 #the exponential of a2 is the sigma parameter, this ensures it is always positive
 function normLogErr(a1, a2, y)
@@ -96,9 +104,8 @@ function cauchyLogErrDeriv(a1, a2, y)
 	(exp(a2)*ifelse(a1 > y, 1.0f0, ifelse(a1 < y, -1.0f0, 0.0f0)), exp(a2)*abs(a1-y) - 1)
 end
 
-
 #names, functions, and function derivatives must all be in order here
-costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr", "outputIndex", "crossEntropy")
+costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr", "outputIndex", "crossEntropy", "crossEntropyBatch", "outputIndexBatch", "sqErrIndex", "absErrIndex")
 costFuncList = eval.(Symbol.(costFuncNames))
 costFuncDerivsList = eval.(Symbol.(map(a -> "$(a)Deriv", costFuncNames)))
 #--------------------------------------------------------------------------
@@ -251,7 +258,7 @@ struct CrossEntropyLoss <: LossType end
 
 calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, index) where {T<:Real, N} = calcDeltaOut!(deltas, index)
 
-#perform the calculation of a softmax put derivative where the maximum value of each example is subtracted before computing the softmax to ensure numerical stability.  this case is for a single example so the deltas and activations are vectors rather than matrices. there is also only a single index for the output since there is only one example
+#perform the calculation of a softmax derivative where the maximum value of each example is subtracted before computing the softmax to ensure numerical stability.  this case is for a single example so the deltas and activations are vectors rather than matrices. there is also only a single index for the output since there is only one example
 function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, index::Integer) where {T<:Real}
 	n = length(a)
 	
@@ -1428,7 +1435,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
-#Single example cost functoin with output as an index.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
+#Single example cost function with output as an index.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, x, output::Integer, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Vector{Float32}, 1}, a::Array{Vector{Float32}, 1}, deltas::Array{Vector{Float32}, 1}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex()) where I <: Integer
 	num_hidden = length(hidden_layers)
 

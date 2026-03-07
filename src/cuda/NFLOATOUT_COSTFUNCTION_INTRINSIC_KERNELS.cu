@@ -206,6 +206,24 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
+	__global__ void sqErrIndex(int N, int M, float *A, float *Y, int *indx)
+    {	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			if (j == indx[i]) {
+				float tmp = __fsub_rn(A[index], Y[i]);
+				A[index] = __fmul_rn(tmp, tmp);
+			}
+			else {
+				A[index] = 0.0;
+			}
+		}
+	}
+
 	__global__ void absErr(int N, float *A, float *Y)
     {	
 		int i = blockIdx.x * blockDim.x + threadIdx.x;	
@@ -215,6 +233,23 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		{
 			A[index] = fabsf(__fsub_rn(A[index], Y[index]));
 			// A[index] = abs(A[index]-Y[index])
+		}
+	}
+
+	__global__ void absErrIndex(int N, int M, float *A, float *Y, int *indx)
+	{	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			if (j == indx[i]) {
+				A[index] = fabsf(__fsub_rn(A[index], Y[i]));
+			}
+			else {
+				A[index] = 0.0;
+			}
 		}
 	}
 
@@ -230,9 +265,33 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
+	__global__ void sqErrIndexDeriv(int N, int M, float *A, float *Y, int *indx, float *out)
+	{	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			if (j == indx[i]) {
+				out[index] = __fmul_rn(2.0, __fsub_rn(A[index], Y[i]));
+			}
+			else {
+				out[index] = 0.0;
+			}
+		}
+	}
+
 	__global__ void outputIndex(int N, float *A, int idx)
     {	
 	}
+
+	__global__ void outputIndexBatch(int N, float *A, int *idx)
+	{
+	}
+
+	__global__ void outputIndexBatchDeriv(int N, float *deltas, const float *a, int *inx)
+	{}
 
 	__global__ void outputIndexDeriv(int N, float *deltas, const float *a, int idx)
     {	
@@ -313,6 +372,65 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
+	__global__ void crossEntropyBatch(int N, int M, float* A, int* target_indices) {
+		extern __shared__ float sdata[];
+
+		// i = example index, each block handles one example
+		int i = blockIdx.x;
+		int tid = threadIdx.x;
+		int stride = blockDim.x;
+
+		if (i >= N) return;
+
+		int target = target_indices[i];
+
+		// Phase 1: Find maximum value across M classes for this example
+		// A[j * N + i] accesses class j of example i
+		float thread_max = -INFINITY;
+		for (int j = tid; j < M; j += stride) {
+			thread_max = fmaxf(thread_max, A[j * N + i]);
+		}
+
+		sdata[tid] = thread_max;
+		__syncthreads();
+
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+			}
+			__syncthreads();
+		}
+
+		float global_max = sdata[0];
+		__syncthreads();
+
+		// Phase 2: Compute exp sum, zero out non-target, store h at target
+		float thread_sum = 0.0f;
+		for (int j = tid; j < M; j += stride) {
+			float h = A[j * N + i] - global_max;
+			thread_sum += expf(h);
+			A[j * N + i] = (j == target) ? h : 0.0f;
+		}
+
+		sdata[tid] = thread_sum;
+		__syncthreads();
+
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] += sdata[tid + s];
+			}
+			__syncthreads();
+		}
+
+		float global_sum = sdata[0];
+
+		// Phase 3: Compute final loss at target location
+		if (tid == 0) {
+			A[target * N + i] = -A[target * N + i] + logf(global_sum);
+		}
+	}
+
+
 	//single block version
 	__global__ void crossEntropyDeriv(int N, float *deltas, const float *a, int idx)
 	{
@@ -373,6 +491,68 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
+	__global__ void crossEntropyBatchDeriv(int N, int M, float* deltas, const float* A, const int* indices) {
+		extern __shared__ float sdata[];
+
+		// i = example index, each block handles one example
+		int i = blockIdx.x;
+		int tid = threadIdx.x;
+		int stride = blockDim.x;
+
+		if (i >= N) return;
+
+		int idx = indices[i];
+
+		// Phase 1: Find maximum value across M classes for this example
+		float thread_max = -INFINITY;
+		for (int j = tid; j < M; j += stride) {
+			thread_max = fmaxf(thread_max, A[j * N + i]);
+		}
+
+		sdata[tid] = thread_max;
+		__syncthreads();
+
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+			}
+			__syncthreads();
+		}
+
+		float global_max = sdata[0];
+		__syncthreads();
+
+		// Phase 2: Compute exponentials and sum into deltas
+		float thread_sum = 0.0f;
+		for (int j = tid; j < M; j += stride) {
+			float exp_val = expf(A[j * N + i] - global_max);
+			deltas[j * N + i] = exp_val;
+			thread_sum += exp_val;
+		}
+
+		sdata[tid] = thread_sum;
+		__syncthreads();
+
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] += sdata[tid + s];
+			}
+			__syncthreads();
+		}
+
+		float global_sum = sdata[0];
+		__syncthreads();
+
+		// Phase 3: Normalize and adjust target
+		float inv_sum = 1.0f / global_sum;
+		for (int j = tid; j < M; j += stride) {
+			deltas[j * N + i] *= inv_sum;
+			if (j == idx) {
+				deltas[j * N + i] -= 1.0f;
+			}
+		}
+	}
+
 	__global__ void absErrDeriv(int N, float *A, float *Y, float *out)
     {	
 		int i = blockIdx.x * blockDim.x + threadIdx.x;	
@@ -381,6 +561,23 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		for (int index = i; index < N; index += stride)
 		{
 			out[index] = copysignf(1.0, __fsub_rn(A[index], Y[index]));
+		}
+	}
+
+	__global__ void absErrIndexDeriv(int N, int M, float *A, float *Y, int* indx, float *out)
+	{	
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			if (j == indx[i]) {
+				out[index] = copysignf(1.0, __fsub_rn(A[index], Y[i]));
+			}
+			else {
+				out[index] = 0.0;
+			}
 		}
 	}
 
@@ -489,6 +686,20 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		for (int index = i; index < N; index += stride)
 		{
 			X1[index] = __fmul_rn(X1[index], X2[index]);
+		}
+	}
+
+	__global__ void rowMul(int N, int M, float *X, float *scales)
+	{
+		int i = blockIdx.x * blockDim.x + threadIdx.x;	
+		int j = blockIdx.y * blockDim.y + threadIdx.y;
+		
+		int index = j*N + i;
+		
+		if (i < N && j < M)
+		{
+			float scale = scales[i];
+			X[index] = __fmul_rn(X[index], scale);
 		}
 	}
 }

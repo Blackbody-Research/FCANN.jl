@@ -77,6 +77,46 @@ else
     @test(err < 0.015)
     println("TEST PASSED")
     println()
+
+    println("Squared error with output index")
+    err = checkNumGrad(0f0, "sqErr")
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+    println("Abs error with output index")
+    err = checkNumGrad(0f0, "absErr")
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+    println("Squared error with transposed input")
+    err = checkNumGrad(0f0, "sqErr"; input_orientation = 'T')
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+    println("Cross entropy loss with batch")
+    err = checkNumGrad(0f0, 'N')
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+    println("Cross entropy loss with batch and values")
+    err = checkNumGrad(0f0, 'N'; use_values = true)
+    @test(err < 0.015)
+    println("TEST PASSED")
+    println()
+
+    println("Cross entropy loss with transposed input")
+    err = checkNumGrad(0f0, 'T')
+    @test(err < 0.015)
+    println("TEST PASSED")
+
+    println("Cross entropy loss with transposed input and values")
+    err = checkNumGrad(0f0, 'T'; use_values = true)
+    @test(err < 0.015)
+    println("TEST PASSED")
     
     #basic test train with 1 input, 1 output, 1 neuron
     println("Testing simple ANN training version 1")

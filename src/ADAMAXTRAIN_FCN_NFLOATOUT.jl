@@ -894,8 +894,8 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	return err
 end
 
-#check numerical gradient for case of output gradient being one of the indices rather than a cost function 
-function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true)
+#check numerical gradient for cross entropy loss in a batch with an additional scalar output multiplied to the loss per example that does not depend on the parameters 
+function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true, use_values::Bool = false)
 	Random.seed!(1234)
 	X = if input_orientation == 'N'
 		map(Float32, randn(m, input_layer_size))
@@ -934,20 +934,30 @@ function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	base_args = (T0, B0, hidden_layers, X, output_indices, output_values, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	base_args = if use_values
+		(T0, B0, hidden_layers, X, output_indices, output_values, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	else
+		(T0, B0, hidden_layers, X, output_indices, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	end
 	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
 
 	nnCostFunction(base_args..., onesVec; kwargs...)
 
 	funcGrad = theta2Params(Bias_grads, Theta_grads)
 
+	nograd_args = if use_values
+		(hidden_layers, X, output_indices, output_values, lambda, a)
+	else
+		(hidden_layers, X, output_indices, lambda, a)
+	end
+
 	for i = 1:l
 		perturb[i] = e
 		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output_indices, output_values, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output_indices, output_values, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 

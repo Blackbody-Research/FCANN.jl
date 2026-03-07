@@ -22,6 +22,10 @@ include("FCN_ABSERR_NFLOATOUT_CUDACOSTFUNCTION.jl")
 
 adamax_kernel_names = ("updateParams", "elSq", "elSq2", "scaleParams", "updateEst")
 
+for k in adamax_kernel_names
+	@eval global $(Symbol(k)) = Ptr{Nothing}()
+end
+
 function host2GPU(hostvars, GPUvars)
 #move data from host to GPU where hostvars is a tuple of Array{Array, 1}
 #that are matched with the corresponding cuda datatype in the tuple GPUvars
@@ -613,7 +617,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 end
 
-function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true)
+function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, input_orientation::Char = 'N')
 
 	Random.seed!(1234)
 
@@ -625,7 +629,11 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 		n
 	end
 
-	X = randn(Float32, m, input_layer_size)
+	X = if input_orientation == 'N'
+		randn(Float32, m, input_layer_size)
+	else
+		randn(Float32, input_layer_size, m)
+	end
 	y = randn(Float32, m, n)
 	d_X = cuda_allocate(X)
 	d_y = cuda_allocate(y)
@@ -664,10 +672,10 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
-	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
-	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
-	costCPU = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+	nnCostFunction(T0, B0, input_layer_size, hidden_layers, X, y, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_y,lambda, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+	costCPU = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
 	
 	GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
 
@@ -679,8 +687,8 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, y, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
@@ -804,6 +812,231 @@ function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output, lambda, a; kwargs...)
 		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output, lambda, a; kwargs...)
 		
+		perturb[i] = 0.0f0  #restore perturb vector to 0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	GPUErr = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+	GPUCPUErr = norm(funcGradCPU .- funcGrad)/norm(funcGradCPU .+ funcGrad)
+	if printmsg
+		println("GPU Cost  CPU Cost" )
+		println(string(costGPU, "  ", costCPU))
+
+		println("___________________")
+		
+		println("Num Grads  GPU Grads CPU Grads")
+		for i = 1:length(numGrad)
+			@printf "%0.6f  %0.6f %0.6f \n" numGrad[i] funcGrad[i] funcGradCPU[i]
+		end
+		println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
+		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
+	end
+
+	return GPUErr
+end
+
+function checkNumGradGPU(lambda, costFunc::AbstractString; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, input_orientation::Char = 'N')
+
+	Random.seed!(1234)
+
+	X = if input_orientation == 'N'
+		randn(Float32, m, input_layer_size)
+	else
+		randn(Float32, input_layer_size, m)
+	end
+
+	output_values = randn(Float32, m)
+	output_indices = [rand(1:output_layer_size) for _ in 1:m]
+
+	# @info "output indices: $output_indices"
+
+	d_X = cuda_allocate(X)
+	d_output_values = cuda_allocate(output_values)
+	d_output_indices = cuda_allocate(Cint.(output_indices .- 1))
+
+	costFuncGPU = string(costFunc, "Index")
+
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+	d_Thetas = device_allocate(T0) 
+	d_Biases = device_allocate(B0) 
+
+	Theta_grads = deepcopy(T0) 
+	TGCPU = deepcopy(T0) 
+
+	Bias_grads = deepcopy(B0) 
+	BGCPU = deepcopy(B0)
+
+	d_Theta_grads = device_allocate(Theta_grads)
+	d_Bias_grads = device_allocate(Bias_grads)
+
+	onesVec = ones(Float32, m)
+	d_ones = cuda_allocate(onesVec)
+	tanh_grad_z = form_activations(T0, m)
+	d_tanh_grad_z = device_allocate(tanh_grad_z)
+
+	d_a = form_activations(d_Thetas, m)
+	d_deltas = form_activations(d_Thetas, m)
+	a = form_activations(T0, m)
+	deltas = form_activations(T0, m)
+
+	numLayers = length(T0)
+
+	e = 0.001f0
+	params = theta2Params(B0, T0)
+	l = length(params)
+	perturb = zeros(Float32, l)
+	numGrad = Array{Float32}(undef, l)
+
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_output_values, d_output_indices, lambda, costFunc = costFuncGPU, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+
+	nnCostFunction(T0, B0, hidden_layers, X, output_values, output_indices, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+
+	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_output_values, d_output_indices,lambda, costFunc = costFuncGPU, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+
+	# @info "gpu final layer: $(host_allocate(d_a[end]))"
+	costCPU = nnCostFunctionNOGRAD(T0, B0, input_layer_size, hidden_layers, X, output_values, output_indices, lambda, a; costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+	# @info "cpu final layer: $(a[end])"	
+	GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
+
+	funcGrad = theta2Params(Bias_grads, Theta_grads)
+	funcGradCPU = theta2Params(BGCPU, TGCPU)
+
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+		
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, input_layer_size, hidden_layers, X, output_values, output_indices, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, input_layer_size, hidden_layers, X, output_values, output_indices, lambda, a, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+		
+		perturb[i] = 0.0f0  #restore perturb vector to 0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	GPUErr = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+	GPUCPUErr = norm(funcGradCPU .- funcGrad)/norm(funcGradCPU .+ funcGrad)
+	if printmsg
+		println("GPU Cost  CPU Cost" )
+		println(string(costGPU, "  ", costCPU))
+
+		println("___________________")
+		
+		println("Num Grads  GPU Grads CPU Grads")
+		for i = 1:length(numGrad)
+			@printf "%0.6f  %0.6f %0.6f \n" numGrad[i] funcGrad[i] funcGradCPU[i]
+		end
+		println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
+		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
+	end
+
+	return GPUErr
+end
+
+# check gradient when using cross entropy loss with the option of having a scalar multiple on every example of the loss that does not depend on the input
+function checkNumGradGPU(lambda, input_orientation::Char; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, use_values::Bool = false)
+
+	Random.seed!(1234)
+
+	X = if input_orientation == 'N'
+		randn(Float32, m, input_layer_size)
+	else
+		randn(Float32, input_layer_size, m)
+	end
+
+	output_values = randn(Float32, m)
+	output_indices = [rand(1:output_layer_size) for _ in 1:m]
+
+	# @info "output indices: $output_indices"
+
+	d_X = cuda_allocate(X)
+	d_output_values = cuda_allocate(output_values)
+	d_output_indices = cuda_allocate(Cint.(output_indices .- 1)) #note that when transferring to GPU we need to convert to 0-based indexing for the output indices
+
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+	d_Thetas = device_allocate(T0) 
+	d_Biases = device_allocate(B0) 
+
+	Theta_grads = deepcopy(T0) 
+	TGCPU = deepcopy(T0) 
+
+	Bias_grads = deepcopy(B0) 
+	BGCPU = deepcopy(B0)
+
+	d_Theta_grads = device_allocate(Theta_grads)
+	d_Bias_grads = device_allocate(Bias_grads)
+
+	onesVec = ones(Float32, m)
+	d_ones = cuda_allocate(onesVec)
+	tanh_grad_z = form_activations(T0, m)
+	d_tanh_grad_z = device_allocate(tanh_grad_z)
+
+	d_a = form_activations(d_Thetas, m)
+	d_deltas = form_activations(d_Thetas, m)
+	a = form_activations(T0, m)
+	deltas = form_activations(T0, m)
+
+	numLayers = length(T0)
+
+	e = 0.001f0
+	params = theta2Params(B0, T0)
+	l = length(params)
+	perturb = zeros(Float32, l)
+	numGrad = Array{Float32}(undef, l)
+
+	base_args = if use_values
+		(T0, B0, hidden_layers, X, output_indices, output_values, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec)
+	else
+		(T0, B0, hidden_layers, X, output_indices, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec)
+	end
+	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+
+	gpu_outputs = if use_values
+		(d_output_indices, d_output_values)
+	else
+		(d_output_indices,)
+	end
+
+	#calculate gradient on GPU
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, gpu_outputs...; lambda = lambda, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+
+	#calculate gradient on CPU
+	nnCostFunction(base_args...; kwargs...)
+
+	#calculate output cost on GPU
+	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, gpu_outputs...; lambda = lambda, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+
+	nograd_args = if use_values
+		(hidden_layers, X, output_indices, output_values, lambda, a)
+	else
+		(hidden_layers, X, output_indices, lambda, a)
+	end
+
+	#calculate output cost on CPU
+	# @info "gpu final layer: $(host_allocate(d_a[end]))"
+	costCPU = nnCostFunctionNOGRAD(T0, B0, nograd_args...; kwargs...)
+	# @info "cpu final layer: $(a[end])"	
+	GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
+
+	funcGrad = theta2Params(Bias_grads, Theta_grads)
+	funcGradCPU = theta2Params(BGCPU, TGCPU)
+
+	#calculate numerical gradients on CPU
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+		
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, nograd_args...; kwargs...)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, nograd_args...; kwargs...)
+
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
 		numGrad[i] = (outplus - outminus)/(2.0f0*e)

@@ -59,7 +59,7 @@ println("TEST PASSED")
 println()
 
 for errFunc = ("absErr", "normLogErr")
-	filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.002_alpha_0.1_decay_1.0_maxNorm_ADAMAX_", errFunc)
+	local filename = string(name, "_", M, "_input_2X2_hidden_", O, "_output_0.002_alpha_0.1_decay_1.0_maxNorm_ADAMAX_", errFunc)
 
 	for v1 = (1, 2), v2 = ("Params", "Performance", "PredScatTrain", "PredScatTest")
 		fend = (v2 == "Params") ? ".bin" : ".csv"

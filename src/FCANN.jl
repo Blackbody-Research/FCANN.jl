@@ -41,19 +41,22 @@ function getBackend()
     backend
 end
 
+#normal gradient check with cost functions with target outputs matching size of output layer (or 2x for log cost functions)
 function checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
 end
 
+#gradient check for output index cost function and typically only used for a single example rather than a batch
 function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda, output_index; kwargs...)
 end
 
+#gradient check for specialized case of an output value vector and index vector where the loss function is only applied to the target output index
 function checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)
-    # eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
-    checkNumGradCPU(lambda, err_name; kwargs...)
+    eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
 end
 
+#specialized for checking gradient of cross entropy loss in a batch
 function checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)
     # eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
     checkNumGradCPU(lambda, input_orientation; kwargs...)
@@ -187,16 +190,18 @@ function __init__()
             #create cublas handle to reference for calls on the default device
             global cublas_handle = cublasCreate_v2()
 
-            println("Loading cuda kernels")
-            (adamax_md, costfunc_md) = cu_module_load()
-            # eval(cu_module_load)
+            global tmpdir = mktempdir()
+            @info "Creating temporary directory for cuda kernel compilation at $tmpdir"
 
-            #create adamax and costfunction kernels in global scope
-            create_kernels(adamax_md, adamax_kernel_names)
-            create_kernels(costfunc_md, costfunc_kernel_names)
-            
-            #make error kernels available in global scope
-            create_errorfunction_dicts(costfunc_md) 
+            println("Compiling ptx files of cuda kernels with nvcc")
+            global (costpath, adamaxpath) = cu_module_compile(tmpdir)
+
+            @assert (isfile(costpath) && isfile(adamaxpath)) "Compiled .ptx files not found at $costpath and $adamaxpath"
+
+            println("Loading cuda modules from ptx files at $(costpath) and $(adamaxpath)")
+            global costfunc_md = cu_module_load(costpath)
+            global adamax_md = cu_module_load(adamaxpath)
+            # eval(cu_module_load)
 
             #for cuda version 8 tensor ops are not available so default to regular GEMM algorithm
             global algo = try
@@ -205,16 +210,42 @@ function __init__()
                 CUBLAS_GEMM_DFALT
             end
 
+            println("Creating cuda kernels from loaded modules")
+            #create adamax and costfunction kernels in global scope
+            fail = true
+            tries = 0
+            while fail && (tries < 5)
+                tries += 1
+            try
+                    create_kernels(adamax_md, adamax_kernel_names)
+                    create_kernels(costfunc_md, costfunc_kernel_names)
+                    fail = false
+            catch e
+                    @info "Failed to load kernels on try $tries with error $e. Retrying..."
+            end
+            end
+            
+            println("Creating cost function dictionaries")
+            #make error kernels available in global scope
+            create_errorfunction_dicts(costfunc_md) 
+
             println("Verifying correct gradients")
             #verify that cost function works
-            checkNumGradGPU(1.0f0)
+            gpu_err = checkNumGradGPU(1.0f0; printmsg = false)
+            @assert gpu_err < 0.01
 
             println("Available backends are: CPU, GPU")
             #add GPU to backendList after successful initialization
             push!(backendList, :GPU)
+            unique!(backendList)
         catch msg
             println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
+            try
+                cublasDestroy_v2(cublas_handle)
+            catch
+            end
+            global gpu_ready = false
         end
     end
 
@@ -224,18 +255,10 @@ function __init__()
     #     println("Available backends are: CPU")
     # end
 
+    
+
     function f()
         if in(:GPU, backendList)
-            if myid() == 1
-                if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-                    println("Removing cuda cost function .ptx files")
-                    rm("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
-                end
-                if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
-                    println("Removing cuda adamax .ptx files")
-                    rm("ADAMAX_INTRINSIC_KERNELS.ptx")
-                end
-            end
             println("Destroying GPU cublas handle")
             # cuDevicePrimaryCtxRelease(current_device)
             cublasDestroy_v2(cublas_handle)
@@ -252,25 +275,25 @@ using PrecompileTools
     O = 1
     batchSize = 1024
     N = 150
-    __init__()
+    # __init__()
     @compile_workload begin
-        for backend in backendList
-            setBackend(backend)
-            checkNumGrad(1.0f0)
-            checkNumGrad(1.0f0, resLayers=1)
-            checkNumGrad(0.0f0, costFunc = "sqErr")
-            checkNumGrad(0.0f0, costFunc = "normLogErr")
-            checkNumGrad(0.0f0, costFunc = "cauchyLogErr")
-            checkNumGrad(1, m = 1)
-            checkNumGrad(1, m = 1, loss_type = CrossEntropyLoss())
-            checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true])
-            checkNumGrad(0f0, "sqErr")
-            checkNumGrad(0f0, 'N')
-            checkNumGrad(0f0, 'T')
-            # testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false)
-        end
-        setBackend(:CPU)
-        checkNumGrad(1)
+        checkNumGrad(1.0f0, printmsg = false)
+        checkNumGrad(1.0f0, resLayers=1, printmsg = false)
+        checkNumGrad(0.0f0, costFunc = "sqErr", printmsg = false)
+        checkNumGrad(0.0f0, costFunc = "normLogErr", printmsg = false)
+        checkNumGrad(0.0f0, costFunc = "cauchyLogErr", printmsg = false)
+        checkNumGrad(1, m = 1, printmsg = false)
+        checkNumGrad(1, m = 1, loss_type = CrossEntropyLoss(), printmsg = false)
+        checkNumGrad(0.0f0, hidden_layers=[10, 10, 10], costFunc="sqErr", activation_list = [true, false, true], printmsg = false)
+        checkNumGrad(0f0, "sqErr", printmsg = false)
+        checkNumGrad(0f0, "sqErr"; input_orientation = 'T', printmsg = false)
+        checkNumGrad(0f0, "absErr", printmsg = false)
+        checkNumGrad(0f0, "absErr"; input_orientation = 'T', printmsg = false)
+        checkNumGrad(0f0, 'N', printmsg = false)
+        checkNumGrad(0f0, 'N'; use_values = true, printmsg = false)
+        checkNumGrad(0f0, 'T', printmsg = false)
+        checkNumGrad(0f0, 'T'; use_values = true, printmsg = false)
+        testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false, print_anything=false)
     end
 end
 

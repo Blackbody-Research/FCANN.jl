@@ -57,68 +57,62 @@ end
 
 get_optimal_1d_launch_params(x::Array) = get_optimal_1d_launch_params(length(x))
 
-costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation")
+costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation", "rowMul")
 
-function cu_module_load()
+for k in costfunc_kernel_names
+	@eval global $(Symbol(k)) = Ptr{Nothing}()
+end
+
+function cu_module_compile(tmpdir)
 	#------use nvcc to compile .ptx files from .cu kernels and load module------------
 	name = "NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS"
-    filepath = joinpath(@__DIR__, "$name.cu")
+    loadpath = joinpath(@__DIR__, "$name.cu")
     # cost_md = if isfile("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
 		# path = relpath("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")
 		# cuModuleLoad(path)
     # else
-	run(`nvcc -ptx $filepath`)
-	load = false
-	cost_md = false
-	while !load
-		try
-			cost_md = cuModuleLoad(joinpath(pwd(), "$name.ptx"))
-			load = true
-		catch
-		end
-		sleep(0.01)
-	end
-    # end
+	costpath = joinpath(tmpdir, "$name.ptx")
+	# run(`nvcc -ptx -use_fast_math $loadpath -o $costpath`)
+	run(`nvcc -ptx $loadpath -o $costpath`)
 
 	name = "ADAMAX_INTRINSIC_KERNELS" 
-    filepath = joinpath(@__DIR__, "ADAMAX_INTRINSIC_KERNELS.cu")
+    loadpath = joinpath(@__DIR__, "$name.cu")
     # adamax_md = if isfile("ADAMAX_INTRINSIC_KERNELS.ptx")
 		# path = relpath("ADAMAX_INTRINSIC_KERNELS.ptx")	
         # cuModuleLoad(path)
     # else
-    run(`nvcc -ptx $filepath`)
+	adamaxpath = joinpath(tmpdir, "$name.ptx")
+    # run(`nvcc -ptx -use_fast_math $loadpath -o $adamaxpath`)
+    run(`nvcc -ptx $loadpath -o $adamaxpath`)
+	
+	sleep(0.1)
+	return (costpath, adamaxpath)
+end
+
+function cu_module_load(path)
 	load = false
-	adamax_md = false
+	md = false
 	while !load
 		try
-			adamax_md = cuModuleLoad(joinpath(pwd(), "$name.ptx"))
+			md = cuModuleLoad(path)
 			load = true
 		catch
 		end
-		sleep(0.01)
+		sleep(0.1)
 	end
-    # end
-    #------------------------------------------------------------------------
-    (adamax_md, cost_md)
+	return md
 end
 
-function create_kernels(md, knames)
+function create_kernels(md, knames; kwargs...)
 #create module kernels in global scope
+	# success = true
 	for kname in knames
-		success = false
-		fptr = false
-		t = time()
-		while !success && (time() - t < 10)
-			try
-				fptr = cuModuleGetFunction(md, kname)
-				success = true
-			catch
-			end
-			sleep(0.01)
-		end
-		isa(fptr, Bool) && error("During error function name loading, failed to load function $kname in module $md")
-         @eval global $(Symbol(kname)) = $fptr# cuModuleGetFunction($md, $kname)
+		fptr = load_module_patient(md, kname; kwargs...)
+		@eval global $(Symbol(kname)) = $fptr
     end
+	# return success
+	# kernel_list = map(kname -> load_module_patient(md, kname; kwargs...), knames)
+	# Dict(zip(knames, kernel_list))
 end
 
 function load_module_patient(md, kname; tlimit = 10)
@@ -131,7 +125,7 @@ function load_module_patient(md, kname; tlimit = 10)
 			success = true
 		catch
 		end
-		sleep(0.01)
+		sleep(0.1)
 	end
 	isa(fptr, Bool) && error("During cost function and adamax loading, failed to load function $kname in module $md")
 	return fptr
@@ -219,17 +213,38 @@ function run_kernel_1D_index(kernel, N::Int64, inputs...; stream = CUstream(C_NU
 end
 
 function run_kernel_1D_singleblock(kernel, N::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
-	block_size = min(N, max(256, 2 ^ ceil(Int, log2(min(N, 1024)))))
+	block_size = max(nextpow(2, min(N, 1024)), 32)
 	threads = Cuint.((block_size,))
 	blocks = Cuint.((1,))
 	shared_mem = block_size *sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts 
 	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
+function run_kernel_batch(kernel, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+	block_size = max(nextpow(2, min(M, 1024)), 32)
+	threads = Cuint(block_size)
+	blocks = Cuint(N)
+	shared_mem = threads*sizeof(Float32) + 4
+	cuLaunchKernel(kernel, dim3(blocks), dim3(threads), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
+end
+
 run_kernel_output(::OutputIndex, N::Int64, inputs...; kwargs...) = return nothing
 run_kernel_output(::CrossEntropyLoss, N::Int64, inputs...; kwargs...) = run_kernel_1D_singleblock(costFuncKs["crossEntropy"], N, inputs...; kwargs...)
+run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, inputs...; kwargs...) = run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
+function run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, activations::CUDAArray, indices::CUDAArray, values::CUDAArray; kwargs...)
+	run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, activations, indices; kwargs...)
+	run_kernel(rowMul, N, M, activations, values; kwargs...)
+end
+
 run_kernel_deriv(::OutputIndex, N::Int64, inputs...; kwargs...) = run_kernel_1D(costFuncDerivKs["outputIndex"], N, inputs...; kwargs...)
 run_kernel_deriv(::CrossEntropyLoss, N::Int64, inputs...; kwargs...) = run_kernel_1D_singleblock(costFuncDerivKs["crossEntropy"], N, inputs...; kwargs...)
+run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, inputs...; kwargs...) = run_kernel_batch(costFuncDerivKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
+
+#note this specialized version of cross entropy loss also has a value array with a scalar multiple per row that needs to be applied to the derivative output on a per row basis
+function run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, deltas::CUDAArray, activations::CUDAArray, indices::CUDAArray, values::CUDAArray; kwargs...) 
+	run_kernel_batch(costFuncDerivKs["crossEntropyBatch"], N, M, deltas, activations, indices; kwargs...)
+	run_kernel(rowMul, N, M, deltas, values; kwargs...)
+end
 
 function kernelTests()
 	println("Testing cudaTanh kernel launch")
@@ -583,7 +598,7 @@ function forwardNOGRAD_vector!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArra
 	end
 end
 
-function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	@assert d_a[end].size[1] == d_y.size[1]
 
@@ -598,7 +613,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	#define size of output data separately from output layer
 	n = d_y.size[2]
 	
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list = activation_list)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list = activation_list, input_orientation = input_orientation)
 	#launch across output data size rather than output layer size
 	if logcost
 		run_kernel_1D(costFuncKs[costFunc], m, n, d_a[end], d_y)
@@ -611,7 +626,20 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	@fastmath sum(tmp_out)/m
 end
 
-function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_output_values::CUDAArray, d_output_indices::CUDAArray, lambda::Float32, D = 0.0f0; costFunc = "absErrIndex", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+
+	@assert d_a[end].size[1] == d_output_values.size[1]
+	
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list = activation_list, input_orientation = input_orientation)
+	#launch across output data size rather than output layer size
+	
+	run_kernel(costFuncKs[costFunc], m, output_layer_size, d_a[end], d_output_values, d_output_indices)
+	
+	tmp_out = host_allocate(d_a[end]) 
+	@fastmath sum(tmp_out)/m
+end
+
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	@assert d_a[end].size[1] == d_X.size[1]
 
@@ -626,7 +654,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	#define size of output data separately from output layer
 	n = d_X.size[2]
 	
-	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list=activation_list)
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list=activation_list, input_orientation = input_orientation)
 	#launch across output data size rather than output layer size
 	if logcost
 		run_kernel_1D(costFuncKs[costFunc], m, n, d_a[end], d_X)
@@ -639,12 +667,22 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	@fastmath sum(tmp_out)/m
 end
 
+#single example cost function for either output index or cross entropy loss compared to an output index.  note that the output index needs to be decremented by 1 before sending to the GPU
 function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, lambda::Float32, D = 0.0f0; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	forwardNOGRAD_vector!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list)
 	#launch across output data size rather than output layer size
 	run_kernel_output(loss_type, d_a[end].size[1], d_a[end], Cint(output_index-1))
 	tmp_out = host_allocate(d_a[end]) 
 	return tmp_out[output_index]
+end
+
+#note this method will be used for the cross entropy batch loss which requires a different type of kernel launch then the usual batch forward passes, if output values are also included then it will be used for the version of cross entropy loss with a scaling factor on the output error per example
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, outputs...; lambda::Float32 = 0f0, D::Float32 = 0.0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list = activation_list, input_orientation = input_orientation)
+	#launch across output data size rather than output layer size
+	run_kernel_output(CrossEntropyLoss(), m, output_layer_size, d_a[end], outputs...)
+	tmp_out = host_allocate(d_a[end]) 
+	@fastmath sum(tmp_out)/m
 end
 
 function form_activations(d_Thetas::Vector{CUDAArray}, m::Int64)
@@ -771,7 +809,7 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
 end
 
-function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	num_hidden = length(hidden_layers)
 
@@ -807,7 +845,7 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 		end
 	end
 	run_kernel(fill_cols, m, output_layer_size, d_a[end], d_biases[end])
-	cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	cublasGemmEx(cublas_handle, algo, input_orientation, 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
 	if num_hidden > 0
 		if activation_list[1]
@@ -868,12 +906,105 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 		run_kernel_1D(elMul, m * hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
 		i = i - 1
 	end
-	cublasGemmEx(cublas_handle, algo, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	cublasGemmEx(cublas_handle, algo, 'T', input_orientation, 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
 	# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
 	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
 	# cuCtxSynchronize()
 end
 
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_output_values::CUDAArray, d_output_indices::CUDAArray, lambda::Float32, D = 0.0f0; costFunc = "absErrIndex", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
+
+	# kernelTests()
+
+	@assert d_a[end].size[1] == d_output_values.size[1] == d_output_indices.size[1]
+
+	occursin("Log", costFunc) && error("Cannot use log cost function with output indices")
+
+	if num_hidden > 0
+		if lambda > 0.0f0
+			for i in 1:length(d_Thetas)
+				memcpy!(d_Theta_grads[i], d_Thetas[i])
+			end
+		end
+
+		for i = 1:num_hidden
+			run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
+		end
+	end
+	run_kernel(fill_cols, m, output_layer_size, d_a[end], d_biases[end])
+	cublasGemmEx(cublas_handle, algo, input_orientation, 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	if num_hidden > 0
+		if activation_list[1]
+			if D == 0.0f0
+				run_kernel_1D(tanhGradient, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+			else
+				run_kernel_1D(tanhGradientDropout, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			end
+		else
+			run_kernel_1D(noactivationGradient, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
+				if activation_list[i]
+					if D == 0.0f0
+						run_kernel_1D(tanhGradient, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+					else
+						run_kernel_1D(tanhGradientDropout, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					end
+				else
+					run_kernel_1D(noactivationGradient, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+				end
+			end
+		end
+		cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+	end
+
+	#launch across output data size rather than output layer size
+	run_kernel(costFuncDerivKs[costFunc], m, output_layer_size, d_a[end], d_output_values, d_output_indices, d_deltas[end])
+	
+
+	i = num_hidden
+	while i >= 1
+		cublasGemmEx(cublas_handle, algo, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[i+1], d_ones, 0.0f0, d_bias_grads[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden-resLayers)) && (((i+resLayers-1)%resLayers)==0))
+			#replace d_deltas[i] with d_deltas[i+resLayers]
+			memcpy!(d_deltas[i], d_deltas[i+resLayers])
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+		else
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i])
+			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) 
+		end
+
+		run_kernel_1D(elMul, m * hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
+		i = i - 1
+	end
+	cublasGemmEx(cublas_handle, algo, 'T', input_orientation, 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
+	# cuCtxSynchronize()
+end
+
+#cost function for single example input with either output index or cross entropy loss
 function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, lambda::Float32, D = 0.0f0; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	num_hidden = length(hidden_layers)
@@ -963,6 +1094,96 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	memcpy!(d_bias_grads[1], d_deltas[1])
 end
 
+#note that this will be used for the derivative of the cross entropy loss in a batch context
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, outputs...; lambda::Float32 = 0f0, D::Float32 = 0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+
+	num_hidden = length(hidden_layers)
+	loss_type = CrossEntropyLoss()
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
+
+	# kernelTests()
+
+	@assert d_a[end].size[1] == first(outputs).size[1]
+
+	if num_hidden > 0
+		if lambda > 0.0f0
+			for i in 1:length(d_Thetas)
+				memcpy!(d_Theta_grads[i], d_Thetas[i])
+			end
+		end
+
+		for i = 1:num_hidden
+			run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
+		end
+	end
+	run_kernel(fill_cols, m, output_layer_size, d_a[end], d_biases[end])
+	cublasGemmEx(cublas_handle, algo, input_orientation, 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	if num_hidden > 0
+		if activation_list[1]
+			if D == 0.0f0
+				run_kernel_1D(tanhGradient, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+			else
+				run_kernel_1D(tanhGradientDropout, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			end
+		else
+			run_kernel_1D(noactivationGradient, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
+				if activation_list[i]
+					if D == 0.0f0
+						run_kernel_1D(tanhGradient, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+					else
+						run_kernel_1D(tanhGradientDropout, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					end
+				else
+					run_kernel_1D(noactivationGradient, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+				end
+			end
+		end
+		cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+	end
+
+	run_kernel_deriv(loss_type, m, output_layer_size, d_deltas[end], d_a[end], outputs...)
+	
+
+	i = num_hidden
+	while i >= 1
+		cublasGemmEx(cublas_handle, algo, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[i+1], d_ones, 0.0f0, d_bias_grads[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden-resLayers)) && (((i+resLayers-1)%resLayers)==0))
+			#replace d_deltas[i] with d_deltas[i+resLayers]
+			memcpy!(d_deltas[i], d_deltas[i+resLayers])
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+		else
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i])
+			# cublasSgemm(cublas_handle, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i]) 
+		end
+
+		run_kernel_1D(elMul, m * hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
+		i = i - 1
+	end
+	cublasGemmEx(cublas_handle, algo, 'T', input_orientation, 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	# cublasSgemm(cublas_handle, 'T', 'N', 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
+	# cuCtxSynchronize()
+end
 
 function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 

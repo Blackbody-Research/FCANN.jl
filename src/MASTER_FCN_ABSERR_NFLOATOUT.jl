@@ -2687,7 +2687,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 	return fullMultiPerformance
 end
 
-function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false, activation_list=fill(true, length(hidden)))
+function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64, N::Int64; multi = false, writeFile = true, numThreads = 0, printProg = false, costFunc = "absErr", dropout = 0.0f0, reslayers=0, swa=false, activation_list=fill(true, length(hidden)), print_anything = true)
 	#generate training set with m examples
 	m = 102400
 	X = randn(Float32, m, M)
@@ -2720,7 +2720,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end	
 	out = pmap(1:num) do _
 		BLAS.set_num_threads(numThreads)
-		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa, ignorebest=true, activation_list=activation_list)
+		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa, ignorebest=true, activation_list=activation_list, printAnything = print_anything)
 	end
 	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]
@@ -2739,18 +2739,18 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end
 	
 	if backend == :CPU
-		println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", cpu_name))
+		print_anything && println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", cpu_name))
 	else
-		println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", gpu_name))
+		print_anything && println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", gpu_name))
 	end
 	
-	println("Time to train on ", backend, " took ", train_time, " seconds for ", N, " epochs")
-	println("Average time of ", timePerBatch/batchSize/1e-9, " ns per example")
-	println("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize)
+	print_anything && println("Time to train on ", backend, " took ", train_time, " seconds for ", N, " epochs")
+	print_anything && println("Average time of ", timePerBatch/batchSize/1e-9, " ns per example")
+	print_anything && println("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize)
 	if num > 1
-		println("Approximate GFLOPS = ", total_ops/timePerBatch/1e9, " per network and = ", num*total_ops/timePerBatch/1e9, " total")
+		print_anything && println("Approximate GFLOPS = ", total_ops/timePerBatch/1e9, " per network and = ", num*total_ops/timePerBatch/1e9, " total")
 	else
-		println("Approximate GFLOPS = ", total_ops/timePerBatch/1e9)
+		print_anything && println("Approximate GFLOPS = ", total_ops/timePerBatch/1e9)
 	end
 
 	filename = if backend == :GPU

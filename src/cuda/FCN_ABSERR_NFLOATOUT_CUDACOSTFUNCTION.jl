@@ -58,10 +58,35 @@ end
 get_optimal_1d_launch_params(x::Array) = get_optimal_1d_launch_params(length(x))
 
 costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation", "rowMul")
+adamax_kernel_names = ("updateParams", "elSq", "elSq2", "scaleParams", "updateEst")
 
-for k in costfunc_kernel_names
-	@eval global $(Symbol(k)) = Ptr{Nothing}()
+function create_costfunc_kernels(md; kwargs...)
+	global fill_cols = load_module_patient(md, "fill_cols"; kwargs...)
+	global swap_matrix_col = load_module_patient(md, "swap_matrix_col"; kwargs...)
+	global finish_delta = load_module_patient(md, "finish_delta"; kwargs...)
+	global elMul = load_module_patient(md, "elMul"; kwargs...)
+	global tanhGradient = load_module_patient(md, "tanhGradient"; kwargs...)
+	global tanhGradientDropout = load_module_patient(md, "tanhGradientDropout"; kwargs...)
+	global noactivationGradient = load_module_patient(md, "noactivationGradient"; kwargs...)
+	global tanhActivation = load_module_patient(md, "tanhActivation"; kwargs...)
+	global rowMul = load_module_patient(md, "rowMul"; kwargs...)
+	# for kname in knames
+	# 	fptr = load_module_patient(md, kname; kwargs...)
+	# 	@eval global $(Symbol(kname)) = $fptr
+    # end
 end
+
+function create_adamax_kernels(md; kwargs...)
+	global updateParams = load_module_patient(md, "updateParams"; kwargs...)
+	global elSq = load_module_patient(md, "elSq"; kwargs...)
+	global elSq2 = load_module_patient(md, "elSq2"; kwargs...)
+	global scaleParams = load_module_patient(md, "scaleParams"; kwargs...)
+	global updateEst = load_module_patient(md, "updateEst"; kwargs...)
+end
+
+# for k in costfunc_kernel_names
+# 	@eval global $(Symbol(k)) = Ptr{Nothing}()
+# end
 
 function cu_module_compile(tmpdir)
 	#------use nvcc to compile .ptx files from .cu kernels and load module------------
@@ -101,18 +126,6 @@ function cu_module_load(path)
 		sleep(0.1)
 	end
 	return md
-end
-
-function create_kernels(md, knames; kwargs...)
-#create module kernels in global scope
-	# success = true
-	for kname in knames
-		fptr = load_module_patient(md, kname; kwargs...)
-		@eval global $(Symbol(kname)) = $fptr
-    end
-	# return success
-	# kernel_list = map(kname -> load_module_patient(md, kname; kwargs...), knames)
-	# Dict(zip(knames, kernel_list))
 end
 
 function load_module_patient(md, kname; tlimit = 10)

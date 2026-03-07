@@ -58,8 +58,7 @@ end
 
 #specialized for checking gradient of cross entropy loss in a batch
 function checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)
-    # eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
-    checkNumGradCPU(lambda, input_orientation; kwargs...)
+    eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
 end
 
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
@@ -216,13 +215,13 @@ function __init__()
             tries = 0
             while fail && (tries < 5)
                 tries += 1
-            try
-                    create_kernels(adamax_md, adamax_kernel_names)
-                    create_kernels(costfunc_md, costfunc_kernel_names)
+                try
+                    create_costfunc_kernels(costfunc_md)
+                    create_adamax_kernels(adamax_md)
                     fail = false
-            catch e
+                catch e
                     @info "Failed to load kernels on try $tries with error $e. Retrying..."
-            end
+                end
             end
             
             println("Creating cost function dictionaries")

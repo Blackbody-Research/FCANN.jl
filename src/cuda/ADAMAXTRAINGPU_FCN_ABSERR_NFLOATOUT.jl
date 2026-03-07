@@ -20,12 +20,6 @@ include("FCN_ABSERR_NFLOATOUT_CUDACOSTFUNCTION.jl")
 # scaleParams = cuModuleGetFunction(adamax_md, "scaleParams")
 # updateEst = cuModuleGetFunction(adamax_md, "updateEst")
 
-adamax_kernel_names = ("updateParams", "elSq", "elSq2", "scaleParams", "updateEst")
-
-for k in adamax_kernel_names
-	@eval global $(Symbol(k)) = Ptr{Nothing}()
-end
-
 function host2GPU(hostvars, GPUvars)
 #move data from host to GPU where hostvars is a tuple of Array{Array, 1}
 #that are matched with the corresponding cuda datatype in the tuple GPUvars

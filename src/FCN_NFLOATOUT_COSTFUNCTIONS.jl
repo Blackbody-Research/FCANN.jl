@@ -980,7 +980,6 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Setup some useful variables
 	m, input_size = get_input_dims(X, input_orientation)
 	# mdim = input_orientation == 'N' ? 1 : 2
-	m = size(X, mdim)
 	n = size(y, 2)
 	         
 	if lambda > 0.0f0

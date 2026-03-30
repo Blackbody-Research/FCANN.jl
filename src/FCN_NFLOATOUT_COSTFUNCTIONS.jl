@@ -951,7 +951,22 @@ function predictMultiBatches(multiParams, batches::Vector{Matrix{Float32}}, resL
 	for params in multiParams]
 end
 
-function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::AbstractVector{I}, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N') where I <: Integer
+function get_input_dims(x::Matrix{Float32}, input_orientation::Char)
+	if input_orientation == 'N'
+		(m, input_size) = size(x)
+	else
+		(input_size, m) = size(x)
+	end
+	return m, input_size
+end
+
+function get_input_dims(x::Vector, ::Char)
+	m = length(x)
+	input_size = length(x[1])
+	return m, input_size
+end
+
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::AbstractVector{I}, X, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N') where I <: Integer
 
 	num_hidden = length(hidden_layers)
 
@@ -963,7 +978,8 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 
 
 	#Setup some useful variables
-	mdim = input_orientation == 'N' ? 1 : 2
+	m, input_size = get_input_dims(X, input_orientation)
+	# mdim = input_orientation == 'N' ? 1 : 2
 	m = size(X, mdim)
 	n = size(y, 2)
 	         
@@ -1222,20 +1238,7 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
-function get_input_dims(x::Matrix{Float32}, input_orientation::Char)
-	if input_orientation == 'N'
-		(m, input_size) = size(x)
-	else
-		(input_size, m) = size(x)
-	end
-	return m, input_size
-end
 
-function get_input_dims(x::Vector, ::Char)
-	m = length(x)
-	input_size = length(x[1])
-	return m, input_size
-end
 
 #output is either an index or list of indices.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, output::Union{Integer, Vector{Int64}}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), input_orientation::Char = 'N') where I <: Integer

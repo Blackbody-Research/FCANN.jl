@@ -252,11 +252,20 @@ function calcDeltaOut!(deltas::Matrix{T}, indices::Vector{I}) where {T<:Real, I<
 	end
 end
 
+#when the output derivative function is just one of the output indices which can vary for each example and there is an additional value for each example that is multiplied with the typical loss function
+function calcDeltaOut!(deltas::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:Real, I<:Integer}
+	deltas .= zero(T)
+	@inbounds @simd for i in eachindex(indices) 
+		deltas[i, indices[i]] = values[i]
+	end
+end
+
 abstract type LossType end
 struct OutputIndex <: LossType end
 struct CrossEntropyLoss <: LossType end
 
 calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, index) where {T<:Real, N} = calcDeltaOut!(deltas, index)
+calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, indices::Vector{I}, values::Vector{T}) where {T<:Real, N, I<:Integer} = calcDeltaOut!(deltas, indices, values)
 
 #perform the calculation of a softmax derivative where the maximum value of each example is subtracted before computing the softmax to ensure numerical stability.  this case is for a single example so the deltas and activations are vectors rather than matrices. there is also only a single index for the output since there is only one example
 function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, index::Integer) where {T<:Real}

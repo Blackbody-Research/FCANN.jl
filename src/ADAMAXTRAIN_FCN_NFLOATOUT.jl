@@ -975,6 +975,96 @@ function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden
 	return err
 end
 
+#check numerical gradient for cross entropy loss with distribution targets (batch)
+function checkNumGradCPU(lambda::Real, ::Val{:dist}; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 5, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true, single_example = false)
+	Random.seed!(1234)
+
+	if single_example
+		X = map(Float32, randn(1, input_layer_size))
+		#create random probability distribution target
+		targets_raw = rand(Float32, 1, output_layer_size)
+		targets = targets_raw ./ sum(targets_raw, dims=2)
+		m = 1
+	else
+		X = map(Float32, randn(m, input_layer_size))
+		#create random probability distribution targets per row
+		targets_raw = rand(Float32, m, output_layer_size)
+		targets = targets_raw ./ sum(targets_raw, dims=2)
+	end
+
+	num_hidden = length(hidden_layers)
+
+	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+	Theta_grads = similar(T0)
+	for i in eachindex(Theta_grads)
+		Theta_grads[i] = similar(T0[i])
+	end
+
+	Bias_grads = similar(B0)
+	for i in eachindex(B0)
+		Bias_grads[i] = similar(B0[i])
+	end
+
+	loss_type = CrossEntropyLoss()
+
+	if single_example
+		onesVec = ones(Float32, 1)
+		a = form_activations(T0, 1)
+		tanh_grad_z = deepcopy(a)
+		deltas = deepcopy(a)
+
+		params = theta2Params(B0, T0)
+		l = length(params)
+		perturb = zeros(Float32, l)
+		numGrad = Array{Float32}(undef, l)
+
+		nnCostFunction(T0, B0, hidden_layers, X, Float32.(targets), lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+	else
+		onesVec = ones(Float32, m)
+		a = form_activations(T0, m)
+		tanh_grad_z = deepcopy(a)
+		deltas = deepcopy(a)
+
+		params = theta2Params(B0, T0)
+		l = length(params)
+		perturb = zeros(Float32, l)
+		numGrad = Array{Float32}(undef, l)
+
+		nnCostFunction(T0, B0, hidden_layers, X, Float32.(targets), lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+	end
+
+	funcGrad = theta2Params(Bias_grads, Theta_grads)
+
+	for i = 1:l
+		perturb[i] = e
+		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+		
+		if single_example
+			outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, Float32.(targets), lambda, a; resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+			outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, Float32.(targets), lambda, a; resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+		else
+			outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, Float32.(targets), lambda, a; resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+			outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, Float32.(targets), lambda, a; resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
+		end
+		
+		perturb[i] = 0.0f0
+
+		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+	end
+
+	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+	if printmsg	
+		println("Num Grads  Func Grads")
+		for i in eachindex(numGrad)
+			@printf "%0.6f  %0.6f \n" numGrad[i] funcGrad[i]
+		end
+		println(string("Relative differences for method are ", err, ".  Should be small (1e-9)"))
+	end
+	return err
+end
+
 function zeroParams!(T, B)
 	for i in eachindex(T)
 		scal!(0.0f0, T[i])

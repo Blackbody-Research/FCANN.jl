@@ -78,6 +78,10 @@ crossEntropy = Returns(nothing)
 crossEntropyDeriv = Returns(nothing)
 crossEntropyBatch = Returns(nothing)
 crossEntropyBatchDeriv = Returns(nothing)
+crossEntropyDist = Returns(nothing)
+crossEntropyDistDeriv = Returns(nothing)
+crossEntropyDistBatch = Returns(nothing)
+crossEntropyDistBatchDeriv = Returns(nothing)
 sqErrIndex = Returns(nothing)
 sqErrIndexDeriv = Returns(nothing)
 absErrIndex = Returns(nothing)
@@ -105,7 +109,7 @@ function cauchyLogErrDeriv(a1, a2, y)
 end
 
 #names, functions, and function derivatives must all be in order here
-costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr", "outputIndex", "crossEntropy", "crossEntropyBatch", "outputIndexBatch", "sqErrIndex", "absErrIndex")
+costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr", "outputIndex", "crossEntropy", "crossEntropyBatch", "outputIndexBatch", "sqErrIndex", "absErrIndex", "crossEntropyDist", "crossEntropyDistBatch")
 costFuncList = eval.(Symbol.(costFuncNames))
 costFuncDerivsList = eval.(Symbol.(map(a -> "$(a)Deriv", costFuncNames)))
 #--------------------------------------------------------------------------
@@ -368,6 +372,33 @@ function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indi
 	crossEntropyDeltaOut!(deltas, indices, values)
 end
 
+#single example with distribution target
+function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, targets::Vector{T}) where {T<:Real}
+	n = length(a)
+	max_value = maximum(a)
+	denominator = zero(T)
+	@inbounds @simd for i in 1:n
+		h = exp(a[i] - max_value)
+		denominator += h
+		deltas[i] = h
+	end
+	deltas ./= denominator
+	@inbounds @simd for i in 1:n
+		deltas[i] -= targets[i]
+	end
+	return deltas
+end
+
+#batch with distribution targets per row
+function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, targets::Matrix{T}) where {T<:Real}
+	crossEntropyDeltaOut!(deltas, a)
+	@inbounds @simd for i in 1:size(deltas, 1)
+		for j in 1:size(deltas, 2)
+			deltas[i, j] -= targets[i, j]
+		end
+	end
+end
+
 function calcFinalOut!(costFunc::Function, a::Matrix{T}, y::Matrix{T}, m::Integer, n::Integer) where T<:AbstractFloat
 	if length(a) == 2*length(y)
 		@simd for i = 1:m*n
@@ -406,6 +437,20 @@ function calcFinalOut!(::CrossEntropyLoss, a::Vector{T}, index::Integer) where T
 	a[index] = -a[index] + log(s) 
 end
 
+#compute the cross entropy loss of the softmax of a for a single example where the desired output is a probability distribution
+function calcFinalOut!(::CrossEntropyLoss, a::Vector{T}, targets::Vector{T}) where T<:AbstractFloat
+	max_value = maximum(a)
+	s = zero(T)
+	loss = zero(T)
+	@inbounds @simd for i in eachindex(a)
+		h = a[i] - max_value
+		x = exp(h)
+		s += x
+		loss += targets[i] * h
+	end
+	a[1] = log(s) - loss
+end
+
 #compute the cross entropy loss of the softmax of a for multiple examples contained in the rows of a and the elements of indices
 function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, index::Integer) where {T<:AbstractFloat}
 	(m, n) = size(a)
@@ -442,6 +487,27 @@ function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}) whe
 			s += x
 		end
 		a[i, indices[i]] = -a[i, indices[i]] + log(s)
+	end
+end
+
+#compute the cross entropy loss of the softmax of a for multiple examples contained in the rows of a with target probability distributions per row
+function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, targets::Matrix{T}) where {T<:AbstractFloat}
+	(m, n) = size(a)
+	@inbounds @simd for i in 1:m
+		max_value = zero(T)
+		for j in 1:n
+			max_value = max(max_value, a[i, j])
+		end
+
+		s = zero(T)
+		loss = zero(T)
+		for j in 1:n
+			h = a[i, j] - max_value
+			x = exp(h)
+			s += x
+			loss += targets[i, j] * h
+		end
+		a[i, 1] = log(s) - loss
 	end
 end
 
@@ -805,6 +871,49 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	calcFinalOut!(loss_type, a[end], output_index)
 
 	J = calcJ(a[end], output_index, output_value, lambda, Thetas)
+end
+
+#forward pass for autoencoder: disambiguates the case where X::Matrix{Float32} and input_layer_size::Int64 are both present
+#this inlines the body of the autoencoder method to avoid recursive dispatch ambiguity
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), kwargs...)
+	#Setup some useful variables
+	(m, n) = size(X)
+	# F = 1.0f0 - D
+	
+	if occursin("Log", costFunc)
+		@assert 2*n == size(a[end], 2)
+	else
+		@assert n == size(a[end], 2)
+	end
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
+
+	#mean abs error cost function
+	calcFinalOut!(costFuncs[costFunc], a[end], X, m, n)
+
+	J = calcJ(m, n, a[end], lambda, Thetas)
+end
+
+#forward pass with cross entropy loss using target probability distribution per row in a batch
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, targets::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss(), kwargs...)
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
+
+	calcFinalOut!(loss_type, a[end], targets)
+
+	m = size(a[end], 1)
+	J = calcJ(m, a[end], lambda, Thetas)
+end
+
+#forward pass with cross entropy loss using target probability distribution for a single example
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, x::Vector{Float32}, targets::Vector{Float32}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss(), kwargs...) where N
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, x, resLayers; activation_list = activation_list, kwargs...)
+
+	calcFinalOut!(loss_type, a[end], targets)
+
+	J = a[end][1]
+	iszero(lambda) || (J += lambda*calculate_l2(Thetas) / 2)
 end
 
 function predict!(Thetas, biases, X, a::Vector{Array{Float32, N}}, resLayers::Int64 = 0; kwargs...) where N
@@ -1533,6 +1642,160 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
+
+#batch backprop with distribution targets using cross entropy loss
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, targets::Matrix{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss(), input_orientation::Char = 'N') where I <: Integer
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert all(h == hidden_layers[1] for h in hidden_layers) "hidden layers do not share a dimension" 
+	end
+
+	#Setup some useful variables
+	(m, input_size) = get_input_dims(X, input_orientation)
+	(m2, output_size) = size(a[end])
+	
+	@assert m == m2
+
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+	fillAs!(a, biases, m)
+
+	gemm!(input_orientation, 'T', 1.0f0, X, Thetas[1], 1.0f0, a[1])
+
+	if length(Thetas) > 1
+		if activation_list[1]
+			if D == 0.0f0
+				tanhGradient!(a[1], tanh_grad_z[1])
+			else
+				tanhGradient!(a[1], tanh_grad_z[1], D)
+			end
+		else
+			noactivationGradient!(a[1], tanh_grad_z[1], D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemm!('N', 'T', 1.0f0, a[i-1], Thetas[i], 1.0f0, a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
+				
+				if activation_list[i]
+					if D == 0.0f0
+						tanhGradient!(a[i], tanh_grad_z[i])
+					else
+						tanhGradient!(a[i], tanh_grad_z[i], D)
+					end
+				else
+					noactivationGradient!(a[i], tanh_grad_z[i], D)
+				end
+			end
+		end
+
+		gemm!('N', 'T', 1.0f0, a[end-1], Thetas[end], 1.0f0, a[end])
+	end
+	
+	calcDeltaOut!(loss_type, deltas[end], a[end], targets)	
+
+	i = num_hidden
+	
+	while i >= 1
+		gemm!('T', 'N', 1.0f0/m, deltas[i+1], a[i], lambda/m, Theta_grads[i+1])
+		gemv!('T', 1.0f0/m, deltas[i+1], onesVec, 0.0f0, Bias_grads[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0))
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 1.0f0, deltas[i])
+		else
+			gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i])
+		end
+		finishDelta!(deltas[i], tanh_grad_z[i])
+		i = i - 1
+	end
+
+	gemm!('T', input_orientation, 1.0f0/m, deltas[1], X, lambda/m, Theta_grads[1])
+	gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1])
+end
+
+#Single example backprop with distribution targets using cross entropy loss
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, x::Vector{Float32}, targets::Vector{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Vector{Float32}, 1}, a::Array{Vector{Float32}, 1}, deltas::Array{Vector{Float32}, 1}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss()) where I <: Integer
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert all(h == hidden_layers[1] for h in hidden_layers) "hidden layers do not share a dimension" 
+	end
+
+	input_size = length(x)
+	output_size = length(a[end])
+	
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+	fillAs!(a, biases)
+
+	gemv!('N', 1.0f0, Thetas[1], x, 1.0f0, a[1])
+
+	if length(Thetas) > 1
+		if activation_list[1]
+			if D == 0.0f0
+				tanhGradient!(a[1], tanh_grad_z[1])
+			else
+				tanhGradient!(a[1], tanh_grad_z[1], D)
+			end
+		else
+			noactivationGradient!(a[1], tanh_grad_z[1], D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemv!('N', 1.0f0, Thetas[i], a[i-1], 1.0f0, a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
+				
+				if activation_list[i]
+					if D == 0.0f0
+						tanhGradient!(a[i], tanh_grad_z[i])
+					else
+						tanhGradient!(a[i], tanh_grad_z[i], D)
+					end
+				else
+					noactivationGradient!(a[i], tanh_grad_z[i], D)
+				end
+			end
+		end
+
+		gemv!('N', 1.0f0, Thetas[end], a[end-1], 1.0f0, a[end])
+	end
+	
+	calcDeltaOut!(loss_type, deltas[end], a[end], targets)	
+
+	i = num_hidden
+	
+	while i >= 1
+		gemm!('N', 'T', 1.0f0, deltas[i+1], a[i], lambda, Theta_grads[i+1])
+		copy!(Bias_grads[i+1], deltas[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0))
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			gemv!('T', 1.0f0, Thetas[i+1], deltas[i+1], 1.0f0, deltas[i])
+		else
+			gemv!('T', 1.0f0, Thetas[i+1], deltas[i+1], 0.0f0, deltas[i])
+		end
+		finishDelta!(deltas[i], tanh_grad_z[i])
+		i = i - 1
+	end
+
+	gemm!('N', 'T', 1.0f0, deltas[1], x, lambda, Theta_grads[1])
+	copy!(Bias_grads[1], deltas[1])
+end
 
 function nnCostFunctionAdv(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::Vector{Int}, advX::Matrix{Float32}, X::Matrix{Float32}, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32})
 

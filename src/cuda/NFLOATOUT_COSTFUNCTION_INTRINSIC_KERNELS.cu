@@ -372,6 +372,11 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
+	// Single block version
+	__global__ void crossEntropyDist(int n, float* a, float* target_dist) {
+		// place holder for future implementation of cross entropy with distribution targets instead of single index
+	}
+
 	__global__ void crossEntropyBatch(int N, int M, float* A, int* target_indices) {
 		extern __shared__ float sdata[];
 
@@ -430,6 +435,9 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
+	__global__ void crossEntropyDistBatch(int N, int M, float* A, float* target_dists) {
+		// place holder for future implementation of cross entropy with distribution targets instead of single index
+	}
 
 	//single block version
 	__global__ void crossEntropyDeriv(int N, float *deltas, const float *a, int idx)
@@ -553,6 +561,14 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		}
 	}
 
+	__global__ void crossEntropyDistDeriv(int N, float *deltas, const float *a, float* target_dist) {
+		// place holder for future implementation of cross entropy derivative with distribution targets instead of single index
+	}
+
+	__global__ void crossEntropyDistBatchDeriv(int N, int M, float* deltas, const float* A, const float* target_dists) {
+		// place holder for future implementation of cross entropy derivative with distribution targets instead of single index
+	}
+	
 	__global__ void absErrDeriv(int N, float *A, float *Y, float *out)
     {	
 		int i = blockIdx.x * blockDim.x + threadIdx.x;	

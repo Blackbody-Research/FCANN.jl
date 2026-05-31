@@ -1,3 +1,44 @@
+"""
+    module FCANN
+
+Fast Convolutional Artificial Neural Network (FCANN) Julia package for training neural networks
+with support for multiple cost functions, regularization techniques, and both CPU/GPU backends.
+
+This package provides high-level training functions that automatically handle:
+- Weight initialization with specified regularization
+- ADAMAX optimization algorithm
+- Gradient checking utilities
+- Performance benchmarking tools
+
+## Backends
+- `:CPU` - Standard CPU-based training (always available)
+- `:GPU` - CUDA-accelerated training (requires NVIDIA GPU and CUDA toolkit)
+
+## Usage Example
+```julia
+using FCANN
+
+# Set backend (CPU or GPU)
+setBackend(:CPU)
+
+# Define network architecture
+M = 784              # Input dimension
+hidden = [128, 64]   # Hidden layer sizes  
+O = 10               # Output dimension
+
+# Initialize parameters
+params = initializeParams(M, hidden, O)
+
+# Prepare training data
+X, Y = preptraining(inputs, targets)
+
+# Train the network
+result = ADAMAXTrainNNCPU(X, Y, params; N=100)
+```
+
+## Exported Functions
+See individual function documentation for detailed usage.
+"""
 module FCANN
 
 using Statistics
@@ -18,6 +59,26 @@ global backendList = [:CPU]
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
 include("column_selection_anneal.jl")
 
+"""
+    requestCostFunctions() -> Nothing
+
+Display a list of all available cost functions that can be used for training.
+
+The cost functions determine how the neural network measures error between
+its predictions and the target values. Each cost function has different
+properties regarding sensitivity to outliers and optimization behavior.
+
+## Example
+```julia
+requestCostFunctions()
+# Output:
+# Available cost functions are: 
+# absErr
+# sqErr
+# normLogErr
+# ...
+```
+"""
 function requestCostFunctions()
     @assert (length(costFuncList) == length(costFuncNames))
     @assert (length(costFuncList) == length(costFuncDerivsList))
@@ -26,6 +87,28 @@ function requestCostFunctions()
     println("------------------------------")
 end
 
+"""
+    setBackend(b::Symbol) -> Symbol
+
+Set the computation backend for training and evaluation.
+
+## Arguments
+- `b::Symbol` - The backend to use (:CPU or :GPU)
+
+## Returns
+The currently selected backend symbol.
+
+## Notes
+- GPU backend requires: NVIDIA GPU, CUDA toolkit installed, nvcc in system PATH
+- If GPU is not available, the function will print an error message
+- Default backend is :CPU
+
+## Example
+```julia
+setBackend(:GPU)  # Attempt to use GPU (if available)
+setBackend(:CPU)  # Use CPU backend
+```
+"""
 function setBackend(b::Symbol)
     if in(b, backendList)
         global backend = b
@@ -36,12 +119,58 @@ function setBackend(b::Symbol)
     return backend
 end
 
+"""
+    getBackend() -> Symbol
+
+Get the currently selected computation backend.
+
+## Returns
+The current backend symbol (:CPU or :GPU).
+"""
 function getBackend()
     println(string("Backend is set to ", backend))
     backend
 end
 
 #normal gradient check with cost functions with target outputs matching size of output layer (or 2x for log cost functions)
+"""
+    checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...) -> Float64
+
+Numerically verify gradients computed by the network using finite differences.
+
+This function compares analytical gradients (computed via backpropagation) with
+numerical gradients (computed via finite differences) to verify correct implementation.
+
+## Arguments
+- `lambda::AbstractFloat` - Regularization strength (default: 0.0)
+
+## Keyword Arguments
+- `M::Integer` - Input dimension (default: 10)
+- `hidden::Vector{Integer}` - Hidden layer sizes (default: [5])
+- `O::Integer` - Output dimension (default: 3)
+- `batchSize::Integer` - Number of training examples (default: 100)
+- `N::Integer` - Number of epochs for training (default: 10)
+- `costFunc::String` - Cost function name (default: "absErr")
+- `hidden_layers::Vector{Integer}` - Alternative specification of hidden layers
+- `activation_list::Vector{Bool}` - Activation functions per layer
+- `printmsg::Bool` - Print comparison results (default: true)
+- `input_orientation::Char` - Data layout ('N' for normal, 'T' for transposed)
+
+## Returns
+The maximum absolute difference between numerical and analytical gradients.
+
+## Example
+```julia
+# Basic gradient check with default parameters
+err = checkNumGrad()
+
+# Gradient check with custom architecture
+err = checkNumGrad(0.1f0; hidden=[32, 16], costFunc="sqErr")
+
+# Gradient check for specific cost function
+err = checkNumGrad(1.0f0, "absErr"; printmsg=true)
+```
+"""
 function checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
 end
@@ -61,6 +190,47 @@ function checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
 end
 
+#gradient check for cross entropy loss with distribution targets
+function checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...)
+    eval(Symbol("checkNumGrad", backend))(lambda, Val(:dist); kwargs...)
+end
+
+"""
+    benchmarkDevice(;kwargs...) -> Nothing
+
+Benchmark training performance on the currently selected device (CPU or GPU).
+
+This function measures throughput across various network sizes and batch sizes,
+outputting results to a CSV file for analysis.
+
+## Keyword Arguments
+- `costFunc::String` - Cost function to benchmark (default: "absErr")
+- `dropout::AbstractFloat` - Dropout rate (default: 0.0)
+- `multi::Bool` - Use multiple workers for parallel training (default: false)
+- `numThreads::Integer` - Number of BLAS threads (default: 0, auto-select)
+- `minN::Integer` - Minimum number of neurons to benchmark (default: 32)
+- `maxN::Integer` - Maximum number of neurons to benchmark (default: 2048)
+
+## Output
+Creates a CSV file with columns:
+- Neurons, Batch Size, GFLOPS, Time Per Epoch
+
+The filename includes device name and configuration details.
+
+## Example
+```julia
+# Benchmark default configuration
+benchmarkDevice()
+
+# Benchmark GPU performance with dropout
+setBackend(:GPU)
+benchmarkDevice(costFunc="absErr", dropout=0.5f0)
+
+# Benchmark CPU with multiple threads
+setBackend(:CPU)
+benchmarkDevice(numThreads=4, multi=true)
+```
+"""
 function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, numThreads = 0, minN = 32, maxN = 2048)
     batchSizes = [512, 1024, 2048, 4096, 8192]
     Ns = filter(a -> (a >= minN) && (a <= maxN), [32, 64, 128, 256, 512, 1024, 2048])
@@ -102,6 +272,34 @@ function benchmarkDevice(;costFunc = "absErr", dropout = 0.0f0, multi=false, num
     writedlm(string(deviceName, "_", trainName, "$(threadStr)_$(multiStr)trainingBenchmark.csv"), [header; body], ',')
 end
 
+"""
+    benchmarkCPUThreads(;kwargs...) -> Nothing
+
+Benchmark CPU training performance across different numbers of BLAS threads.
+
+This function measures how training throughput scales with the number of
+parallel threads used for linear algebra operations.
+
+## Keyword Arguments
+- `costFunc::String` - Cost function to benchmark (default: "absErr")
+- `dropout::AbstractFloat` - Dropout rate (default: 0.0)
+- `Ns::Vector{Integer}` - Network sizes to benchmark (default: [16, 32, 64, 128, 256])
+
+## Output
+Creates a CSV file with columns:
+- Neurons, Batch Size, GFLOPS for each thread count
+
+The filename includes CPU name and configuration.
+
+## Example
+```julia
+# Benchmark CPU threading performance
+benchmarkCPUThreads()
+
+# Benchmark specific network sizes
+benchmarkCPUThreads(Ns=[32, 64, 128])
+```
+"""
 function benchmarkCPUThreads(;costFunc = "absErr", dropout = 0.0f0, Ns = [16, 32, 64, 128, 256])
     setBackend(:CPU)
     batchSizes = 2 .^(5:12)
@@ -125,12 +323,31 @@ function benchmarkCPUThreads(;costFunc = "absErr", dropout = 0.0f0, Ns = [16, 32
 
     trainName = (dropout == 0) ? costFunc : string(dropout, "_dropout_", costFunc)
 
-
     writedlm(string(cpuname, "_", trainName, "_BLASthreadBenchmark.csv"), [header; body], ',')
 end
-        
+         
 export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput, calcfeatureimpact, ADAMAXTrainNNCPU, traintrials, preptraining, LossType, OutputIndex, CrossEntropyLoss
 
+"""
+    __init__() -> Nothing
+
+Module initialization function that sets up CUDA environment when GPU backend
+is available. This function is called automatically when the module is loaded.
+
+This function:
+1. Checks for CUDA toolkit availability
+2. Initializes CUDA devices if present
+3. Compiles and loads CUDA kernels
+4. Sets up BLAS handles
+5. Verifies GPU gradient computation correctness
+
+If GPU initialization fails, the module falls back to CPU-only mode with an
+informative error message.
+
+## Notes
+- This function is called automatically on module load
+- Users typically don't need to call this directly
+"""
 function __init__()
     #get cuda toolkit versions if any
     println("Checking for cuda toolkit versions")
@@ -292,6 +509,9 @@ using PrecompileTools
         checkNumGrad(0f0, 'N'; use_values = true, printmsg = false)
         checkNumGrad(0f0, 'T', printmsg = false)
         checkNumGrad(0f0, 'T'; use_values = true, printmsg = false)
+        checkNumGrad(0f0, Val(:dist), printmsg = false)
+        checkNumGrad(0f0, Val(:dist); single_example = true, printmsg = false)
+        checkNumGrad(1.0f0, Val(:dist), printmsg = false)
         testTrain(M, hidden, O, batchSize, N; writeFile = false, numThreads = 0, printProg = false, print_anything=false)
     end
 end

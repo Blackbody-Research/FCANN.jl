@@ -1,8 +1,4 @@
-#include minibatch stochastic gradient descent ADAMAX algorithm which includes
-#function to read train and test sets with a specified name.  Forming the batches
-#is also part of the ADAMAX algorithm
 using Distributed
-
 include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
 include(joinpath("cuda", "ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl"))
 
@@ -427,8 +423,45 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 	end
 end
 
-#train a network with a variable number of layers for a given target number
-#of parameters.
+"""
+    evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha = .002f0, R = 0.1f0, printProg = false, costFunc = "absErr", binInput = false, reslayers=0)
+
+Train neural networks with various architectures to find the optimal number of layers
+for a given target number of parameters.
+
+This function systematically evaluates different network architectures by training
+networks with varying numbers of hidden layers while maintaining approximately the
+same total number of parameters. This helps identify the ideal depth-to-width tradeoff.
+
+## Arguments
+- `name::String` - Name prefix for training and test set files
+- `N::Integer` - Number of epochs to train each network
+- `batchSize::Integer` - Number of examples in each minibatch
+- `Plist::Vector{Int}` - List of target parameter counts to evaluate
+
+## Keyword Arguments
+- `layers::Vector{Int}` - List of layer counts to try (default: [2, 4, 6, 8, 10])
+- `alpha::Float32` - ADAMAX learning rate hyperparameter (default: 0.002f0)
+- `R::Float32` - ADAMAX decay rate hyperparameter (default: 0.1f0)
+- `printProg::Bool` - Whether to print training progress (default: false)
+- `costFunc::String` - Cost function name (default: "absErr")
+- `binInput::Bool` - Whether input data is in binary format (default: false)
+- `reslayers::Integer` - Number of residual connections (default: 0)
+
+## Output
+Creates a CSV file with columns:
+- Layers, Num Params, Target Num Params, H (hidden size), Train Error, Test Error,
+  [optional: Train CostFunc2 Error, Test CostFunc2 Error], Median GFLOPS
+
+The function saves results to `evalLayers_<name>.csv` and returns the body data.
+
+## Example
+```julia
+# Evaluate architectures with target parameter counts of 1000 and 5000
+Plist = [1000, 5000]
+evalLayers("mydata", 100, 256, Plist)
+```
+"""
 function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha = .002f0, R = 0.1f0, printProg = false, costFunc = "absErr", binInput = false, reslayers=0)
 	println("reading and converting training data")
 	X, Xtest, Y, Ytest = if binInput

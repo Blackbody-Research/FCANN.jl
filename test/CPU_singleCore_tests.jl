@@ -98,6 +98,24 @@ err = checkNumGrad(0f0, 'T')
 println("TEST PASSED")
 println()
 
+println("Cross Entropy Loss with distribution targets (batch)")
+err = checkNumGrad(0f0, Val(:dist))
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
+println("Cross Entropy Loss with distribution targets (single example)")
+err = checkNumGrad(0f0, Val(:dist); single_example = true)
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
+println("Cross Entropy Loss with distribution targets (lambda=1)")
+err = checkNumGrad(1.0f0, Val(:dist))
+@test(err < 0.015)
+println("TEST PASSED")
+println()
+
 #basic test train with 1 input, 1 output, 1 neuron
 println("Testing simple ANN training version 1")
 println("-------------------------------------")

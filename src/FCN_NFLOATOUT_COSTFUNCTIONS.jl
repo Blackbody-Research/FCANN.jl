@@ -914,6 +914,7 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 
 	J = a[end][1]
 	iszero(lambda) || (J += lambda*calculate_l2(Thetas) / 2)
+	return J
 end
 
 function predict!(Thetas, biases, X, a::Vector{Array{Float32, N}}, resLayers::Int64 = 0; kwargs...) where N

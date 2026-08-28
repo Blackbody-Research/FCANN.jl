@@ -266,14 +266,18 @@ end
 
 abstract type LossType end
 struct OutputIndex <: LossType end
-struct CrossEntropyLoss <: LossType end
+struct CrossEntropyLoss <: LossType
+	beta::Float32
+	CrossEntropyLoss(beta::Float32=0.0f0) = new(beta)
+end
 
 calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, index) where {T<:Real, N} = calcDeltaOut!(deltas, index)
 calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, indices::Vector{I}, values::Vector{T}) where {T<:Real, N, I<:Integer} = calcDeltaOut!(deltas, indices, values)
 
 #perform the calculation of a softmax derivative where the maximum value of each example is subtracted before computing the softmax to ensure numerical stability.  this case is for a single example so the deltas and activations are vectors rather than matrices. there is also only a single index for the output since there is only one example
-function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, index::Integer) where {T<:Real}
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, index::Integer) where {T<:Real}
 	n = length(a)
+	beta = loss.beta
 	
 	#compute maximum activation value
 	max_value = maximum(a)
@@ -289,6 +293,27 @@ function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, inde
 	end
 
 	deltas ./= denominator
+
+	# Add entropy regularization gradient
+	# dH/dz_i = -p_i * (H(p) + log(p_i))
+	# where H(p) = -sum_j p_j * log(p_j)
+	if beta > zero(T)
+		entropy = zero(T)
+		@inbounds for k in 1:n
+			p_k = deltas[k]
+			if p_k > zero(T)
+				entropy -= p_k * log(p_k)
+			end
+		end
+		@inbounds for k in 1:n
+			p_k = deltas[k]
+			if p_k > zero(T)
+				log_p_k = log(p_k)
+				deltas[k] -= beta * p_k * (entropy + log_p_k)
+			end
+		end
+	end
+
 	deltas[index] -= one(T)
 	return deltas
 end
@@ -362,8 +387,27 @@ function crossEntropyDeltaOut!(deltas::Matrix{T}, index::Integer) where {T<:Real
 	end
 end
 
-function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index) where {T<:Real} 
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index) where {T<:Real} 
 	crossEntropyDeltaOut!(deltas, a)
+	beta = loss.beta
+	if beta > zero(T)
+		entropy = zero(T)
+		@inbounds for row in 1:size(deltas, 1)
+			for col in 1:size(deltas, 2)
+				p = deltas[row, col]
+				if p > zero(T)
+					entropy -= p * log(p)
+				end
+			end
+		end
+		@inbounds for row in 1:size(deltas, 1)
+			p = deltas[row, index]
+			if p > zero(T)
+				log_p = log(p)
+				deltas[row, index] -= beta * p * (entropy + log_p)
+			end
+		end
+	end
 	crossEntropyDeltaOut!(deltas, index)
 end
 

@@ -299,18 +299,14 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, 
 	# where H(p) = -sum_j p_j * log(p_j)
 	if beta > zero(T)
 		entropy = zero(T)
-		@inbounds for k in 1:n
+		@inbounds @simd for k in 1:n
 			p_k = deltas[k]
-			if p_k > zero(T)
-				entropy -= p_k * log(p_k)
-			end
+			entropy -= p_k * (p_k > zero(T) ? log(p_k) : zero(T))
 		end
-		@inbounds for k in 1:n
+		@inbounds @simd for k in 1:n
 			p_k = deltas[k]
-			if p_k > zero(T)
-				log_p_k = log(p_k)
-				deltas[k] -= beta * p_k * (entropy + log_p_k)
-			end
+			log_p_k = log(max(p_k, eps(T)))
+			deltas[k] -= beta * p_k * (entropy + log_p_k)
 		end
 	end
 
@@ -392,20 +388,16 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, 
 	beta = loss.beta
 	if beta > zero(T)
 		entropy = zero(T)
-		@inbounds for row in 1:size(deltas, 1)
+		@inbounds @simd for row in 1:size(deltas, 1)
 			for col in 1:size(deltas, 2)
 				p = deltas[row, col]
-				if p > zero(T)
-					entropy -= p * log(p)
-				end
+				entropy -= p * (p > zero(T) ? log(p) : zero(T))
 			end
 		end
-		@inbounds for row in 1:size(deltas, 1)
+		@inbounds @simd for row in 1:size(deltas, 1)
 			p = deltas[row, index]
-			if p > zero(T)
-				log_p = log(p)
-				deltas[row, index] -= beta * p * (entropy + log_p)
-			end
+			log_p = log(max(p, eps(T)))
+			deltas[row, index] -= beta * p * (entropy + log_p)
 		end
 	end
 	crossEntropyDeltaOut!(deltas, index)

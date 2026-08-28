@@ -301,7 +301,7 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, 
 		entropy = zero(T)
 		@inbounds @simd for k in 1:n
 			p_k = deltas[k]
-			entropy -= p_k * (p_k > zero(T) ? log(p_k) : zero(T))
+			entropy -= p_k * log(max(p_k, eps(T)))
 		end
 		@inbounds @simd for k in 1:n
 			p_k = deltas[k]

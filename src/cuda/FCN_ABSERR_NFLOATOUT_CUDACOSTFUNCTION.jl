@@ -207,16 +207,16 @@ getTypes(x::NTuple{N, Any}) where N =  ntuple(i -> getTypes(x[i]), Val(N))
 
 function run_kernel(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	K = 16
-	threads = Cuint.((K, K))
-	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
+	threads = (Cuint(K), Cuint(K))
+	blocks = (Cuint(ceil(Int, N/K)), Cuint(ceil(Int, M/K)))
     cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, kwargs...)
     # cuCtxSynchronize()
 end
 
 function run_kernel_1D(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	(grid_size, block_size) = get_optimal_1d_launch_params(N)
-	threads = Cuint.((block_size,))
-	blocks = Cuint.((grid_size,))
+	threads = (Cuint(block_size),)
+	blocks = (Cuint(grid_size),)
     cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, kwargs...)
 end
 
@@ -224,15 +224,15 @@ function run_kernel_1D_index(kernel, N::Int64, inputs::Vararg{Any}; stream = CUs
 	(grid_size, block_size) = get_optimal_1d_launch_params(N)
 
 	shared_mem = block_size*2*sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts
-	threads = Cuint.((block_size,))
-	blocks = Cuint.((grid_size,))
+	threads = (Cuint(block_size),)
+	blocks = (Cuint(grid_size),)
 	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
 function run_kernel_1D_singleblock(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	block_size = max(nextpow(2, min(N, 1024)), 32)
-	threads = Cuint.((block_size,))
-	blocks = Cuint.((1,))
+	threads = (Cuint(block_size),)
+	blocks = (Cuint(1),)
 	shared_mem = block_size *sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts 
 	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end

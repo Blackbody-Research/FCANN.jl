@@ -201,7 +201,7 @@ function getTypes(x)
     end
 end
 
-function run_kernel(kernel, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	K = 16
 	threads = Cuint.((K, K))
 	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
@@ -209,14 +209,14 @@ function run_kernel(kernel, N::Int64, M::Int64, inputs...; stream = CUstream(C_N
     # cuCtxSynchronize()
 end
 
-function run_kernel_1D(kernel, N::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_1D(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	(grid_size, block_size) = get_optimal_1d_launch_params(N)
 	threads = Cuint.((block_size,))
 	blocks = Cuint.((grid_size,))
     cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, kwargs...)
 end
 
-function run_kernel_1D_index(kernel, N::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_1D_index(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	(grid_size, block_size) = get_optimal_1d_launch_params(N)
 
 	shared_mem = block_size*2*sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts
@@ -225,7 +225,7 @@ function run_kernel_1D_index(kernel, N::Int64, inputs...; stream = CUstream(C_NU
 	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
-function run_kernel_1D_singleblock(kernel, N::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_1D_singleblock(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	block_size = max(nextpow(2, min(N, 1024)), 32)
 	threads = Cuint.((block_size,))
 	blocks = Cuint.((1,))
@@ -233,7 +233,7 @@ function run_kernel_1D_singleblock(kernel, N::Int64, inputs...; stream = CUstrea
 	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
-function run_kernel_batch(kernel, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_batch(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	block_size = max(nextpow(2, min(M, 1024)), 32)
 	threads = Cuint(block_size)
 	blocks = Cuint(N)
@@ -241,17 +241,17 @@ function run_kernel_batch(kernel, N::Int64, M::Int64, inputs...; stream = CUstre
 	cuLaunchKernel(kernel, dim3(blocks), dim3(threads), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
-run_kernel_output(::OutputIndex, N::Int64, inputs...; kwargs...) = return nothing
-run_kernel_output(::CrossEntropyLoss, N::Int64, inputs...; kwargs...) = run_kernel_1D_singleblock(costFuncKs["crossEntropy"], N, inputs...; kwargs...)
-run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, inputs...; kwargs...) = run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
+run_kernel_output(::OutputIndex, N::Int64, inputs::Vararg{Any}; kwargs...) = return nothing
+run_kernel_output(::CrossEntropyLoss, N::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_1D_singleblock(costFuncKs["crossEntropy"], N, inputs...; kwargs...)
+run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
 function run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, activations::CUDAArray, indices::CUDAArray, values::CUDAArray; kwargs...)
 	run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, activations, indices; kwargs...)
 	run_kernel(rowMul, N, M, activations, values; kwargs...)
 end
 
-run_kernel_deriv(::OutputIndex, N::Int64, inputs...; kwargs...) = run_kernel_1D(costFuncDerivKs["outputIndex"], N, inputs...; kwargs...)
-run_kernel_deriv(::CrossEntropyLoss, N::Int64, inputs...; kwargs...) = run_kernel_1D_singleblock(costFuncDerivKs["crossEntropy"], N, inputs...; kwargs...)
-run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, inputs...; kwargs...) = run_kernel_batch(costFuncDerivKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
+run_kernel_deriv(::OutputIndex, N::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_1D(costFuncDerivKs["outputIndex"], N, inputs...; kwargs...)
+run_kernel_deriv(::CrossEntropyLoss, N::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_1D_singleblock(costFuncDerivKs["crossEntropy"], N, inputs...; kwargs...)
+run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_batch(costFuncDerivKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
 
 #note this specialized version of cross entropy loss also has a value array with a scalar multiple per row that needs to be applied to the derivative output on a per row basis
 function run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, deltas::CUDAArray, activations::CUDAArray, indices::CUDAArray, values::CUDAArray; kwargs...) 
@@ -690,7 +690,7 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 end
 
 #note this method will be used for the cross entropy batch loss which requires a different type of kernel launch then the usual batch forward passes, if output values are also included then it will be used for the version of cross entropy loss with a scaling factor on the output error per example
-function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, outputs...; lambda::Float32 = 0f0, D::Float32 = 0.0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, outputs::Vararg{Any}; lambda::Float32 = 0f0, D::Float32 = 0.0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list = activation_list, input_orientation = input_orientation)
 	#launch across output data size rather than output layer size
 	run_kernel_output(CrossEntropyLoss(), m, output_layer_size, d_a[end], outputs...)
@@ -1108,7 +1108,7 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 end
 
 #note that this will be used for the derivative of the cross entropy loss in a batch context
-function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, outputs...; lambda::Float32 = 0f0, D::Float32 = 0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, outputs::Vararg{Any}; lambda::Float32 = 0f0, D::Float32 = 0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	num_hidden = length(hidden_layers)
 	loss_type = CrossEntropyLoss()

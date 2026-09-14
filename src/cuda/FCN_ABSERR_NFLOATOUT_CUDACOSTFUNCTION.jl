@@ -193,19 +193,23 @@ function switch_device(d::Int64)
 	return current_device
 end
 
-function getTypes(x)
-    if isbits(x)
-        typeof(x)
-    elseif typeof(x) <: NVIDIALibraries.DeviceArray.CUDAArray
-       Ptr{x.element_type}
-    end
-end
+# function getTypes(x)
+#     if isbits(x)
+#         typeof(x)
+#     elseif typeof(x) <: NVIDIALibraries.DeviceArray.CUDAArray
+#        Ptr{x.element_type}
+#     end
+# end
+
+getTypes(x) = typeof(x)
+getTypes(x::NVIDIALibraries.DeviceArray.CUDAArray) = Ptr{x.element_type}
+getTypes(x::NTuple{N, Any}) where N =  ntuple(i -> getTypes(x[i]), Val(N))
 
 function run_kernel(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	K = 16
 	threads = Cuint.((K, K))
 	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
-    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, kwargs...)
+    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, kwargs...)
     # cuCtxSynchronize()
 end
 
@@ -213,7 +217,7 @@ function run_kernel_1D(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(
 	(grid_size, block_size) = get_optimal_1d_launch_params(N)
 	threads = Cuint.((block_size,))
 	blocks = Cuint.((grid_size,))
-    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, kwargs...)
+    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, kwargs...)
 end
 
 function run_kernel_1D_index(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
@@ -222,7 +226,7 @@ function run_kernel_1D_index(kernel, N::Int64, inputs::Vararg{Any}; stream = CUs
 	shared_mem = block_size*2*sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts
 	threads = Cuint.((block_size,))
 	blocks = Cuint.((grid_size,))
-	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
+	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
 function run_kernel_1D_singleblock(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
@@ -230,7 +234,7 @@ function run_kernel_1D_singleblock(kernel, N::Int64, inputs::Vararg{Any}; stream
 	threads = Cuint.((block_size,))
 	blocks = Cuint.((1,))
 	shared_mem = block_size *sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts 
-	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
+	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
 function run_kernel_batch(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
@@ -238,7 +242,7 @@ function run_kernel_batch(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; strea
 	threads = Cuint(block_size)
 	blocks = Cuint(N)
 	shared_mem = threads*sizeof(Float32) + 4
-	cuLaunchKernel(kernel, dim3(blocks), dim3(threads), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
+	cuLaunchKernel(kernel, dim3(blocks), dim3(threads), (Cint, Cint, getTypes(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
 run_kernel_output(::OutputIndex, N::Int64, inputs::Vararg{Any}; kwargs...) = return nothing

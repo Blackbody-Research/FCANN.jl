@@ -750,7 +750,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 
 
 
-	function findMin(f, tau, p1, p3, p2...)
+	function findMin(f, tau, p1, p3, p2::Vararg{Any})
 		x1 = p1[1]
 		c1 = p1[2]
 		x3 = p3[1]
@@ -1069,7 +1069,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 	end
 
 
-	function findMin(f, tau, p1, p3, p2...)
+	function findMin(f, tau, p1, p3, p2::Vararg{Any})
 		x1 = p1[1]
 		c1 = p1[2]
 		x3 = p3[1]

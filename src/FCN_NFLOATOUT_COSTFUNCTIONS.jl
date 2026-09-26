@@ -387,24 +387,47 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, 
 	crossEntropyDeltaOut!(deltas, a)
 	beta = loss.beta
 	if beta > zero(T)
-		entropy = zero(T)
-		@inbounds @simd for row in 1:size(deltas, 1)
-			for col in 1:size(deltas, 2)
+		#per-example (row) entropy H_r = -sum_c p_rc*log(p_rc), applied to every class of that row
+		#(consistent with the batch forward loss which includes beta*H_r per example and with the
+		#single-example (m=1) calcDeltaOut! so the GPU kernel can mirror this exactly)
+		#rows are independent so entropy is a per-row scalar - no allocation
+		@inbounds for row in 1:size(deltas, 1)
+			entropy = zero(T)
+			@simd for col in 1:size(deltas, 2)
 				p = deltas[row, col]
-				entropy -= p * (p > zero(T) ? log(p) : zero(T))
+				entropy -= p * log(max(p, eps(T))) 
 			end
-		end
-		@inbounds @simd for row in 1:size(deltas, 1)
-			p = deltas[row, index]
-			log_p = log(max(p, eps(T)))
-			deltas[row, index] -= beta * p * (entropy + log_p)
+			@simd for col in 1:size(deltas, 2)
+				p = deltas[row, col]
+				log_p = log(max(p, eps(T)))
+				deltas[row, col] -= beta * p * (entropy + log_p)
+			end
 		end
 	end
 	crossEntropyDeltaOut!(deltas, index)
 end
 
-function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:Real, I<:Integer} 
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:Real, I<:Integer} 
 	crossEntropyDeltaOut!(deltas, a)
+	beta = loss.beta
+	if beta > zero(T)
+		#per-example (row) entropy H_r = -sum_c p_rc*log(p_rc) is applied to every class of that
+		#row (consistent with the batch forward loss, which includes beta*H_r per example, and with
+		#the GPU crossEntropyBatchDerivBeta kernel); the per-row values are then applied to the
+		#entire row as in crossEntropyDeltaOut!(deltas, indices, values).  No allocation.
+		@inbounds for row in 1:size(deltas, 1)
+			entropy = zero(T)
+			@simd for col in 1:size(deltas, 2)
+				p = deltas[row, col]
+				entropy -= p * log(max(p, eps(T)))
+			end
+			@simd for col in 1:size(deltas, 2)
+				p = deltas[row, col]
+				log_p = log(max(p, eps(T)))
+				deltas[row, col] -= beta * p * (entropy + log_p)
+			end
+		end
+	end
 	crossEntropyDeltaOut!(deltas, indices, values)
 end
 
@@ -461,16 +484,26 @@ function calcFinalOut!(::OutputIndex, a, output)
 end
 
 #compute the cross entropy loss of the softmax of a for a single example where the desired output is given by index
-function calcFinalOut!(::CrossEntropyLoss, a::Vector{T}, index::Integer) where T<:AbstractFloat
+#the entropy regularization term (beta*H, where beta = CrossEntropyLoss.beta) is included in the loss to stay
+#consistent with the gradient computed by calcDeltaOut!(CrossEntropyLoss, ...)
+function calcFinalOut!(loss::CrossEntropyLoss, a::Vector{T}, index::Integer) where T<:AbstractFloat
+	beta = getfield(loss, :beta)
 	m = maximum(a)
 	s = zero(T)
-	@inbounds @simd for i in eachindex(a)
-		h = a[i] - m
-		x = exp(h)
-		s += x
-		a[i] = h * (i == index)
+	@inbounds for i in eachindex(a)
+		s += exp(a[i] - m)
 	end
-	a[index] = -a[index] + log(s) 
+	H = zero(T)
+	if beta > zero(T)
+		@inbounds for i in eachindex(a)
+			p = exp(a[i] - m)/s
+			H -= p * log(max(p, eps(T)))
+		end
+	end
+	@inbounds for i in eachindex(a)
+		a[i] = (a[i] - m) * (i == index)
+	end
+	a[index] = -a[index] + log(s) + beta * H
 end
 
 #compute the cross entropy loss of the softmax of a for a single example where the desired output is a probability distribution
@@ -488,8 +521,11 @@ function calcFinalOut!(::CrossEntropyLoss, a::Vector{T}, targets::Vector{T}) whe
 end
 
 #compute the cross entropy loss of the softmax of a for multiple examples contained in the rows of a and the elements of indices
-function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, index::Integer) where {T<:AbstractFloat}
-	(m, n) = size(a)
+#entropy regularization (beta*H) is included in the per-example loss to stay consistent with calcDeltaOut!(CrossEntropyLoss, ...)
+function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, index::Integer) where {T<:AbstractFloat}
+	m = size(a, 1)
+	n = size(a, 2)
+	beta = getfield(loss, :beta)
 	@inbounds @simd for i in 1:m
 		max_value = zero(T)
 		for j in 1:n
@@ -498,17 +534,28 @@ function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, index::Integer) where {
 
 		s = zero(T)
 		for j in 1:n
-			h = a[i, j] - max_value
-			x = exp(h)
-			a[i, j] = h*(j == index)
-			s += x
+			s += exp(a[i, j] - max_value)
 		end
-		a[i, index] = -a[i, index] + log(s)
+
+		H = zero(T)
+		if beta > zero(T)
+			for j in 1:n
+				p = exp(a[i, j] - max_value)/s
+				H -= p * log(max(p, eps(T)))
+			end
+		end
+		for j in 1:n
+			a[i, j] = (a[i, j] - max_value)*(j == index)
+		end
+		a[i, index] = -a[i, index] + log(s) + beta * H
 	end
 end
 #compute the cross entropy loss of the softmax of a for multiple examples contained in the rows of a and the elements of indices
-function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}) where {T<:AbstractFloat, I<:Integer}
-	(m, n) = size(a)
+#entropy regularization (beta*H) is included in the per-example loss to stay consistent with calcDeltaOut!(CrossEntropyLoss, ...)
+function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}) where {T<:AbstractFloat, I<:Integer}
+	m = size(a, 1)
+	n = size(a, 2)
+	beta = getfield(loss, :beta)
 	@inbounds @simd for i in eachindex(indices)
 		max_value = zero(T)
 		for j in 1:n
@@ -517,12 +564,20 @@ function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}) whe
 
 		s = zero(T)
 		for j in 1:n
-			h = a[i, j] - max_value
-			x = exp(h)
-			a[i, j] = h*(j == indices[i])
-			s += x
+			s += exp(a[i, j] - max_value)
 		end
-		a[i, indices[i]] = -a[i, indices[i]] + log(s)
+
+		H = zero(T)
+		if beta > zero(T)
+			for j in 1:n
+				p = exp(a[i, j] - max_value)/s
+				H -= p * log(max(p, eps(T)))
+			end
+		end
+		for j in 1:n
+			a[i, j] = (a[i, j] - max_value)*(j == indices[i])
+		end
+		a[i, indices[i]] = -a[i, indices[i]] + log(s) + beta * H
 	end
 end
 
@@ -831,6 +886,37 @@ function forwardNOGRAD!(a::Vector{Array{Float32, N}}, thetas::Vector{Matrix{Floa
 end
 
 #calculate forward pass for dataset with an input and output matrix and a cost function that updates a matrix with the some function of the input and output element
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, y::Matrix{Float32}, lambda, a; kwargs...) -> Float32
+
+Compute the forward-pass cost (without computing parameter gradients) for an elementwise cost
+function applied to a matrix of target outputs ``y``.  This is the primary dispatch method for
+``nnCostFunctionNOGRAD`` and mirrors one backward pass of ``nnCostFunction`` without the gradient
+computation.
+
+## Extra positional arguments
+- ``Thetas`` - Vector of weight matrices, one per layer
+- ``biases`` - Vector of bias vectors, one per layer
+- ``input_layer_size`` - Number of input features
+- ``hidden_layers`` - Vector of hidden-layer sizes
+- ``X`` - Input data matrix (rows = examples for input_orientation = 'N')
+- ``y::Matrix{Float32}`` - Target output matrix matching the output layer size
+- ``lambda::Float32`` - L2 regularization strength
+- ``a`` - Pre-shaped activation vector (see form_activations)
+
+## Keyword arguments
+- ``costFunc::String`` - Elementwise cost function (default: "absErr")
+- ``resLayers::Int64`` - Residual connection period, 0 disables (default: 0)
+- ``activation_list::AbstractVector{Bool}`` - tanh activation per hidden layer
+- ``input_orientation::Char`` - 'N' = rows are examples, 'T' = columns are examples
+
+## Returns
+The mean cost ``J`` including the L2 term ``lambda * ||W||^2 / 2`` when ``lambda > 0``.
+
+See ``nnCostFunctionNOGRAD`` for the full list of methods.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 	#Setup some useful variables
 	m = input_orientation == 'N' ? size(X, 1) : size(X, 2)
@@ -852,6 +938,17 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #calculate forward pass for dataset with an input matrix, output vector, and output index indicator.  The function output is trying to match the values in the output vector per example at the output index given by the indicator
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, y::Vector{Float32}, output_indices::Vector, lambda, a; costFunc = "absErr", ...) -> Float32
+
+Forward cost for a cost function applied only at a per-example output index.  ``y`` holds the
+per-example target values and ``output_indices`` selects which output column of each example the
+cost is evaluated at.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, y::Vector{Float32}, output_indices::Vector{I}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N', kwargs...) where I <: Integer
 	#Setup some useful variables
 	m = input_orientation == 'N' ? size(X, 1) : size(X, 2)
@@ -867,6 +964,15 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(m, a[end], lambda, Thetas)
 end
 
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X, lambda, a; costFunc = "absErr", ...) -> Float32
+
+Forward cost for an autoencoder: the reconstruction target is the input ``X`` itself.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), kwargs...)
 	#Setup some useful variables
 	(m, n) = size(X)
@@ -887,6 +993,17 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #forward pass where the output gradient is either the output at a particular index or the cross entropy loss of the softmax of the output activations with a desired output index
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, hidden_layers, X, output::Union{Integer, Vector{Int}}, lambda, a; loss_type::LossType = OutputIndex(), ...) -> Float32
+
+Forward cost where the loss is either the output at a single (or per-example) index
+(``OutputIndex()``) or the cross entropy of the softmax of the outputs against that index
+(``CrossEntropyLoss(beta)``, with optional entropy regularization ``beta``).
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output::Union{Integer, Vector{I}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {I <: Integer, N}
 
 	num_hidden = length(hidden_layers)
@@ -898,6 +1015,16 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 	J = calcJ(a[end], output, lambda, Thetas)
 end
 
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, hidden_layers, X, output_index::Union{Integer, Vector{Int}}, output_value::Union{Float32, Vector{Float32}}, lambda, a; loss_type::LossType = OutputIndex(), ...) -> Float32
+
+Forward cost for an output-index loss with a per-example scalar multiplier ``output_value``
+(used by ``checkNumGrad(..., use_values = true)``).
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output_index::Union{Integer, Vector{I}}, output_value::Union{Float32, Vector{Float32}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {I <: Integer, N}
 
 	num_hidden = length(hidden_layers)
@@ -911,6 +1038,17 @@ end
 
 #forward pass for autoencoder: disambiguates the case where X::Matrix{Float32} and input_layer_size::Int64 are both present
 #this inlines the body of the autoencoder method to avoid recursive dispatch ambiguity
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, input_layer_size, hidden_layers, X::Matrix{Float32}, lambda, a; costFunc = "absErr", ...) -> Float32
+
+Autoencoder forward cost that disambiguates the case where both ``X::Matrix{Float32}`` and
+``input_layer_size::Int64`` are present; it inlines the autoencoder body to avoid recursive
+dispatch ambiguity.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, input_layer_size::Int64, hidden_layers, X::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), kwargs...)
 	#Setup some useful variables
 	(m, n) = size(X)
@@ -931,6 +1069,16 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #forward pass with cross entropy loss using target probability distribution per row in a batch
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, hidden_layers, X, targets::Matrix{Float32}, lambda, a; loss_type::LossType = CrossEntropyLoss(), ...) -> Float32
+
+Forward cost for cross entropy with per-row target probability distributions (distribution
+targets) in a batch.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, targets::Matrix{Float32}, lambda::Float32, a::Vector{Matrix{Float32}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss(), kwargs...)
 
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
@@ -942,6 +1090,15 @@ function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Ve
 end
 
 #forward pass with cross entropy loss using target probability distribution for a single example
+"""
+
+    nnCostFunctionNOGRAD(Thetas, biases, hidden_layers, x::Vector{Float32}, targets::Vector{Float32}, lambda, a; loss_type::LossType = CrossEntropyLoss(), ...) -> Float32
+
+Forward cost for cross entropy with a target probability distribution for a single example.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, x::Vector{Float32}, targets::Vector{Float32}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss(), kwargs...) where N
 
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, x, resLayers; activation_list = activation_list, kwargs...)
@@ -1121,6 +1278,38 @@ function get_input_dims(x::Vector, ::Char)
 	return m, input_size
 end
 
+"""
+
+    nnCostFunction(Thetas, biases, input_layer_size, hidden_layers, X, y::Matrix{Float32}, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; kwargs...) -> Nothing
+
+Compute the full backward pass (forward activations plus backpropagated gradients) for an
+Elementwise cost function applied to a matrix of target outputs ``y``.  This is the primary
+dispatch method for ``nnCostFunction``; it writes the parameter gradients in place.
+
+## Extra positional arguments
+- ``Theta_grads`` - Pre-allocated output for weight gradients (same shape as ``Thetas``)
+- ``Bias_grads`` - Pre-allocated output for bias gradients (same shape as ``biases``)
+- ``tanh_grad_z`` - Per-layer tanh derivative buffers (see form_tanh_grads)
+- ``a`` - Per-layer activation buffers (see form_activations)
+- ``deltas`` - Per-layer backpropagated error buffers (see form_activations)
+- ``onesVec`` - Onset vector of length m used to accumulate bias gradients
+
+All remaining positional inputs match the forward method documented under
+``nnCostFunctionNOGRAD``.
+
+## Keyword arguments
+- ``costFunc::String`` - Elementwise cost function (default: "absErr")
+- ``resLayers::Int64`` - Residual connection period, 0 disables (default: 0)
+- ``activation_list::AbstractVector{Bool}`` - tanh activation per hidden layer
+- ``input_orientation::Char`` - 'N' = rows are examples, 'T' = columns are examples
+
+## Returns
+Nothing (parameter gradients are written into ``Theta_grads`` and ``Bias_grads`` in place; the
+mean cost can be obtained with ``nnCostFunctionNOGRAD``).
+
+See ``nnCostFunction`` for the full list of methods.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::AbstractVector{I}, X, y::Matrix{Float32},lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N') where I <: Integer
 
 	num_hidden = length(hidden_layers)
@@ -1212,6 +1401,16 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
+"""
+
+    nnCostFunction(Thetas, biases, hidden_layers, X, y::Vector{Float32}, indices::Vector, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; costFunc = "absErr", ...) -> Nothing
+
+Backward pass for a cost function applied only at a per-example output index; gradients are
+zero everywhere except at the selected output column of each example.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, y::Vector{Float32}, indices::Vector{I}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N') where I <: Integer
 
 	num_hidden = length(hidden_layers)
@@ -1299,6 +1498,15 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
+"""
+
+    nnCostFunction(Thetas, biases, input_layer_size, hidden_layers, X::Matrix{Float32}, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; costFunc = "absErr", ...) -> Nothing
+
+Backward pass for an autoencoder: the reconstruction target is the input ``X`` itself.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, input_layer_size::Int, hidden_layers::AbstractVector{I}, X::Matrix{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N') where I <: Integer
 
 	num_hidden = length(hidden_layers)
@@ -1395,6 +1603,17 @@ end
 
 
 #output is either an index or list of indices.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
+"""
+
+    nnCostFunction(Thetas, biases, hidden_layers, X, output::Union{Integer, Vector{Int64}}, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; loss_type::LossType = OutputIndex(), ...) -> Nothing
+
+Backward pass where the loss is either the output at a single (or per-example) index
+(``OutputIndex()``) or the cross entropy of the softmax against that index
+(``CrossEntropyLoss(beta)``, with optional entropy regularization ``beta``).
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, output::Union{Integer, Vector{Int64}}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), input_orientation::Char = 'N') where I <: Integer
 	num_hidden = length(hidden_layers)
 
@@ -1493,6 +1712,16 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
 end
 
+"""
+
+    nnCostFunction(Thetas, biases, hidden_layers, X, output_indices::Vector{Int64}, output_values::Vector{Float32}, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; loss_type::LossType = OutputIndex(), ...) -> Nothing
+
+Backward pass for an output-index loss with a per-example scalar multiplier ``output_values``
+(used by ``checkNumGrad(..., use_values = true)``).
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, output_indices::Vector{Int64}, output_values::Vector{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), input_orientation::Char = 'N') where I <: Integer
 	num_hidden = length(hidden_layers)
 
@@ -1592,6 +1821,17 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 end
 
 #Single example cost function with output as an index.  Cost function is either the output at the index or the cross entropy loss of the softmax of the output vector with the desired output index
+"""
+
+    nnCostFunction(Thetas, biases, hidden_layers, x, output::Integer, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas; loss_type::LossType = OutputIndex(), ...) -> Nothing
+
+Backward pass for a single example where the output is an index (``OutputIndex()``) or the
+cross entropy of the softmax against that index (``CrossEntropyLoss(beta)``).  No ``onesVec``
+is needed in this form - bias gradients are copied directly from the deltas.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, x, output::Integer, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Vector{Float32}, 1}, a::Array{Vector{Float32}, 1}, deltas::Array{Vector{Float32}, 1}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex()) where I <: Integer
 	num_hidden = length(hidden_layers)
 
@@ -1681,6 +1921,16 @@ end
 
 
 #batch backprop with distribution targets using cross entropy loss
+"""
+
+    nnCostFunction(Thetas, biases, hidden_layers, X, targets::Matrix{Float32}, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas, onesVec; loss_type::LossType = CrossEntropyLoss(), ...) -> Nothing
+
+Backward pass for cross entropy with per-row target probability distributions (distribution
+targets) in a batch.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, X, targets::Matrix{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Matrix{Float32}, 1}, a::Array{Matrix{Float32}, 1}, deltas::Array{Matrix{Float32}, 1}, onesVec::Vector{Float32}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss(), input_orientation::Char = 'N') where I <: Integer
 	num_hidden = length(hidden_layers)
 
@@ -1760,6 +2010,15 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 end
 
 #Single example backprop with distribution targets using cross entropy loss
+"""
+
+    nnCostFunction(Thetas, biases, hidden_layers, x::Vector{Float32}, targets::Vector{Float32}, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas; loss_type::LossType = CrossEntropyLoss(), ...) -> Nothing
+
+Backward pass for cross entropy with a target probability distribution for a single example.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, x::Vector{Float32}, targets::Vector{Float32}, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Vector{Float32}, 1}, a::Array{Vector{Float32}, 1}, deltas::Array{Vector{Float32}, 1}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = CrossEntropyLoss()) where I <: Integer
 	num_hidden = length(hidden_layers)
 

@@ -132,64 +132,132 @@ function getBackend()
     backend
 end
 
-#normal gradient check with cost functions with target outputs matching size of output layer (or 2x for log cost functions)
+#gradient checks for the currently selected backend (see setBackend).  The first positional
+#argument selects which of the checkNumGrad methods is used; see the docstring for the full list.
 """
-    checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...) -> Float64
+    checkNumGrad(args...; kwargs...) -> Float64
 
 Numerically verify gradients computed by the network using finite differences.
 
-This function compares analytical gradients (computed via backpropagation) with
-numerical gradients (computed via finite differences) to verify correct implementation.
+`checkNumGrad` is polymorphic: it dispatches on the first positional argument to one of the
+methods below, each of which runs on the currently selected backend (CPU or GPU, see
+`setBackend`).  Every method computes both the analytical gradient (backpropagation) and the
+numerical gradient (central finite differences) and returns the relative normed difference
+between them.
 
-## Arguments
-- `lambda::AbstractFloat` - Regularization strength (default: 0.0)
+## Methods
+
+- `checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)` - elementwise cost functions whose
+  target outputs match the output layer size (or 2x for log-likelihood cost functions such as
+  `"normLogErr"` and `"cauchyLogErr"`).
+- `checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)` - gradient at a
+  single output index (`OutputIndex` loss), optionally with entropy-regularized cross
+  entropy via `loss_type = CrossEntropyLoss(beta)`.
+- `checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)` - a cost function applied only
+  at a per-example output index (the "index" variants, e.g. `"absErr"`, `"sqErr"`).
+- `checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)` - cross entropy loss in
+  a batch with per-example output indices, optionally with a per-example scalar value
+  (`use_values = true`).
+- `checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...)` - cross entropy loss with per-row
+  target probability distributions.
+
+`?checkNumGrad` displays each method's docstring in turn.
 
 ## Keyword Arguments
-- `M::Integer` - Input dimension (default: 10)
-- `hidden::Vector{Integer}` - Hidden layer sizes (default: [5])
-- `O::Integer` - Output dimension (default: 3)
-- `batchSize::Integer` - Number of training examples (default: 100)
-- `N::Integer` - Number of epochs for training (default: 10)
-- `costFunc::String` - Cost function name (default: "absErr")
-- `hidden_layers::Vector{Integer}` - Alternative specification of hidden layers
-- `activation_list::Vector{Bool}` - Activation functions per layer
-- `printmsg::Bool` - Print comparison results (default: true)
-- `input_orientation::Char` - Data layout ('N' for normal, 'T' for transposed)
+
+Common keyword arguments accepted by all methods (defaults may vary per method):
+
+- `lambda::Real` - L2 regularization strength (default: 0.0)
+- `m::Int` - Number of training examples (default: 1000, or 100 for batch index methods)
+- `hidden_layers::Vector{Int}` - Hidden layer sizes (default: [5, 5])
+- `resLayers::Int` - Residual connection period; 0 disables (default: 0)
+- `input_layer_size::Int` - Number of input features (default: 3)
+- `output_layer_size::Int` - Number of outputs (default: 2, or 5 for distribution targets)
+- `e::Float32` - Finite-difference step size (default: 1f-3)
+- `activation_list::Vector{Bool}` - Whether each hidden layer applies tanh activation
+- `printmsg::Bool` - Print the per-parameter numerical vs analytical comparison (default: true)
+- `input_orientation::Char` - Data layout: `'N'` = rows are examples, `'T'` = columns are examples
 
 ## Returns
-The maximum absolute difference between numerical and analytical gradients.
+
+The relative normed difference between the numerical and analytical gradients,
+`norm(numGrad - funcGrad)/norm(numGrad + funcGrad)`.  Small values (typically `< 0.015`) indicate
+the analytical gradient implementation is correct.
 
 ## Example
 ```julia
-# Basic gradient check with default parameters
+# Basic gradient check (elementwise absErr cost)
 err = checkNumGrad()
 
-# Gradient check with custom architecture
-err = checkNumGrad(0.1f0; hidden=[32, 16], costFunc="sqErr")
+# Squared error cost with L2 regularization
+err = checkNumGrad(0.1f0; costFunc = "sqErr")
 
-# Gradient check for specific cost function
-err = checkNumGrad(1.0f0, "absErr"; printmsg=true)
+# Cross entropy output index with entropy regularization (beta = 0.1)
+err = checkNumGrad(1, 0.0f0; loss_type = CrossEntropyLoss(0.1f0), m = 1)
+
+# Cross entropy with distribution targets
+err = checkNumGrad(0.0f0, Val(:dist); output_layer_size = 5)
 ```
 """
 function checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
 end
 
+"""
+    checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...) -> Float64
+
+Gradient check at a single output index.  The loss is either `OutputIndex()` (the gradient is
+just the selected output activation) or, when `loss_type = CrossEntropyLoss(beta)`, the cross
+entropy loss at that index with optional entropy regularization `beta`.  Typically used for a
+single example (`m = 1`); for a batch (`m > 1`) pass `output_vector = true` (per-example index
+array) or `force_matrix = true`.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #gradient check for output index cost function and typically only used for a single example rather than a batch
 function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda, output_index; kwargs...)
 end
 
+"""
+    checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...) -> Float64
+
+Gradient check for a cost function applied only at a per-example output index (the "index"
+variants, e.g. `"absErr"`, `"sqErr"`).  `err_name` is the base cost function name; the loss is
+evaluated only at the target output index of each example.  Log-likelihood cost functions are
+not supported here.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #gradient check for specialized case of an output value vector and index vector where the loss function is only applied to the target output index
 function checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
 end
 
+"""
+    checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...) -> Float64
+
+Gradient check for cross entropy loss in a batch with a per-example output index.
+`input_orientation` selects the data layout: `'N'` for `(m, input_layer_size)` rows-as-examples
+or `'T'` for `(input_layer_size, m)` columns-as-examples.  With `use_values = true` a scalar
+multiplier per example is applied to the loss.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #specialized for checking gradient of cross entropy loss in a batch
 function checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
 end
 
+"""
+    checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...) -> Float64
+
+Gradient check for cross entropy loss with per-row target probability distributions
+(distribution targets).  `single_example = true` uses a single example with a one-row target
+distribution.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #gradient check for cross entropy loss with distribution targets
 function checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...)
     eval(Symbol("checkNumGrad", backend))(lambda, Val(:dist); kwargs...)

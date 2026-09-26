@@ -70,6 +70,9 @@ function create_costfunc_kernels(md; kwargs...)
 	global noactivationGradient = load_module_patient(md, "noactivationGradient"; kwargs...)
 	global tanhActivation = load_module_patient(md, "tanhActivation"; kwargs...)
 	global rowMul = load_module_patient(md, "rowMul"; kwargs...)
+	global crossEntropyBatchDerivBeta = load_module_patient(md, "crossEntropyBatchDerivBeta"; kwargs...)
+	global crossEntropyBatchLossBeta = load_module_patient(md, "crossEntropyBatchLossBeta"; kwargs...)
+	global outputIndexBatchGather = load_module_patient(md, "outputIndexBatchGather"; kwargs...)
 	# for kname in knames
 	# 	fptr = load_module_patient(md, kname; kwargs...)
 	# 	@eval global $(Symbol(kname)) = $fptr
@@ -193,65 +196,70 @@ function switch_device(d::Int64)
 	return current_device
 end
 
-function getTypes(x)
-    if isbits(x)
-        typeof(x)
-    elseif typeof(x) <: NVIDIALibraries.DeviceArray.CUDAArray
-       Ptr{x.element_type}
-    end
-end
+getTypes(x) = typeof(x)
+getTypes(x::NVIDIALibraries.DeviceArray.CUDAArray) = Ptr{x.element_type}
+getTypes(x::NTuple{N, Any}) where N =  ntuple(i -> getTypes(x[i]), Val(N))
 
-function run_kernel(kernel, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	K = 16
-	threads = Cuint.((K, K))
-	blocks = Cuint.((ceil(Int, N/K), ceil(Int, M/K)))
-    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, kwargs...)
+	threads = (Cuint(K), Cuint(K))
+	blocks = (Cuint(ceil(Int, N/K)), Cuint(ceil(Int, M/K)))
+    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, Cint, getTypes(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, kwargs...)
     # cuCtxSynchronize()
 end
 
-function run_kernel_1D(kernel, N::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_1D(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	(grid_size, block_size) = get_optimal_1d_launch_params(N)
-	threads = Cuint.((block_size,))
-	blocks = Cuint.((grid_size,))
-    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, kwargs...)
+	threads = (Cuint(block_size),)
+	blocks = (Cuint(grid_size),)
+    cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, kwargs...)
 end
 
-function run_kernel_1D_index(kernel, N::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_1D_index(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	(grid_size, block_size) = get_optimal_1d_launch_params(N)
 
 	shared_mem = block_size*2*sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts
-	threads = Cuint.((block_size,))
-	blocks = Cuint.((grid_size,))
-	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
+	threads = (Cuint(block_size),)
+	blocks = (Cuint(grid_size),)
+	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
-function run_kernel_1D_singleblock(kernel, N::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_1D_singleblock(kernel, N::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	block_size = max(nextpow(2, min(N, 1024)), 32)
-	threads = Cuint.((block_size,))
-	blocks = Cuint.((1,))
+	threads = (Cuint(block_size),)
+	blocks = (Cuint(1),)
 	shared_mem = block_size *sizeof(Float32) + 4 #extra 4 bytes to avoid bank conflicts 
-	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes.(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
+	cuLaunchKernel(kernel, dim3(blocks...), dim3(threads...), (Cint, getTypes(inputs)...), Cint(N), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
-function run_kernel_batch(kernel, N::Int64, M::Int64, inputs...; stream = CUstream(C_NULL), kwargs...)
+function run_kernel_batch(kernel, N::Int64, M::Int64, inputs::Vararg{Any}; stream = CUstream(C_NULL), kwargs...)
 	block_size = max(nextpow(2, min(M, 1024)), 32)
 	threads = Cuint(block_size)
 	blocks = Cuint(N)
 	shared_mem = threads*sizeof(Float32) + 4
-	cuLaunchKernel(kernel, dim3(blocks), dim3(threads), (Cint, Cint, getTypes.(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
+	cuLaunchKernel(kernel, dim3(blocks), dim3(threads), (Cint, Cint, getTypes(inputs)...), Cint(N), Cint(M), inputs...; stream = stream, shmem = Cint(shared_mem), kwargs...)
 end
 
-run_kernel_output(::OutputIndex, N::Int64, inputs...; kwargs...) = return nothing
-run_kernel_output(::CrossEntropyLoss, N::Int64, inputs...; kwargs...) = run_kernel_1D_singleblock(costFuncKs["crossEntropy"], N, inputs...; kwargs...)
-run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, inputs...; kwargs...) = run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
+run_kernel_output(::OutputIndex, N::Int64, inputs::Vararg{Any}; kwargs...) = return nothing
+#single example cross entropy cost - beta is forwarded so that entropy regularization is
+#reflected in the reported GPU cost, matching the CPU calcFinalOut!(::CrossEntropyLoss, ...)
+function run_kernel_output(loss::CrossEntropyLoss, N::Int64, inputs::Vararg{Any}; kwargs...)
+	run_kernel_1D_singleblock(costFuncKs["crossEntropy"], N, inputs..., getfield(loss, :beta); kwargs...)
+end
+run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
 function run_kernel_output(::CrossEntropyLoss, N::Int64, M::Int64, activations::CUDAArray, indices::CUDAArray, values::CUDAArray; kwargs...)
 	run_kernel_batch(costFuncKs["crossEntropyBatch"], N, M, activations, indices; kwargs...)
 	run_kernel(rowMul, N, M, activations, values; kwargs...)
 end
 
-run_kernel_deriv(::OutputIndex, N::Int64, inputs...; kwargs...) = run_kernel_1D(costFuncDerivKs["outputIndex"], N, inputs...; kwargs...)
-run_kernel_deriv(::CrossEntropyLoss, N::Int64, inputs...; kwargs...) = run_kernel_1D_singleblock(costFuncDerivKs["crossEntropy"], N, inputs...; kwargs...)
-run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, inputs...; kwargs...) = run_kernel_batch(costFuncDerivKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
+run_kernel_deriv(::OutputIndex, N::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_1D(costFuncDerivKs["outputIndex"], N, inputs...; kwargs...)
+function run_kernel_deriv(loss::CrossEntropyLoss, N::Int64, inputs::Vararg{Any}; kwargs...)
+	beta = getfield(loss, :beta)
+	run_kernel_1D_singleblock(costFuncDerivKs["crossEntropy"], N, inputs..., beta; kwargs...)
+end
+run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_batch(costFuncDerivKs["crossEntropyBatch"], N, M, inputs...; kwargs...)
+#batch output index derivative (per-example output index array)
+run_kernel_deriv(::OutputIndex, N::Int64, M::Int64, inputs::Vararg{Any}; kwargs...) = run_kernel_batch(costFuncDerivKs["outputIndexBatch"], N, M, inputs...; kwargs...)
 
 #note this specialized version of cross entropy loss also has a value array with a scalar multiple per row that needs to be applied to the derivative output on a per row basis
 function run_kernel_deriv(::CrossEntropyLoss, N::Int64, M::Int64, deltas::CUDAArray, activations::CUDAArray, indices::CUDAArray, values::CUDAArray; kwargs...) 
@@ -611,6 +619,23 @@ function forwardNOGRAD_vector!(d_a::Vector{CUDAArray}, d_Thetas::Vector{CUDAArra
 	end
 end
 
+"""
+
+    nnCostFunctionNOGRAD(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_y::CUDAArray, lambda; kwargs...) -> Float32
+
+GPU forward cost for an elementwise cost function with target matrix ``d_y``.  Computes the
+forward pass on the device and returns the mean cost ``sum(d_a[end])/m`` (plus the L2 term was
+added by the caller in the grad form).  Mirrors the CPU elementwise batch method.
+
+## Keyword arguments
+- ``costFunc::String`` - Elementwise cost function (default: "absErr")
+- ``resLayers::Int64`` - Residual connection period, 0 disables (default: 0)
+- ``activation_list::AbstractVector{Bool}`` - tanh activation per hidden layer
+- ``input_orientation::Char`` - 'N' = rows are examples, 'T' = columns are examples
+
+See ``nnCostFunctionNOGRAD`` for the full list of methods.
+
+"""
 function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D::Float32 = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	@assert d_a[end].size[1] == d_y.size[1]
@@ -636,9 +661,22 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	# cuCtxSynchronize()
 	#changed from absolute sum to regular sum because the actual error values are stored in d_a[end]
 	tmp_out = host_allocate(d_a[end]) 
-	@fastmath sum(tmp_out)/m
+	J = @fastmath sum(tmp_out)/m
+	iszero(lambda) && return J
+	return J + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/(2*m)
 end
 
+"""
+
+    nnCostFunctionNOGRAD(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_output_values, d_output_indices, lambda; costFunc = "absErrIndex", ...) -> Float32
+
+GPU forward cost for a cost function applied only at a per-example output index given by
+``d_output_indices`` (0-based), with per-example scalar ``d_output_values`` matching the
+"index" variant costs.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_output_values::CUDAArray, d_output_indices::CUDAArray, lambda::Float32, D = 0.0f0; costFunc = "absErrIndex", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	@assert d_a[end].size[1] == d_output_values.size[1]
@@ -649,9 +687,20 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	run_kernel(costFuncKs[costFunc], m, output_layer_size, d_a[end], d_output_values, d_output_indices)
 	
 	tmp_out = host_allocate(d_a[end]) 
-	@fastmath sum(tmp_out)/m
+	J = @fastmath sum(tmp_out)/m
+	iszero(lambda) && return J
+	return J + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/(2*m)
 end
 
+"""
+
+    nnCostFunctionNOGRAD(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, lambda; costFunc = "absErr", ...) -> Float32
+
+GPU forward cost for an autoencoder: the reconstruction target is the input ``d_X`` itself.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	@assert d_a[end].size[1] == d_X.size[1]
@@ -677,26 +726,107 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	# cuCtxSynchronize()
 	#changed from absolute sum to regular sum because the actual error values are stored in d_a[end]
 	tmp_out = host_allocate(d_a[end]) 
-	@fastmath sum(tmp_out)/m
+	J = @fastmath sum(tmp_out)/m
+	iszero(lambda) && return J
+	return J + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/(2*m)
 end
 
 #single example cost function for either output index or cross entropy loss compared to an output index.  note that the output index needs to be decremented by 1 before sending to the GPU
+"""
+
+    nnCostFunctionNOGRAD(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_X, output_index::Integer, lambda; loss_type::LossType = OutputIndex(), ...) -> Float32
+
+GPU forward cost for a single example where the output is an index: either the output at that
+index (``OutputIndex()``) or the cross entropy of the softmax against that index
+(``CrossEntropyLoss(beta)``).  The output index is decremented by 1 before sending to the GPU.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
 function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, lambda::Float32, D = 0.0f0; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	forwardNOGRAD_vector!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list)
 	#launch across output data size rather than output layer size
 	run_kernel_output(loss_type, d_a[end].size[1], d_a[end], Cint(output_index-1))
 	tmp_out = host_allocate(d_a[end]) 
-	return tmp_out[output_index]
+	iszero(lambda) && return tmp_out[output_index]
+	return tmp_out[output_index] + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/2.0f0
 end
 
 #note this method will be used for the cross entropy batch loss which requires a different type of kernel launch then the usual batch forward passes, if output values are also included then it will be used for the version of cross entropy loss with a scaling factor on the output error per example
-function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, outputs...; lambda::Float32 = 0f0, D::Float32 = 0.0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+"""
+
+    nnCostFunctionNOGRAD(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, outputs...; lambda::Float32 = 0f0, ...) -> Float32
+
+GPU vararg forward cost for the batch cross-entropy loss and for distribution targets.  When
+the first extra output is a ``Float32`` array it is treated as per-row target probability
+distributions (``crossEntropyDistBatch``); otherwise it is a per-example integer output index
+array (``crossEntropyBatch``) with optional per-example ``values`` (use_values scaling).
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, outputs::Vararg{Any}; lambda::Float32 = 0f0, D::Float32 = 0.0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N', loss_type::LossType = CrossEntropyLoss())
 	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list = activation_list, input_orientation = input_orientation)
 	#launch across output data size rather than output layer size
-	run_kernel_output(CrossEntropyLoss(), m, output_layer_size, d_a[end], outputs...)
+	if first(outputs).element_type == Float32
+		#distribution targets: use cross entropy with per-row target probability distributions
+		run_kernel_batch(costFuncKs["crossEntropyDistBatch"], m, output_layer_size, d_a[end], first(outputs))
+	else
+		#per-example output index cross entropy (optionally with entropy regularization beta)
+		if (loss_type isa CrossEntropyLoss) && (getfield(loss_type, :beta) > 0.0f0)
+			run_kernel_batch(crossEntropyBatchLossBeta, m, output_layer_size, d_a[end], first(outputs), getfield(loss_type, :beta))
+			if length(outputs) > 1
+				run_kernel(rowMul, m, output_layer_size, d_a[end], outputs[2])
+			end
+		else
+			run_kernel_output(loss_type, m, output_layer_size, d_a[end], outputs...)
+		end
+	end
 	tmp_out = host_allocate(d_a[end]) 
-	@fastmath sum(tmp_out)/m
+	J = @fastmath sum(tmp_out)/m
+	iszero(lambda) && return J
+	return J + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/(2*m)
 end
+#batch forward cost with a per-example output index array (0-based on the GPU).  Mirrors the CPU
+#nnCostFunctionNOGRAD output index / output vector method.  The per-example loss values are
+#computed entirely on the GPU by dedicated kernels (with per-example entropy regularization for
+#CrossEntropyLoss beta > 0); only the scalar mean cost is read back to the host, matching the
+#existing NGrad kernels whose cost is sum(output)/m.
+#named with a distinct helper name to avoid overwriting nnCostFunctionNOGRAD for elementwise costs
+"""
+
+    nnCostBatchOutputIndexNOGRAD(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_indices, lambda; loss_type::LossType = OutputIndex(), ...) -> Float32
+
+GPU forward cost for a batch with a per-example output index array (0-based on the GPU).  For
+``OutputIndex`` the cost is the selected output activation per example; for
+``CrossEntropyLoss(beta)`` the cross entropy at the index is computed on the device including
+per-example entropy regularization when ``beta > 0``.  Only the scalar mean is read back to the
+host.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
+function nnCostBatchOutputIndexNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, d_indices::CUDAArray, lambda::Float32, D::Float32 = 0.0f0; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+	forwardNOGRAD!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers; activation_list = activation_list, input_orientation = input_orientation)
+	if loss_type isa CrossEntropyLoss
+		#cross entropy loss per example (stores loss at column 0 and zeros the rest so sum/m is the mean)
+		beta = getfield(loss_type, :beta)
+		if beta > 0.0f0
+			run_kernel_batch(crossEntropyBatchLossBeta, m, output_layer_size, d_a[end], d_indices, beta)
+		else
+			run_kernel_batch(costFuncKs["crossEntropyBatch"], m, output_layer_size, d_a[end], d_indices)
+		end
+	else
+		#OutputIndex loss: gather the selected output activations into column 0
+		run_kernel_batch(outputIndexBatchGather, m, output_layer_size, d_a[end], d_indices)
+	end
+	tmp_out = host_allocate(d_a[end]) 
+	J = @fastmath sum(tmp_out)/m
+	iszero(lambda) && return J
+	return J + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/(2*m)
+end
+
+
 
 function form_activations(d_Thetas::Vector{CUDAArray}, m::Int64)
 	l = length(d_Thetas)
@@ -822,6 +952,24 @@ function predictMultiBatches(multiParams, batches, input_layer_size, output_laye
 	multiOut = map(i -> mapreduce(out -> out[i], vcat, outputs), 1:length(multiParams))
 end
 
+"""
+
+    nnCostFunction(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_bias_grads, d_X, d_y, lambda; kwargs...) -> Nothing
+
+GPU backward pass for an elementwise cost function with target matrix ``d_y``.  The forward
+pass and backpropagation are computed entirely on the device and the parameter gradients are
+written in place to ``d_Theta_grads`` and ``d_bias_grads``.  Mirrors the CPU elementwise batch
+backward method.
+
+## Keyword arguments
+- ``costFunc::String`` - Elementwise cost function (default: "absErr")
+- ``resLayers::Int64`` - Residual connection period, 0 disables (default: 0)
+- ``activation_list::AbstractVector{Bool}`` - tanh activation per hidden layer
+- ``input_orientation::Char`` - 'N' = rows are examples, 'T' = columns are examples
+
+See ``nnCostFunction`` for the full list of methods.
+
+"""
 function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_y::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	num_hidden = length(hidden_layers)
@@ -925,6 +1073,17 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	# cuCtxSynchronize()
 end
 
+"""
+
+    nnCostFunction(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_bias_grads, d_X, d_output_values, d_output_indices, lambda; costFunc = "absErrIndex", ...) -> Nothing
+
+GPU backward pass for a cost function applied only at a per-example output index
+(``d_output_indices``, 0-based) with per-example scalar ``d_output_values`` matching the
+"index" variant costs.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_output_values::CUDAArray, d_output_indices::CUDAArray, lambda::Float32, D = 0.0f0; costFunc = "absErrIndex", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
 
 	num_hidden = length(hidden_layers)
@@ -1018,6 +1177,17 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 end
 
 #cost function for single example input with either output index or cross entropy loss
+"""
+
+    nnCostFunction(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_bias_grads, d_X, output_index::Integer, lambda; loss_type::LossType = OutputIndex(), ...) -> Nothing
+
+GPU backward pass for a single example where the output is an index: either the output at that
+index (``OutputIndex()``) or the cross entropy of the softmax against that index
+(``CrossEntropyLoss(beta)``).  The output index is decremented by 1 before sending to the GPU.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, lambda::Float32, D = 0.0f0; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	num_hidden = length(hidden_layers)
@@ -1108,10 +1278,22 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 end
 
 #note that this will be used for the derivative of the cross entropy loss in a batch context
-function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, outputs...; lambda::Float32 = 0f0, D::Float32 = 0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+"""
+
+    nnCostFunction(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_bias_grads, d_X, outputs...; lambda::Float32 = 0f0, ...) -> Nothing
+
+GPU vararg backward pass for the batch cross-entropy loss and for distribution targets.  When
+the first extra output is a ``Float32`` array it is treated as per-row target probability
+distributions (``crossEntropyDistBatchDeriv``); otherwise it is a per-example integer output
+index array (``crossEntropyBatchDeriv``) with optional per-example ``values`` (use_values
+scaling).
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, outputs::Vararg{Any}; lambda::Float32 = 0f0, D::Float32 = 0f0, resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N', loss_type::LossType = CrossEntropyLoss())
 
 	num_hidden = length(hidden_layers)
-	loss_type = CrossEntropyLoss()
 
 	if resLayers != 0
 		@assert num_hidden > 1 "Must have at least two hidden layers"
@@ -1171,7 +1353,20 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 		# cublasSgemm(cublas_handle, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
 	end
 
-	run_kernel_deriv(loss_type, m, output_layer_size, d_deltas[end], d_a[end], outputs...)
+	if first(outputs).element_type == Float32
+		#distribution targets: use cross entropy derivative with per-row target probability distributions
+		run_kernel_batch(costFuncDerivKs["crossEntropyDistBatch"], m, output_layer_size, d_deltas[end], d_a[end], first(outputs))
+	else
+		#per-example output index cross entropy derivative (optionally with entropy regularization beta)
+		if (loss_type isa CrossEntropyLoss) && (getfield(loss_type, :beta) > 0.0f0)
+			run_kernel_batch(crossEntropyBatchDerivBeta, m, output_layer_size, d_deltas[end], d_a[end], first(outputs), getfield(loss_type, :beta))
+			if length(outputs) > 1
+				run_kernel(rowMul, m, output_layer_size, d_deltas[end], outputs[2])
+			end
+		else
+			run_kernel_deriv(loss_type, m, output_layer_size, d_deltas[end], d_a[end], outputs...)
+		end
+	end
 	
 
 	i = num_hidden
@@ -1197,7 +1392,125 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
 	# cuCtxSynchronize()
 end
+#batch backprop with a per-example output index array (0-based on the GPU).  Supports the
+#OutputIndex loss type (per-example one-hot output delta) as well as the CrossEntropy loss type
+#with a shared output index (including entropy regularization via beta) to mirror the CPU
+#nnCostFunction dispatch for output index / output vector gradient checks.  Named with a distinct
+#helper name to avoid overwriting the elementwise batch nnCostFunction(d_y, lambda) method.
+"""
 
+    nnCostBatchOutputIndex(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_bias_grads, d_X, d_indices, lambda; loss_type::LossType = OutputIndex(), ...) -> Nothing
+
+GPU backward pass for a batch with a per-example output index array (0-based on the GPU).  For
+``OutputIndex`` a one-hot delta is produced per example; for ``CrossEntropyLoss(beta)`` the
+softmax-minus-one-hot delta is computed including per-example entropy regularization directly
+on the device when ``beta > 0``.  Gradients are written in place to ``d_Theta_grads`` and
+``d_bias_grads``.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
+function nnCostBatchOutputIndex(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, d_indices::CUDAArray, lambda::Float32, D = 0.0f0; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), input_orientation::Char = 'N')
+
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension" 
+	end
+
+	@assert d_a[end].size[1] == d_indices.size[1]
+
+	if num_hidden > 0
+		if lambda > 0.0f0
+			for i in 1:length(d_Thetas)
+				memcpy!(d_Theta_grads[i], d_Thetas[i])
+			end
+		end
+
+		for i = 1:num_hidden
+			run_kernel(fill_cols, m, hidden_layers[i], d_a[i], d_biases[i])
+		end
+	end
+	run_kernel(fill_cols, m, output_layer_size, d_a[end], d_biases[end])
+	cublasGemmEx(cublas_handle, algo, input_orientation, 'T', 1.0f0, d_X, d_Thetas[1], 1.0f0, d_a[1])
+	if num_hidden > 0
+		if activation_list[1]
+			if D == 0.0f0
+				run_kernel_1D(tanhGradient, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+			else
+				run_kernel_1D(tanhGradientDropout, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			end
+		else
+			run_kernel_1D(noactivationGradient, m * hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[i-1], d_Thetas[i], 1.0f0, d_a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
+				if activation_list[i]
+					if D == 0.0f0
+						run_kernel_1D(tanhGradient, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+					else
+						run_kernel_1D(tanhGradientDropout, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					end
+				else
+					run_kernel_1D(noactivationGradient, m * hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+				end
+			end
+		end
+		cublasGemmEx(cublas_handle, algo, 'N', 'T', 1.0f0, d_a[end-1], d_Thetas[end], 1.0f0, d_a[end])
+	end
+
+	#output layer derivative dispatch
+	if loss_type isa OutputIndex
+		run_kernel_deriv(loss_type, m, output_layer_size, d_deltas[end], d_a[end], d_indices)
+	else
+		#CrossEntropy loss with a shared output index.  For beta > 0 the entropy-regularized
+		#gradient is computed entirely on the GPU (one block per example, per-example row entropy
+		#H_i = -sum_j p_ij*log(p_ij) applied to all classes, then -1 at the target index).  This
+		#matches the CPU single-example (m=1) semantics and the batch forward loss exactly, with no
+		#host round trip.
+		beta = getfield(loss_type, :beta)
+		if beta > 0.0f0
+			run_kernel_batch(crossEntropyBatchDerivBeta, m, output_layer_size, d_deltas[end], d_a[end], d_indices, beta)
+		else
+			run_kernel_deriv(loss_type, m, output_layer_size, d_deltas[end], d_a[end], d_indices)
+		end
+	end
+
+	i = num_hidden
+	while i >= 1
+		cublasGemmEx(cublas_handle, algo, 'T', 'N', 1.0f0/m, d_deltas[i+1], d_a[i], lambda/m, d_Theta_grads[i+1])
+		cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[i+1], d_ones, 0.0f0, d_bias_grads[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden-resLayers)) && (((i+resLayers-1)%resLayers)==0))
+			#replace d_deltas[i] with d_deltas[i+resLayers]
+			memcpy!(d_deltas[i], d_deltas[i+resLayers])
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 1.0f0, d_deltas[i])
+		else
+			cublasGemmEx(cublas_handle, algo, 'N', 'N', 1.0f0, d_deltas[i+1], d_Thetas[i+1], 0.0f0, d_deltas[i])
+		end
+
+		run_kernel_1D(elMul, m * hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
+		i = i - 1
+	end
+	cublasGemmEx(cublas_handle, algo, 'T', input_orientation, 1.0f0/m, d_deltas[1], d_X, lambda/m, d_Theta_grads[1])
+	cublasSgemv(cublas_handle, 'T', 1.0f0/m, d_deltas[1], d_ones, 0.0f0, d_bias_grads[1])
+end
+
+"""
+
+    nnCostFunction(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_bias_grads, d_X, lambda; costFunc = "absErr", ...) -> Nothing
+
+GPU backward pass for an autoencoder: the reconstruction target is the input ``d_X`` itself.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
 function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, m::Int64, d_ones::CUDAArray, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray,lambda::Float32, D = 0.0f0; costFunc = "absErr", resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 
 	num_hidden = length(hidden_layers)

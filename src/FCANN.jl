@@ -51,9 +51,90 @@ using Pkg
 using NVIDIALibraries
 using RandomMatrices
 
-#set default backend to CPU
-global backend = :CPU
-global backendList = [:CPU]
+# Opt out of Revise.jl's default package mode (`:eval`), which replays and retracts top-level
+# assignment statements.  This module deliberately keeps a little mutable selection state
+# (`BACKEND`, `gpu_ready`, `backendList`) that is only sensible when it is set up by `__init__`;
+# with `:evalmeth` Revise tracks method definitions only and leaves that state alone.
+# See the Revise documentation section "Configuring the revise mode".
+const __revise_mode__ = :evalmeth
+
+#----------------------------------------------------------------------------
+# Backend selection
+#
+# The active backend is represented by a singleton type and selected through ordinary multiple
+# dispatch (`currentbackend`).  This replaces the former
+# `eval(Symbol("someFunction", backend))(...)` dispatch: a runtime `eval` is invisible to type
+# inference and precompilation, and - contrary to intuition - it does NOT let a task observe
+# methods installed after the task started running (world-age pinning), so it gives no benefit
+# for incremental workflows such as Revise.jl while hiding every real dispatch site.
+#----------------------------------------------------------------------------
+abstract type AbstractBackend end
+struct CPUBackend <: AbstractBackend end
+struct GPUBackend <: AbstractBackend end
+
+const CPUBACKEND = CPUBackend()
+const GPUBACKEND = GPUBackend()
+
+# The active backend.  The *binding* is `const` and only the `Ref` contents change, which keeps
+# the selection out of reach of tools that retract or replay top-level bindings.
+const BACKEND = Ref{AbstractBackend}(CPUBACKEND)
+
+# True once CUDA has been initialized successfully in `__init__`.  This is the single source of
+# truth for GPU availability; `backendList` is derived from it by `refreshbackendlist!`.
+const gpu_ready = Ref(false)
+
+# Guards the `atexit` hook that releases the cuBLAS handle so that re-running `__init__` (which
+# is safe and useful after redefining code in a live session) cannot register it twice.
+const atexit_registered = Ref(false)
+
+# The symbols accepted by `setBackend`.  `refreshbackendlist!` keeps this in sync with `gpu_ready`
+# so it recovers on its own if a session tool re-evaluates the assignment that created it.
+const backendList = Symbol[:CPU]
+
+backendname(::CPUBackend) = :CPU
+backendname(::GPUBackend) = :GPU
+
+"""
+    currentbackend() -> AbstractBackend
+
+Return the currently active backend object (`CPUBACKEND` or `GPUBACKEND`).  Dispatch on this
+type (`::CPUBackend` / `::GPUBackend`) instead of on the `Symbol` returned by `getBackend()`
+whenever you need backend-specific behavior.
+"""
+currentbackend() = BACKEND[]
+
+"""
+    backendname() -> Symbol
+    backendname(b::AbstractBackend) -> Symbol
+
+Return the `Symbol` name (`:CPU` or `:GPU`) of a backend without printing anything.
+"""
+backendname() = backendname(currentbackend())
+
+"""
+    resolvebackend(b) -> AbstractBackend
+
+Convert a `Symbol` (`:CPU` / `:GPU`) or an `AbstractBackend` into a backend object.
+"""
+resolvebackend(b::AbstractBackend) = b
+resolvebackend(b::Symbol) = b === :GPU ? GPUBACKEND : CPUBACKEND
+
+"""
+    availableBackends() -> Vector{Symbol}
+
+Return the backends that are usable in this session: always `:CPU`, plus `:GPU` once CUDA has
+been initialized successfully.
+"""
+availableBackends() = gpu_ready[] ? Symbol[:CPU, :GPU] : Symbol[:CPU]
+
+# Keep the exported `backendList` in agreement with the live GPU state.  `gpu_ready` is the
+# source of truth, so a clobbered or stale list repairs itself the next time it is consulted.
+function refreshbackendlist!()
+    backends = availableBackends()
+    empty!(backendList)
+    append!(backendList, backends)
+    return backendList
+end
 
 
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
@@ -110,13 +191,14 @@ setBackend(:CPU)  # Use CPU backend
 ```
 """
 function setBackend(b::Symbol)
-    if in(b, backendList)
-        global backend = b
+    refreshbackendlist!()
+    if b === :CPU || (b === :GPU && gpu_ready[])
+        BACKEND[] = resolvebackend(b)
     else
         println(string("Selected backend: ", b, " is not available."))
     end
-    println(string("Backend is set to ", backend))
-    return backend
+    println(string("Backend is set to ", backendname()))
+    return backendname()
 end
 
 """
@@ -128,8 +210,8 @@ Get the currently selected computation backend.
 The current backend symbol (:CPU or :GPU).
 """
 function getBackend()
-    println(string("Backend is set to ", backend))
-    backend
+    println(string("Backend is set to ", backendname()))
+    backendname()
 end
 
 #gradient checks for the currently selected backend (see setBackend).  The first positional
@@ -200,7 +282,7 @@ err = checkNumGrad(0.0f0, Val(:dist); output_layer_size = 5)
 ```
 """
 function checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
+    _checkNumGrad(currentbackend())(lambda; kwargs...)
 end
 
 """
@@ -216,7 +298,7 @@ See `checkNumGrad` for the common keyword arguments.
 """
 #gradient check for output index cost function and typically only used for a single example rather than a batch
 function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, output_index; kwargs...)
+    _checkNumGrad(currentbackend())(lambda, output_index; kwargs...)
 end
 
 """
@@ -231,7 +313,7 @@ See `checkNumGrad` for the common keyword arguments.
 """
 #gradient check for specialized case of an output value vector and index vector where the loss function is only applied to the target output index
 function checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
+    _checkNumGrad(currentbackend())(lambda, err_name; kwargs...)
 end
 
 """
@@ -246,7 +328,7 @@ See `checkNumGrad` for the common keyword arguments.
 """
 #specialized for checking gradient of cross entropy loss in a batch
 function checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
+    _checkNumGrad(currentbackend())(lambda, input_orientation; kwargs...)
 end
 
 """
@@ -260,8 +342,15 @@ See `checkNumGrad` for the common keyword arguments.
 """
 #gradient check for cross entropy loss with distribution targets
 function checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, Val(:dist); kwargs...)
+    _checkNumGrad(currentbackend())(lambda, Val(:dist); kwargs...)
 end
+
+# Backend dispatch for the gradient checks.  Each helper returns the implementation for a backend,
+# so a call site reads `_checkNumGrad(currentbackend())(args...; kwargs...)`.  This replaces the
+# former `eval(Symbol("checkNumGrad", backend))(...)` pattern: no runtime `eval`, no world-age
+# trap, and inference sees a two-element union of concrete functions.
+_checkNumGrad(::CPUBackend) = checkNumGradCPU
+_checkNumGrad(::GPUBackend) = checkNumGradGPU
 
 """
     benchmarkDevice(;kwargs...) -> Nothing
@@ -394,7 +483,7 @@ function benchmarkCPUThreads(;costFunc = "absErr", dropout = 0.0f0, Ns = [16, 32
     writedlm(string(cpuname, "_", trainName, "_BLASthreadBenchmark.csv"), [header; body], ',')
 end
          
-export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput, calcfeatureimpact, ADAMAXTrainNNCPU, traintrials, preptraining, LossType, OutputIndex, CrossEntropyLoss
+export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, availableBackends, currentbackend, backendname, AbstractBackend, CPUBackend, GPUBackend, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput, calcfeatureimpact, ADAMAXTrainNNCPU, traintrials, preptraining, LossType, OutputIndex, CrossEntropyLoss
 
 """
     __init__() -> Nothing
@@ -416,7 +505,13 @@ informative error message.
 - This function is called automatically on module load
 - Users typically don't need to call this directly
 """
-function __init__()
+function __init__(force::Bool = false)
+    if gpu_ready[] && !force
+        #already initialized; re-running `__init__` by hand is therefore safe
+        println("GPU backend is already initialized.  Available backends are: CPU, GPU")
+        refreshbackendlist!()
+        return
+    end
     #get cuda toolkit versions if any
     println("Checking for cuda toolkit versions")
     cuda_versions = if check_cuda_presence()
@@ -519,9 +614,10 @@ function __init__()
             @assert gpu_err < 0.01
 
             println("Available backends are: CPU, GPU")
-            #add GPU to backendList after successful initialization
-            push!(backendList, :GPU)
-            unique!(backendList)
+            #record GPU availability after successful initialization; the exported `backendList`
+            #is derived from `gpu_ready` by `refreshbackendlist!`
+            gpu_ready[] = true
+            refreshbackendlist!()
         catch msg
             println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
@@ -529,7 +625,8 @@ function __init__()
                 cublasDestroy_v2(cublas_handle)
             catch
             end
-            global gpu_ready = false
+            gpu_ready[] = false
+            refreshbackendlist!()
         end
     end
 
@@ -541,14 +638,18 @@ function __init__()
 
     
 
-    function f()
-        if in(:GPU, backendList)
-            println("Destroying GPU cublas handle")
-            # cuDevicePrimaryCtxRelease(current_device)
-            cublasDestroy_v2(cublas_handle)
+    #register the cleanup hook once; re-running `__init__` must not stack handlers
+    if !atexit_registered[]
+        atexit_registered[] = true
+        function f()
+            if gpu_ready[]
+                println("Destroying GPU cublas handle")
+                # cuDevicePrimaryCtxRelease(current_device)
+                cublasDestroy_v2(cublas_handle)
+            end
         end
-    end    
-    atexit(f)
+        atexit(f)
+    end
 end
 
 using PrecompileTools

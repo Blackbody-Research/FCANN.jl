@@ -1,20 +1,33 @@
 using Distributed
 include("ADAMAXTRAIN_FCN_NFLOATOUT.jl")
-include(joinpath("cuda", "ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl"))
+include("cuda/ADAMAXTRAINGPU_FCN_ABSERR_NFLOATOUT.jl")
 
 # dispatch to output calculation for proper backend, the GPU backend version will crash
 # with any cost function other than "absErr"
 function calcOutput(input_data, output_data, T, B; dropout = 0.0f0, activation_list=fill(true, length(T)-1), costFunc = "absErr", resLayers = 0, autoencoder=false)
-	eval(Symbol("calcOutput", backend))(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
+	_calcOutput(currentbackend())(input_data, output_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, activation_list=activation_list)
 end
 
 function calcOutput(input_data, T, B; dropout = 0.0f0, costFunc = "absErr", resLayers = 0, autoencoder = true, activation_list=fill(true, length(T)-1))
-	eval(Symbol("calcOutput", backend))(input_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder = autoencoder, activation_list=activation_list)
+	_calcOutput(currentbackend())(input_data, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder = autoencoder, activation_list=activation_list)
 end
 
 function calcMultiOut(input_data, output_data, multiParams; dropout = 0.0f0, costFunc = "absErr", resLayers=0, activation_list=fill(true, length(multiParams[1][1])-1))
-	eval(Symbol("calcMultiOut", backend))(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
+	_calcMultiOut(currentbackend())(input_data, output_data, multiParams, dropout = dropout, costFunc = costFunc, resLayers=resLayers, activation_list=activation_list)
 end
+
+# Backend dispatch.  Each helper returns the implementation for a backend, so a call site
+# reads `_ADAMAXTrainNN(currentbackend())(args...; kwargs...)`.  This replaces the former
+# `eval(Symbol("ADAMAXTrainNN", backend))(...)` pattern: no runtime `eval`, therefore no
+# world-age trap and no hiding of dispatch from inference or precompilation.
+_calcOutput(::CPUBackend) = calcOutputCPU
+_calcOutput(::GPUBackend) = calcOutputGPU
+
+_calcMultiOut(::CPUBackend) = calcMultiOutCPU
+_calcMultiOut(::GPUBackend) = calcMultiOutGPU
+
+_ADAMAXTrainNN(::CPUBackend) = ADAMAXTrainNNCPU
+_ADAMAXTrainNN(::GPUBackend) = ADAMAXTrainNNGPU
 
 #form file suffix string based on training parameters, ignore those that do not impact training
 #order of function inputs are lambda/L2 Reg factor, c/max norm reg factor, training decay rate, dropout rate
@@ -116,7 +129,7 @@ end
 
 Conduct one or more trials of training a network with the same parameters and different random seeds.  Each seed will create a different parameter initialization and iteration through data batches.  To run the trials efficiently a number of allocations are made once and re-used for each trial.  The return value is a vector of training results where each result is a tuple in the following format: (θ_trained, β_trained, traincost, costrecord, timerecord, GFLOPS_per_epoch, other...).  other... will contain either just the epoch that had the lowest training cost, or, if a test set is also provided, the following: (testcost, testcostrecord, lastepoch, bestresultepoch)
 """
-function traintrials(data::AbstractVector{T}, batchsize, numepochs, hidden, λ, c; backend = backend, ntrials = 10, seeds = 1:ntrials, costfunc = "absErr", use_μP = false, reslayers = 0, kwargs...) where T <: Tuple{Matrix{Float32}, Matrix{Float32}}
+function traintrials(data::AbstractVector{T}, batchsize, numepochs, hidden, λ, c; backend = currentbackend(), ntrials = 10, seeds = 1:ntrials, costfunc = "absErr", use_μP = false, reslayers = 0, kwargs...) where T <: Tuple{Matrix{Float32}, Matrix{Float32}}
 	@assert length(seeds) == ntrials
 
 	logcost = occursin("Log", costfunc)
@@ -135,7 +148,7 @@ function traintrials(data::AbstractVector{T}, batchsize, numepochs, hidden, λ, 
 		initializeparams_saxe!(trainprep.θ_init, trainprep.β_init, reslayers, use_μP = use_μP)
 
 		Random.seed!(seed)
-		eval(Symbol("ADAMAXTrainNN", backend))(data, batchsize, trainprep.θ_init, trainprep.β_init, numepochs, input_layer_size, hidden, λ, c; prepdata = trainprep.prepdata, prepactivations = trainprep.prepactivations, params = trainprep.param_allocations, costFunc = costfunc, kwargs...)
+		_ADAMAXTrainNN(resolvebackend(backend))(data, batchsize, trainprep.θ_init, trainprep.β_init, numepochs, input_layer_size, hidden, λ, c; prepdata = trainprep.prepdata, prepactivations = trainprep.prepactivations, params = trainprep.param_allocations, costFunc = costfunc, kwargs...)
 	end
 	for seed in seeds]
 end
@@ -180,7 +193,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 		"absErr"
 	end
 
-	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_", costFunc, ".csv")
+	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backendname(), "_", costFunc, ".csv")
 
 	baseheader = ["Layers" "Num Params" string("Train ", costFunc, " Error") string("Test ", costFunc, " Error")]
 	exheader = [string("Train ", costFunc2, " Error") string("Test ", costFunc2, " Error")]
@@ -188,7 +201,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 		
 
 	body = reduce(vcat, pmap(hiddenList) do hidden
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(hiddenList))))))
 		else
 			BLAS.set_num_threads(0)
@@ -205,7 +218,7 @@ function archEval(name, N, batchSize, hiddenList; alpha = 0.002f0, costFunc = "a
 
 		println("beginning training")
 		Random.seed!(1234)
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc, resLayers=reslayers)
+		T, B, bestCost, record = _ADAMAXTrainNN(currentbackend())(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc, resLayers=reslayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
 		GC.gc()
@@ -305,7 +318,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		"absErr"
 	end
 
-	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backend, "_", costFunc, ".csv")
+	filename = string(name, "_", M, "_input_", O, "_output_ADAMAX", backendname(), "_", costFunc, ".csv")
 	# BLAS.set_num_threads(0)
 
 	header = if costFunc2 == costFunc
@@ -315,7 +328,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 	end
 
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden = hiddenList
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(hiddenList))))))
 		else
 			BLAS.set_num_threads(0)
@@ -332,7 +345,7 @@ function archEvalSample(name, N, batchSize, hiddenList, cols; alpha = 0.002f0, c
 		end	
 		println("beginning training")
 		Random.seed!(1234)
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(((X[:, cols], Y), (Xtest[:, cols], Ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc, resLayers=reslayers)
+		T, B, bestCost, record = _ADAMAXTrainNN(currentbackend())(((X[:, cols], Y), (Xtest[:, cols], Ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf, alpha=alpha, printProgress = true, costFunc = costFunc, resLayers=reslayers)
 
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X[:, cols], Y, T, B, costFunc = costFunc)
@@ -472,7 +485,7 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 	M = size(X, 2)
 	O = size(Y, 2)
 
-	filename = string(name, "_", M, "_input_", O, "_output_", alpha, "_alpha_ADAMAX", backend, "_", costFunc, ".csv")
+	filename = string(name, "_", M, "_input_", O, "_output_", alpha, "_alpha_ADAMAX", backendname(), "_", costFunc, ".csv")
 
 	costFunc2 = if occursin("sq", costFunc) | occursin("norm", costFunc)
 		"sqErr"
@@ -508,7 +521,7 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 	end
 
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden in hiddenList
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(hiddenList))))))
 		else
 			BLAS.set_num_threads(0)
@@ -525,7 +538,7 @@ function evalLayers(name, N, batchSize, Plist; layers = [2, 4, 6, 8, 10], alpha 
 
 		println("beginning training")
 		Random.seed!(1234)
-		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden[2], 0.0f0, Inf, alpha=alpha, R = R, printProgress = printProg, costFunc = costFunc, resLayers=reslayers)
+		T, B, bestCost, record, timeRecord, GFLOPS = _ADAMAXTrainNN(currentbackend())(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, N, M, hidden[2], 0.0f0, Inf, alpha=alpha, R = R, printProgress = printProg, costFunc = costFunc, resLayers=reslayers)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
 		GC.gc()
@@ -578,9 +591,9 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 	end
 	
 	if dropout == 0.0f0
-		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", R, "_decayRate_ADAMAX", backend, "_", costFunc, ".csv")
+		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc, ".csv")
 	else
-		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", batchSize, "batchSize_", R, "_decaytRate_ADAMAX", backend, "_", costFunc, ".csv")
+		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", batchSize, "batchSize_", R, "_decaytRate_ADAMAX", backendname(), "_", costFunc, ".csv")
 	end
 
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
@@ -595,7 +608,7 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 	header = map(a -> string("alpha ",  a), alphaList')
 	body = reduce(hcat, pmap(alphaList) do alpha # @parallel (hcat) for alpha = alphaList
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(alphaList))))))
 		else
 			BLAS.set_num_threads(0)
@@ -603,7 +616,7 @@ function tuneAlpha(name, N, batchSize, hidden, alphaList; R = 0.1f0, lambda = 0.
 		
 		Random.seed!(1234)
 		println("beginning training with ", alpha, " alpha")
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true, costFunc = costFunc)
+		T, B, bestCost, record = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true, costFunc = costFunc)
 		record
 	end)
 	writedlm(string("alphaCostRecords_", filename), [header; body])
@@ -614,10 +627,10 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 	M = size(inputs[1][1], 2)
 	O = size(inputs[1][2], 2)
 
-	trainFunc(N, a, r) = eval(Symbol("ADAMAXTrainNN", backend))(inputs, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = a, R = r, costFunc = costFunc, resLayers = resLayers, printProgress=printProg, printAnything=printanything)
+	trainFunc(N, a, r) = _ADAMAXTrainNN(currentbackend())(inputs, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = a, R = r, costFunc = costFunc, resLayers = resLayers, printProgress=printProg, printAnything=printanything)
 
 	Random.seed!(1234)
-	# c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, 1, M, hidden, lambda, c, alpha = 0.0f0, costFunc = costFunc)[3]
+	# c1 = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, 1, M, hidden, lambda, c, alpha = 0.0f0, costFunc = costFunc)[3]
 	c1 = trainFunc(1, 0.0f0, 0.0f0)[3]
 	println(string("Baseline cost = ", c1))
 	phi = 0.5f0*(1.0f0+sqrt(5.0f0))
@@ -695,7 +708,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 	end
 
 	function findRInterval(alpha, c1)
-		# f = R -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, dropout = dropout, costFunc = costFunc)
+		# f = R -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, dropout = dropout, costFunc = costFunc)
 		f = R -> trainFunc(N, alpha, R)
 		phi = 0.5f0*(1.0f0+sqrt(5.0f0))
 		x = 0.02f0
@@ -828,7 +841,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 		end
 	end
 
-	# f = alpha -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, 100, M, hidden, lambda, c, alpha = alpha, dropout = dropout, costFunc = costFunc)
+	# f = alpha -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, 100, M, hidden, lambda, c, alpha = alpha, dropout = dropout, costFunc = costFunc)
 	f = alpha -> trainFunc(100, alpha, 0.0f0)
 
 	(p1, p2, p3) = findAlphaInterval(a -> f(a), c1)
@@ -857,7 +870,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 		println("Beginning search for decay rate interval")
 		println()
 		Random.seed!(1234)
-		# c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1, R = 0.0f0, dropout = dropout, costFunc = costFunc)[3]
+		# c1 = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1, R = 0.0f0, dropout = dropout, costFunc = costFunc)[3]
 		c1 = trainFunc(N, alpha1, 0.0f0)[3]
 		(p1, p2, p3) = findRInterval(alpha1, c1)
 		# d1 = 2.0f0*(p1[2] - p2[2][3])/(p1[2]+p2[2][3])
@@ -871,12 +884,12 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 		# else
 
 			#srand(1234)
-			#c1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = 0.0f0, alpha = alpha1)[3]
+			#c1 = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = 0.0f0, alpha = alpha1)[3]
 			println()
 			#println(string("Starting decay rate optimization with window from 0 to 1 and costs of ", c1, " to ", cost))
 			println(string("Starting decay rate optimization with window from ", p1[1], " to ", p3[1], " and costs of ", c1, " to ", p3[2]))
 			println()
-			# f = R -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1, R = R, dropout = dropout, costFunc = costFunc)
+			# f = R -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1, R = R, dropout = dropout, costFunc = costFunc)
 			f = R -> trainFunc(N, alpha1, R)
 			(R1, out2, status) = findMin(a -> f(a), tau, p1, p3, p2)
 			println()
@@ -891,10 +904,10 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 		alpha1_plus = range*alpha1
 		alpha1_minus = alpha1*(1.0f0-(range-1.0f0)/phi)
 		Random.seed!(1234)
-		# out2_plus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
+		# out2_plus = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
 		out2_plus = trainFunc(N, alpha1_plus, R1)
 		Random.seed!(1234)
-		# out2_minus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_minus, R = R1, dropout = dropout, costFunc = costFunc)
+		# out2_minus = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_minus, R = R1, dropout = dropout, costFunc = costFunc)
 		out2_minus = trainFunc(N, alpha1_minus, R1)
 		cost2_plus = out2_plus[3]
 		cost2_minus = out2_minus[3]
@@ -906,7 +919,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 				println(string("Alpha of ", alpha1_minus, " has a cost of ", cost2_minus, " which is lower than the midpoint cost of ", cost2, " at alpha = ", alpha1))
 				println(string("Re-optimizing alpha over the window 0.0 to ", alpha1, " with a decay rate of ", R1))
 				println()
-				# f = alpha -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
+				# f = alpha -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
 				f = alpha -> trainFunc(N, alpha, R1)
 				(alpha2, out3, status) = findMin(a -> f(a), tau, (0.0f0, c1), (alpha1, cost2))
 				cost3 = out3[3]
@@ -926,7 +939,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 					cost2 = cost2_plus
 					alpha1_plus = 0.1f0
 					Random.seed!(1234)
-					# out2_plus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
+					# out2_plus = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
 					out2_plus = trainFunc(N, alpha1_plus, R1)
 					(alpha1_plus, out2_plus)
 				end
@@ -943,7 +956,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 					println(string("The alpha range from ", alpha1_minus, " to ", alpha1_plus, " encloses the current minimum cost of ", cost2, " at alpha = ", alpha1))
 					println(string("Re-optimizing alpha over the window ", alpha1_minus, " to ", alpha1_plus, " with a decay rate of ", R1))
 					println()
-					# f = alpha -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
+					# f = alpha -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
 					f = alpha -> trainFunc(N, alpha, R1)
 					(alpha2, out3, status) = findMin(a -> f(a), tau, (alpha1_minus, cost2_minus), (alpha1_plus, cost2_plus))
 					cost3 = out3[3]
@@ -962,7 +975,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 				cost2 = cost2_plus
 				alpha1_plus = phi*0.5f0*alpha1 + alpha1
 				Random.seed!(1234)
-				# out2_plus = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
+				# out2_plus = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha1_plus, R = R1, dropout = dropout, costFunc = costFunc)
 				out2_plus = trainFunc(N, alpha1_plus, R1)
 				cost2_plus = out2_plus[3]
 				if cost2_plus < cost2
@@ -977,7 +990,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 					println(string("Alpha of ", alpha1, " has a cost of ", cost2, " which is lower than the original midpoint cost of ", cost2_minus, " at alpha = ", alpha1_minus))
 					println(string("Re-optimizing alpha over the window ", alpha1_minus, " to ", alpha1_plus, " with a decay rate of ", R1))
 					println()
-					# f = alpha -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
+					# f = alpha -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
 					f = alpha -> trainFunc(N, alpha, R1)
 					(alpha2, out3, status) = findMin(a -> f(a), tau, (alpha1_minus, cost2_minus), (alpha1_plus, cost2_plus), (alpha1, out2))
 					cost3 = out3[3]
@@ -995,7 +1008,7 @@ function autoTuneParams(inputs, batchSize, T0, B0, N, hidden; tau = 0.01f0, lamb
 			println()
 			println(string("Re-optimizing alpha over the window ", alpha1_minus, " to ", alpha1_plus, " with a decay rate of ", R1))
 			println()
-			# f = alpha -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
+			# f = alpha -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = R1, alpha = alpha, dropout = dropout, costFunc = costFunc)
 			f = alpha -> trainFunc(N, alpha, R1)
 			(alpha2, out3, status) = findMin(a -> f(a), tau, (alpha1_minus, cost2_minus), (alpha1_plus, cost2_plus), (alpha1, out2))
 			cost3 = out3[3]
@@ -1015,7 +1028,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 	O = size(Y, 2)
 
 	function findRInterval(alpha, p1)
-		f = R -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, dropout = dropout, costFunc = costFunc)
+		f = R -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, dropout = dropout, costFunc = costFunc)
 		phi = 0.5f0*(1.0f0+sqrt(5.0f0))
 		x = 0.01f0
 		x1 = p1[1]
@@ -1145,7 +1158,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 
 	if N > 100
 		Random.seed!(1234)
-		out1 = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = 0.0f0, alpha = alpha, costFunc = costFunc)
+		out1 = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, R = 0.0f0, alpha = alpha, costFunc = costFunc)
 		c1 = out1[3]
 		println(string("Baseline cost = ", c1))
 		phi = 0.5f0*(1.0f0+sqrt(5.0f0))
@@ -1175,7 +1188,7 @@ function autoTuneR(X, Y, batchSize, T0, B0, N, hidden; alpha = 0.002f0, tau = 0.
 				println()
 				println(string("Starting decay rate optimization with window from ", p1[1], " to ", p3[1], " and costs of ", p1[2], " to ", p3[2]))
 				println()
-				f = R -> eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, dropout = dropout, costFunc = costFunc)
+				f = R -> _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, dropout = dropout, costFunc = costFunc)
 				out = findMin(a -> f(a), tau, p1, p3, p2)
 				println()
 				println(string("At alpha of ", alpha, " optimal decay rate found to be ", out[1], " with a cost of ", out[2][3]))
@@ -1212,9 +1225,9 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 	end
 
 	filename = if dropout == 0.0f0
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", N, "_epochs_ADAMAX", backend, "_", costFunc, ".csv")
+		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", N, "_epochs_ADAMAX", backendname(), "_", costFunc, ".csv")
 	else
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", batchSize, "_batchSize_", N, "_epochs_ADAMAX", backend, "_", costFunc, ".csv")
+		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", batchSize, "_batchSize_", N, "_epochs_ADAMAX", backendname(), "_", costFunc, ".csv")
 	end
 
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
@@ -1229,7 +1242,7 @@ function smartTuneR(name, N, batchSize, hidden, alphaList; tau = 0.01f0, dropout
 	header = ["Alpha" "Optimal Decay Rate" "Training Error" "Test Error" "Extrapolated Final Training Error" string("Additional Epochs to Reach Final Error with Tolerance ", tau) "GFLOPS" "Time Per Epoch" "Status"]
 	
 	body = reduce(vcat, pmap(alphaList) do alpha # @parallel (vcat) for alpha in alphaList
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(alphaList))))))
 		else
 			BLAS.set_num_threads(0)
@@ -1299,9 +1312,9 @@ function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f
 	end
 	
 	if dropout == 0.0f0
-		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", alpha, "_alpha_ADAMAX", backend, "_", costFunc, ".csv")
+		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", alpha, "_alpha_ADAMAX", backendname(), "_", costFunc, ".csv")
 	else
-		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", dropout, "_dropoutRate_ADAMAX", backend, "_", costFunc, ".csv")
+		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambda, "_L2_", c, "_maxNorm_", batchSize, "batchSize_", dropout, "_dropoutRate_ADAMAX", backendname(), "_", costFunc, ".csv")
 	end
 
 	println(string("training network with ", hidden, " hidden layers ", lambda, " L2, and ", c, " maxNorm"))
@@ -1315,7 +1328,7 @@ function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f
 	header = map(a -> string("R ",  a), RList')
 	body = reduce(hcat, pmap(RList) do R # @parallel (hcat) for R in RList
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(RList))))))
 		else
 			BLAS.set_num_threads(0)
@@ -1323,7 +1336,7 @@ function tuneR(name, N, batchSize, hidden, RList; alpha = 0.002f0, lambda = 0.0f
 		
 		Random.seed!(1234)
 		println("beginning training with ", alpha, " alpha")
-		T, B, bestCost, record = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true, costFunc = costFunc)
+		T, B, bestCost, record = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha=alpha, R=R, dropout = dropout, printProgress = true, costFunc = costFunc)
 		record
 	end)
 	writedlm(string("decayRateCostRecords_", filename), [header; body])
@@ -1363,7 +1376,7 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFun
 		"absErr"
 	end
 
-	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backend, "_", costFunc, ".csv")
+	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "_alpha_ADAMAX", backendname(), "_", costFunc, ".csv")
 	
 	println(string("training network with ", hidden, " hidden layers"))
 	println("initializing network parameters")
@@ -1380,14 +1393,14 @@ function L2Reg(name, N, batchSize, hidden, lambdaList, alpha, c = 0.0f0; costFun
 	end
 	
 	body = reduce(vcat, pmap(lambdaList) do lambda # @parallel (vcat) for lambda = lambdaList
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), length(lambdaList))))))
 		else
 			BLAS.set_num_threads(0)
 		end
 		Random.seed!(1234)
 		println("beginning training with ", lambda, " lambda")
-		(T, B, bestCost, record, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha, printProgress = true, costFunc = costFunc)
+		(T, B, bestCost, record, timeRecord, GFLOPS) = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, lambda, c, alpha, printProgress = true, costFunc = costFunc)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, costFunc = costFunc)
 		GC.gc()
@@ -1437,9 +1450,9 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 	end
 
 	if dropout == 0.0f0
-		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc, ".csv")
+		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc, ".csv")
 	else
-		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc, ".csv")
+		filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc, ".csv")
 	end
 
 	println(string("training network with ", hidden, " hidden layers "))
@@ -1459,7 +1472,7 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 	
 	body = reduce(vcat, pmap(cList) do c # @parallel (vcat) for c = cList
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), length(cList))))))
 		else
 			BLAS.set_num_threads(0)
@@ -1468,7 +1481,7 @@ function maxNormReg(name, N, batchSize, hidden, cList, alpha, R; dropout = 0.0f0
 		
 		Random.seed!(1234)
 		println("beginning training with ", c, " max norm")
-		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
+		T, B, bestCost, record, timeRecord, GFLOPS = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
 		GC.gc()
@@ -1513,7 +1526,7 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 		"absErr"
 	end
 
-	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc, ".csv")
+	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc, ".csv")
 
 	println(string("training network with ", hidden, " hidden layers "))
 	println("initializing network parameters")
@@ -1533,7 +1546,7 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 	body = reduce(vcat, pmap(dropouts) do dropout # @parallel (vcat) for dropout in dropouts
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
 		#BLAS.set_num_threads(min(5, max(1, floor(Int, Sys.CPU_THREADS/min(nprocs(), length(dropouts))))))
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), length(dropouts))))))
 		else
 			BLAS.set_num_threads(0)
@@ -1541,7 +1554,7 @@ function dropoutReg(name, N, batchSize, hidden, dropouts, c, alpha, R; costFunc 
 
 		Random.seed!(1234)
 		println("beginning training with ", dropout, " dropout rate")
-		T, B, bestCost, record, timeRecord, GFLOPS = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
+		T, B, bestCost, record, timeRecord, GFLOPS = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, N, M, hidden, 0.0f0, c, alpha=alpha, R=R, dropout=dropout, printProgress = true, costFunc = costFunc)
 		GC.gc()
 		(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc)
 		GC.gc()
@@ -1665,7 +1678,7 @@ function fullTrain(name, N, batchSize, hidden, lambda, c, alpha, R, ID; startID 
 	end
 
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = eval(Symbol("ADAMAXTrainNN", backend))((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations, activation_list=activation_list, testbatchloading=testbatchloading, use_μP = use_μP)
+	T, B, bestCost, record, timeRecord, gflops, bestCostTest, costRecordTest, lastepoch, bestresultepoch = _ADAMAXTrainNN(currentbackend())((traindata, testdata), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa=swa, printAnything=printanything, ignorebest=ignorebest, prepdata = prepdata, prepactivations=prepactivations, activation_list=activation_list, testbatchloading=testbatchloading, use_μP = use_μP)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(traindata..., T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers, autoencoder=autoencoder, activation_list=activation_list)
 	# GC.gc()
@@ -1717,7 +1730,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 		string(hidden)
 	end
 
-	trainSym = Symbol("ADAMAXTrainNN", backend)
+	trainSym = _ADAMAXTrainNN(currentbackend())
 
 	filename = string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambda, c, dropout, resLayers), swa ? "ADAMAXSWA_" : "ADAMAX_", costFunc)
 	
@@ -1743,7 +1756,7 @@ function fullTrain(name, X, Y, N, batchSize, hidden, lambda, c, alpha, R, ID; st
 	#BLAS.set_num_threads(Sys.CPU_THREADS)	
 	# BLAS.set_num_threads(0)	
 	Random.seed!(1234)
-	T, B, bestCost, record, timeRecord = eval(trainSym)(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, lrschedule = lrschedule, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything, ignorebest=ignorebest, use_μP = use_μP)
+	T, B, bestCost, record, timeRecord = trainSym(((X, Y),), batchSize, T0, B0, N, M, hidden, lambda, c, alpha = alpha, R = R, lrschedule = lrschedule, printProgress = printProg, dropout = dropout, costFunc = costFunc, resLayers = resLayers, swa = swa, printAnything=printanything, ignorebest=ignorebest, use_μP = use_μP)
 	GC.gc()
 	(outTrain, Jtrain) = calcOutput(X, Y, T, B, dropout = dropout, costFunc = costFunc, resLayers = resLayers)
 	
@@ -1818,7 +1831,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 
 	bootstrapOut = pmap(1:num) do foo
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
 		else
 			BLAS.set_num_threads(0)
@@ -1842,7 +1855,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
                Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, costFunc = costFunc, printAnything=printanything, resLayers=reslayers, swa = swa, tol=toltest)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS) = _ADAMAXTrainNN(currentbackend())(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, costFunc = costFunc, printAnything=printanything, resLayers=reslayers, swa = swa, tol=toltest)
 		(T, B)
 	end
 	GC.gc()
@@ -1872,13 +1885,13 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 	end
 
 	println("Calculating performance vs number of networks")
-	d_y = if backend == :GPU
+	d_y = if backendname() == :GPU
 		cuda_allocate(Y)
 	else
 		[]
 	end
 
-	d_ytest = if backend == :GPU
+	d_ytest = if backendname() == :GPU
 		cuda_allocate(Ytest)
 	else
 		[]
@@ -1908,7 +1921,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 
             errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
       
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
@@ -1920,7 +1933,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
             # errorEstTest = mean(reduce(+, [abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]) for a in bootstrapOutTest2])/i)
             errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
             
-            Jtest= if backend == :GPU
+            Jtest= if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
@@ -1930,7 +1943,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
         else
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
@@ -1938,7 +1951,7 @@ function multiTrain(name, numEpochs, batchSize, hidden, lambda, c, alpha, R, num
 
 			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
             errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
-            Jtest= if backend == :GPU
+            Jtest= if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
@@ -2020,7 +2033,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
         println("Prepping batch and test data")
 		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
-		if backend == :GPU
+		if backendname() == :GPU
 			gpuvars = Vector()
 			testbatches = generateBatches(Xtest, Ytest, batchSize)
 			batchInputs = device_allocate(inputbatchData)
@@ -2040,7 +2053,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		end
 
 		println("Prepping activation data")
-		if backend == :GPU
+		if backendname() == :GPU
 			d_Thetas = FCANN.device_allocate(T0) 
 			push!(gpuvars, d_Thetas)
 
@@ -2061,11 +2074,11 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 			prepactivations = (tanh_grad_zBATCH, aBATCH, daltasBATCH)
 		end
 
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = _ADAMAXTrainNN(currentbackend())(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
 		multiOut1 = (T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch)
 		multiOut2 = pmap(2:num) do foo
 			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
-			if (nprocs() > 1) & (backend == :CPU)
+			if (nprocs() > 1) & (backendname() == :CPU)
 				BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS/4)), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
 			else
 				BLAS.set_num_threads(blasthreads)
@@ -2094,7 +2107,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	            Random.seed!(ID)
 	            Random.seed!(1234+rand(UInt32)+foo)
 	        end	
-			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, bestresultepoch, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=true, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = _ADAMAXTrainNN(currentbackend())(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, bestresultepoch, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=true, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
 		end
 		multiOut = [multiOut1; multiOut2]
 	else
@@ -2113,7 +2126,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
         println("Prepping batch and test data")
 		(inputbatchData, outputbatchData) = generateBatches(X, Y, batchSize)
-		if backend == :GPU
+		if backendname() == :GPU
 			gpuvars = Vector()
 			testbatches = generateBatches(Xtest, Ytest, batchSize)
 			batchInputs = device_allocate(inputbatchData)
@@ -2132,7 +2145,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 			prepdata = (inputbatchData, outputbatchData)
 		end
 		println("Prepping activation data")
-		if backend == :GPU
+		if backendname() == :GPU
 			d_Thetas = FCANN.device_allocate(T0) 
 			push!(gpuvars, d_Thetas)	
 
@@ -2156,7 +2169,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		multiOut = map(1:num) do foo
 			#BLAS.set_num_threads(Sys.CPU_THREADS)
 			printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
-			if (nprocs() > 1) & (backend == :CPU)
+			if (nprocs() > 1) & (backendname() == :CPU)
 				BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS/4)), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
 			else
 				BLAS.set_num_threads(blasthreads)
@@ -2185,11 +2198,11 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	            Random.seed!(ID)
 	            Random.seed!(1234+rand(UInt32)+foo)
 	        end	
-			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestCostTest, costRecordTest, lastepoch, bestresultepoch) = _ADAMAXTrainNN(currentbackend())(((X, Y), (Xtest, Ytest)), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, swa=swa, ignorebest=ignorebest, minepoch=minepoch, prepdata=prepdata, prepactivations=prepactivations, trainsample=trainsample, activation_list=activation_list)
 		end
 	end
 
-	if backend == :GPU
+	if backendname() == :GPU
 		for v in gpuvars
 			if typeof(v) == CUDAArray
 				deallocate!(v)
@@ -2228,13 +2241,13 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 	end
 
 	printanything && println("Calculating performance vs number of networks")
-	d_y = if backend == :GPU
+	d_y = if backendname() == :GPU
 		cuda_allocate(Y)
 	else
 		[]
 	end
 
-	d_ytest = if backend == :GPU
+	d_ytest = if backendname() == :GPU
 		cuda_allocate(Ytest)
 	else
 		[]
@@ -2254,7 +2267,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 		[]
 	end
 
-	if backend == :GPU
+	if backendname() == :GPU
 		d_out = cuda_allocate(outTrain)
 		d_out_test = cuda_allocate(outTest)
 	end
@@ -2269,7 +2282,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
             errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
       		
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
 	      		memcpy!(d_out, combinedOutputTrain)
             	calcError(d_out, d_y, costFunc = costFunc)
             else
@@ -2282,7 +2295,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
             # errorEstTest = mean(reduce(+, [abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]) for a in bootstrapOutTest2])/i)
             errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
             
-            Jtest= if backend == :GPU
+            Jtest= if backendname() == :GPU
 	            memcpy!(d_out_test, combinedOutputTest)
             	calcError(d_out_test, d_ytest, costFunc = costFunc)
             else
@@ -2293,7 +2306,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
         else
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
 	            memcpy!(d_out, combinedOutputTrain)
             	calcError(d_out, d_y, costFunc = costFunc)
             else
@@ -2302,7 +2315,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
 
 			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
             errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
-            Jtest= if backend == :GPU
+            Jtest= if backendname() == :GPU
 	            memcpy!(d_out_test, combinedOutputTest)
             	calcError(d_out_test, d_ytest, costFunc = costFunc)
             else
@@ -2315,7 +2328,7 @@ function multiTrain(name, Xraw::U, Y::U, Xtestraw::U, Ytest::U, numEpochs, batch
         line
     end 
 
-    if backend == :GPU
+    if backendname() == :GPU
     	deallocate!(d_out)
     	deallocate!(d_out_test)
     	deallocate!(d_y)
@@ -2374,7 +2387,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 	multiout = pmap(1:num) do foo
 		printanything && printstyled("Training network $foo out of $num", color=:yellow, bold=true)
 		#BLAS.set_num_threads(Sys.CPU_THREADS)
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(round(Int64, min(8, Sys.CPU_THREADS)/4), max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
 		else
 			BLAS.set_num_threads(blasthreads)
@@ -2403,7 +2416,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
             Random.seed!(ID)
             Random.seed!(1234+rand(UInt32)+foo)
         end	
-		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestepoch) = eval(Symbol("ADAMAXTrainNN", backend))(((X, Y),), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, ignorebest=ignorebest, swa=swa)
+		(T, B, bestCost, costRecord, timeRecord, GFLOPS, bestepoch) = _ADAMAXTrainNN(currentbackend())(((X, Y),), batchSize, T0, B0, numEpochs, M, hidden, lambda, c, R = R, alpha=alpha, dropout=dropout, printProgress = printProg, printAnything = printanything, costFunc = costFunc, resLayers = reslayers, tol = toltest, ignorebest=ignorebest, swa=swa)
 	end
 	bestepochs = [a[7] for a in multiout]
 	bootstrapOut = [(a[1], a[2]) for a in multiout]
@@ -2431,7 +2444,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 	end
 
 	printanything && println("Calculating performance vs number of networks")
-	d_y = if backend == :GPU
+	d_y = if backendname() == :GPU
 		cuda_allocate(Y)
 	else
 		[]
@@ -2454,7 +2467,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
 
             errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
       
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
@@ -2465,7 +2478,7 @@ function multiTrain(name, Xraw::U, Y::U, numEpochs, batchSize, hidden, lambda, c
         else
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
@@ -2529,13 +2542,13 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 	end
 
 	filename = if adv
-		string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", lambdaeta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backend, "_", costFunc)
+		string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", c, "_maxNorm_", lambdaeta, "_advNoise_", alpha, "_alpha_AdvADAMAX", backendname(), "_", costFunc)
 	else
 		string(colNames, name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", formIndicString(R, lambdaeta, c, dropout), "ADAMAX_", costFunc)
 		# if dropout == 0.0f0
-		# 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
+		# 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc)
 		# else
-		# 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
+		# 	string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", lambdaeta, "_L2_", c, "_maxNorm_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc)
 		# end
 	end
 	
@@ -2609,7 +2622,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 	GC.gc()
 	# BLAS.set_num_threads(0)
 	# num = length(multiOut)
- #  	if (nprocs() > 1) & (FCANN.backend == :CPU)
+ #  	if (nprocs() > 1) & (FCANN.backendname() == :CPU)
  #        BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
  #    end
 
@@ -2637,13 +2650,13 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
     	
 	#calculate average network output
 	println("Calculating performance vs number of networks")
-	d_y = if backend == :GPU
+	d_y = if backendname() == :GPU
 		cuda_allocate(Y)
 	else
 		[]
 	end
 
-	d_ytest = if backend == :GPU
+	d_ytest = if backendname() == :GPU
 		cuda_allocate(Ytest)
 	else
 		[]
@@ -2673,7 +2686,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 
             errorEstTrain = mean(mapreduce(a -> abs.(a .- [combinedOutputTrain[:, 1:O] combinedOutputTrainPre[:, O+1:2*O]]), +, bootstrapOutTrain2[1:i])/i)
       
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
@@ -2685,7 +2698,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
             # errorEstTest = mean(reduce(+, [abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]) for a in bootstrapOutTest2])/i)
             errorEstTest = mean(mapreduce(a -> abs.(a .- [combinedOutputTest[:, 1:O] combinedOutputTestPre[:, O+1:2*O]]), +, bootstrapOutTest2[1:i])/i)
             
-            Jtest= if backend == :GPU
+            Jtest= if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
@@ -2695,7 +2708,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
         else
             combinedOutputTrain = reduce(+, bootstrapOutTrain[1:i])/i
             errorEstTrain = mean(mapreduce(a -> abs.(a - combinedOutputTrain), +, bootstrapOutTrain[1:i])/i)  
-            Jtrain = if backend == :GPU
+            Jtrain = if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTrain), d_y, costFunc = costFunc)
             else
             	calcError(combinedOutputTrain, Y, costFunc = costFunc)
@@ -2703,7 +2716,7 @@ function evalMulti(name, hidden, lambdaeta, c, alpha, R; sampleCols = [], IDList
 
 			combinedOutputTest = reduce(+, bootstrapOutTest[1:i])/i
             errorEstTest = mean(mapreduce(a -> abs.(a - combinedOutputTest), +, bootstrapOutTest[1:i])/i)  
-            Jtest= if backend == :GPU
+            Jtest= if backendname() == :GPU
             	calcError(cuda_allocate(combinedOutputTest), d_ytest, costFunc = costFunc)
             else
             	calcError(combinedOutputTest, Ytest, costFunc = costFunc)
@@ -2732,7 +2745,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	ytest = (Xtest*params1) .+ (Xtest*params2) .^2
 
 	#if multi is true, run training tasks across workers
-	num = if multi & (backend == :CPU)
+	num = if multi & (backendname() == :CPU)
 		nprocs() - 1
 	else
 		1
@@ -2753,7 +2766,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	end	
 	out = pmap(1:num) do _
 		BLAS.set_num_threads(numThreads)
-		eval(Symbol("ADAMAXTrainNN", backend))(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa, ignorebest=true, activation_list=activation_list, printAnything = print_anything)
+		_ADAMAXTrainNN(currentbackend())(((X, Y), (Xtest, ytest)), batchSize, T0, B0, N, M, hidden, 0.0f0, Inf; printProgress = printProg, costFunc = costFunc, dropout = dropout, resLayers=reslayers, swa=swa, ignorebest=true, activation_list=activation_list, printAnything = print_anything)
 	end
 	slowestInd = argmax(map(a -> a[end][end], out))
 	(bestThetas, bestBiases, finalCost, costRecord, timeRecord) = out[slowestInd]
@@ -2765,19 +2778,19 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 	cpu_info = String(take!(f))
 	cpu_name = strip(split(cpu_info, ':')[1])
 
-	gpu_name = if backend == :GPU
+	gpu_name = if backendname() == :GPU
 		cuDeviceGetName(Int32(current_device))
 	else
 		""
 	end
 	
-	if backend == :CPU
+	if backendname() == :CPU
 		print_anything && println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", cpu_name))
 	else
 		print_anything && println(string("Completed benchmark with ", M, " input ", hidden, " hidden ", O, " output, and ", batchSize, " batchSize on a ", gpu_name))
 	end
 	
-	print_anything && println("Time to train on ", backend, " took ", train_time, " seconds for ", N, " epochs")
+	print_anything && println("Time to train on ", backendname(), " took ", train_time, " seconds for ", N, " epochs")
 	print_anything && println("Average time of ", timePerBatch/batchSize/1e-9, " ns per example")
 	print_anything && println("Total operations per example = ", fops/batchSize, " foward prop ops + ", bops/batchSize, " backprop ops + ", pops/batchSize, " update ops = ", total_ops/batchSize)
 	if num > 1
@@ -2786,7 +2799,7 @@ function testTrain(M::Int64, hidden::Array{Int64, 1}, O::Int64, batchSize::Int64
 		print_anything && println("Approximate GFLOPS = ", total_ops/timePerBatch/1e9)
 	end
 
-	filename = if backend == :GPU
+	filename = if backendname() == :GPU
 		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ' => '_'), "_", replace(gpu_name, ' ' => '_'), "_", dropout, "_dropout_", costFunc, "_timingBenchmark.csv")
 	elseif num > 1
 		string(M, "_input_", hidden, "_hidden_", O, "_output_", batchSize, "_batchSize_", replace(cpu_name, ' ' => '_'), "_", dropout, "_dropout_", costFunc, "_", num, "_parallelTasks_", numThreads, "_BLASThreads_timingBenchmark.csv")
@@ -2827,7 +2840,7 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	dropoutStr = (dropout == 0.0f0) ? "" : string(dropout, "_dropoutRate_")
 	resStr = (resLayers == 0) ? "" : string(resLayers, "_resLayers_")
 
-	filename = string(name, "_", M, "_input_", O, "_output_", resStr, dropoutStr, N, "_epochs_smartParams_ADAMAX", backend, "_", costFunc, ".csv")
+	filename = string(name, "_", M, "_input_", O, "_output_", resStr, dropoutStr, N, "_epochs_smartParams_ADAMAX", backendname(), "_", costFunc, ".csv")
 
 	#determine number of layers to test in a range
 	fatHiddenList = mapreduce(vcat, Plist) do P 
@@ -2856,13 +2869,13 @@ function smartEvalLayers(name, N, batchSize, Plist; tau = 0.01f0, layers = [2, 4
 	end
 
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden in hiddenList
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), length(hiddenList))))))
 		else
 			BLAS.set_num_threads(0)
 		end
 		
-		# if (nprocs() > 1) & (backend == :CPU)
+		# if (nprocs() > 1) & (backendname() == :CPU)
 		# 	BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_THREADS / min(nprocs(), length(hiddenList)))))
 		# end
 		println(string("training network with ", hidden[2], " hidden layers"))
@@ -2922,7 +2935,7 @@ function smartEvalLayers(name, (X, Y, Xtest, Ytest), N, batchSize, Plist; tau = 
 	dropoutStr = (dropout == 0.0f0) ? "" : string(dropout, "_dropoutRate_")
 	resStr = (resLayers == 0) ? "" : string(resLayers, "_resLayers_")
 
-	filename = string(name, "_", M, "_input_", O, "_output_", resStr, dropoutStr, N, "_epochs_smartParams_ADAMAX", backend, "_", costFunc, ".csv")
+	filename = string(name, "_", M, "_input_", O, "_output_", resStr, dropoutStr, N, "_epochs_smartParams_ADAMAX", backendname(), "_", costFunc, ".csv")
 
 	#determine number of layers to test in a range
 	fatHiddenList = mapreduce(vcat, Plist) do P 
@@ -2950,13 +2963,13 @@ function smartEvalLayers(name, (X, Y, Xtest, Ytest), N, batchSize, Plist; tau = 
 	end
 
 	body = reduce(vcat, pmap(hiddenList) do hidden # @parallel (vcat) for hidden in hiddenList
-		if (nprocs() > 1) & (backend == :CPU)
+		if (nprocs() > 1) & (backendname() == :CPU)
 			BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), length(hiddenList))))))
 		else
 			BLAS.set_num_threads(0)
 		end
 		
-		# if (nprocs() > 1) & (backend == :CPU)
+		# if (nprocs() > 1) & (backendname() == :CPU)
 		# 	BLAS.set_num_threads(max(1, ceil(Int64, Sys.CPU_THREADS / min(nprocs(), length(hiddenList)))))
 		# end
 		println(string("training network with ", hidden[2], " hidden layers"))
@@ -3023,9 +3036,9 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 	end
 
 	filename = if dropout == 0.0f0
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
+		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc)
 	else
-		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backend, "_", costFunc)
+		string(name, "_", M, "_input_", h_name, "_hidden_", O, "_output_", dropout, "_dropoutRate_", alpha, "_alpha_", R, "_decayRate_ADAMAX", backendname(), "_", costFunc)
 	end
 
 	header = if costFunc2 == costFunc
@@ -3044,14 +3057,14 @@ function multiTrainAutoReg(name, numEpochs, batchSize, hidden, alpha, R; tau = 0
 			else
 				initializeParams(M, hidden, O)
 			end	
-			if (nprocs() > 1) & (backend == :CPU)
+			if (nprocs() > 1) & (backendname() == :CPU)
 				BLAS.set_num_threads(min(5, max(1, ceil(Int, Sys.CPU_THREADS/min(nprocs(), num)))))
 			else
 				BLAS.set_num_threads(0)
 			end
 
 			Random.seed!(1234+foo-1)
-			(T, B, bestCost, costRecord, timeRecord, GFLOPS) = eval(Symbol("ADAMAXTrainNN", backend))(X, Y, batchSize, T0, B0, numEpochs, M, hidden, 0.0f0, c, alpha=alpha, R = R, dropout=dropout, printProgress = printProg, costFunc = costFunc)
+			(T, B, bestCost, costRecord, timeRecord, GFLOPS) = _ADAMAXTrainNN(currentbackend())(X, Y, batchSize, T0, B0, numEpochs, M, hidden, 0.0f0, c, alpha=alpha, R = R, dropout=dropout, printProgress = printProg, costFunc = costFunc)
 			(T, B, median(timeRecord[2:end] - timeRecord[1:end-1]), median(GFLOPS))
 		end
 		GC.gc()

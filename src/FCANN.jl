@@ -506,11 +506,24 @@ informative error message.
 - Users typically don't need to call this directly
 """
 function __init__(force::Bool = false)
-    if gpu_ready[] && !force
-        #already initialized; re-running `__init__` by hand is therefore safe
-        println("GPU backend is already initialized.  Available backends are: CPU, GPU")
-        refreshbackendlist!()
-        return
+    if gpu_ready[]
+        if force
+            # Forced re-initialization: release the handle created by the previous initialization
+            # (the device context that created it is still the current one at this point) and fall
+            # through so the rest of this function rebuilds the CUDA state from scratch.
+            try
+                cublasDestroy_v2(cublas_handle)
+            catch err
+                @warn "Could not destroy the previous cublas handle" err
+            end
+            gpu_ready[] = false
+            refreshbackendlist!()
+        else
+            #already initialized; re-running `__init__` by hand is therefore safe
+            println("GPU backend is already initialized.  Available backends are: CPU, GPU")
+            refreshbackendlist!()
+            return
+        end
     end
     #get cuda toolkit versions if any
     println("Checking for cuda toolkit versions")

@@ -110,8 +110,26 @@ end
 
 #names, functions, and function derivatives must all be in order here
 costFuncNames = ("absErr", "sqErr", "normLogErr", "cauchyLogErr", "outputIndex", "crossEntropy", "crossEntropyBatch", "outputIndexBatch", "sqErrIndex", "absErrIndex", "crossEntropyDist", "crossEntropyDistBatch")
-costFuncList = eval.(Symbol.(costFuncNames))
-costFuncDerivsList = eval.(Symbol.(map(a -> "$(a)Deriv", costFuncNames)))
+# Spelled out explicitly rather than built with `eval.(Symbol.(costFuncNames))`.  A runtime
+# `eval` is invisible to inference and precompilation, and the objects it produces cannot be
+# tracked by incremental tooling such as Revise.jl.  `check_costfunclists()` below asserts
+# that these lists stay in the same order as `costFuncNames`.
+costFuncList = (absErr, sqErr, normLogErr, cauchyLogErr, outputIndex, crossEntropy, crossEntropyBatch, outputIndexBatch, sqErrIndex, absErrIndex, crossEntropyDist, crossEntropyDistBatch)
+costFuncDerivsList = (absErrDeriv, sqErrDeriv, normLogErrDeriv, cauchyLogErrDeriv, outputIndexDeriv, crossEntropyDeriv, crossEntropyBatchDeriv, outputIndexBatchDeriv, sqErrIndexDeriv, absErrIndexDeriv, crossEntropyDistDeriv, crossEntropyDistBatchDeriv)
+
+# These tuples hold the values that were bound at load time, so never rebind one of the names
+# above to a different function object - add methods to the existing function instead.  A
+# rebinding would leave the lists here (and `costFuncs`/`costFuncDerivs`) pointing at the old
+# object.
+function check_costfunclists()
+    @assert (length(costFuncNames) == length(costFuncList) == length(costFuncDerivsList)) "cost function name, function, and derivative lists must have the same length"
+    for (name, f, df) in zip(costFuncNames, costFuncList, costFuncDerivsList)
+        @assert (getfield(@__MODULE__, Symbol(name)) === f) string("costFuncList is out of order relative to costFuncNames at ", name)
+        @assert (getfield(@__MODULE__, Symbol(name, "Deriv")) === df) string("costFuncDerivsList is out of order relative to costFuncNames at ", name)
+    end
+    return true
+end
+check_costfunclists()
 #--------------------------------------------------------------------------
 
 function calculate_l2(Thetas::Vector{M}) where {T<:Real, M<:Matrix{T}}

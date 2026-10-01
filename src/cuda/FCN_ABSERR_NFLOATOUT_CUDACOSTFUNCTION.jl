@@ -57,7 +57,12 @@ end
 
 get_optimal_1d_launch_params(x::Array) = get_optimal_1d_launch_params(length(x))
 
-costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation", "rowMul")
+# Canonical inventory of the kernels loaded by `create_costfunc_kernels` / `create_adamax_kernels`.
+# These tuples used to drive a `for kname in knames; @eval global $(Symbol(kname)) = ... end` loop.
+# The loads are now written out explicitly - which keeps them visible to inference and to
+# precompilation and lets Revise.jl see them - and these tuples serve as the drift guard that each
+# loader verifies against, so the two cannot silently diverge.
+costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation", "rowMul", "crossEntropyBatchDerivBeta", "crossEntropyBatchLossBeta", "outputIndexBatchGather")
 adamax_kernel_names = ("updateParams", "elSq", "elSq2", "scaleParams", "updateEst")
 
 function create_costfunc_kernels(md; kwargs...)
@@ -73,10 +78,8 @@ function create_costfunc_kernels(md; kwargs...)
 	global crossEntropyBatchDerivBeta = load_module_patient(md, "crossEntropyBatchDerivBeta"; kwargs...)
 	global crossEntropyBatchLossBeta = load_module_patient(md, "crossEntropyBatchLossBeta"; kwargs...)
 	global outputIndexBatchGather = load_module_patient(md, "outputIndexBatchGather"; kwargs...)
-	# for kname in knames
-	# 	fptr = load_module_patient(md, kname; kwargs...)
-	# 	@eval global $(Symbol(kname)) = $fptr
-    # end
+	#verify that the explicit loads above still cover the canonical inventory
+	@assert all(kname -> isdefined(@__MODULE__, Symbol(kname)), costfunc_kernel_names) "create_costfunc_kernels did not load every kernel listed in costfunc_kernel_names"
 end
 
 function create_adamax_kernels(md; kwargs...)
@@ -85,11 +88,9 @@ function create_adamax_kernels(md; kwargs...)
 	global elSq2 = load_module_patient(md, "elSq2"; kwargs...)
 	global scaleParams = load_module_patient(md, "scaleParams"; kwargs...)
 	global updateEst = load_module_patient(md, "updateEst"; kwargs...)
+	#verify that the explicit loads above still cover the canonical inventory
+	@assert all(kname -> isdefined(@__MODULE__, Symbol(kname)), adamax_kernel_names) "create_adamax_kernels did not load every kernel listed in adamax_kernel_names"
 end
-
-# for k in costfunc_kernel_names
-# 	@eval global $(Symbol(k)) = Ptr{Nothing}()
-# end
 
 function cu_module_compile(tmpdir)
 	#------use nvcc to compile .ptx files from .cu kernels and load module------------
@@ -117,17 +118,30 @@ function cu_module_compile(tmpdir)
 	return (costpath, adamaxpath)
 end
 
-function cu_module_load(path)
+function cu_module_load(path; tlimit = 10)
 	load = false
 	md = false
-	while !load
-		try
-			md = cuModuleLoad(path)
-			load = true
-		catch
+	err = nothing
+	#`cuModuleLoad(fname::String)` in NVIDIALibraries converts the path with `map(UInt8, collect(fname))`,
+	#which is *not* NUL-terminated, so the driver can read past the end of the buffer and fail with a
+	#spurious "file not found" (whether it does depends on what happens to follow the buffer, which makes
+	#it intermittent).  Pass our own NUL-terminated buffer through the `Ptr{UInt8}` overload instead.
+	fname = vcat(Vector{UInt8}(codeunits(path)), 0x00)
+	t = time()
+	GC.@preserve fname begin
+		#bounded retry: an unbounded loop here would hang the session (including `using FCANN`, since
+		#`__init__` loads through this function) if the module can never be loaded
+		while !load && (time() - t < tlimit)
+			try
+				md = cuModuleLoad(pointer(fname))
+				load = true
+			catch e
+				err = e
+			end
+			sleep(0.1)
 		end
-		sleep(0.1)
 	end
+	load || error("cu_module_load: could not load the ptx module at $path within $(tlimit) seconds$(err === nothing ? "" : " (last error: $err)")")
 	return md
 end
 
@@ -157,40 +171,54 @@ function create_errorfunction_dicts(cost_md)
 end
 
 function switch_device(d::Int64)
+	gpu_ready[] || error("switch_device: the GPU backend is not initialized in this session; see availableBackends()")
+	1 <= d <= length(devlist) || error("switch_device: device index $d is out of range; this session has $(length(devlist)) device(s)")
 	if current_device == devlist[d]
 		println("Already using device $(devlist[d])")
 	else
 		println("Switching from $current_device to $(devlist[d])")
-		#destroy existing cublas_handle
+		#destroy the cublas handle belonging to the previous device's context
 		cublasDestroy_v2(cublas_handle)
 
-		#set cuda device for kernel launches and cublas handles to a new device d
-	    cudaSetDevice(devlist[d])
+		#Switch device for both APIs that this package uses:
+		#  * the driver API (`cuModuleLoad`, `cuLaunchKernel`, `cuCtxSynchronize`, and the cuBLAS
+		#    handle) follows the calling thread's current context, so retain the target device's
+		#    primary context and make it current;
+		#  * the runtime API (`cudaMalloc`/`cudaMemcpy`/`cudaFree`, used by `cuda_allocate` to build
+		#    the CUDAArrays the kernels operate on) follows the runtime's current device.
+		#The order matters: `cudaSetDevice` must come *after* the new context is current.  Switching
+		#the runtime device while the previous device's context is still current tears down the
+		#driver context that everything else depends on, and the next cuModuleLoad then fails with
+		#"context is destroyed".
+		ctx = cuDevicePrimaryCtxRetain(devlist[d])
+		rc = cuCtxSetCurrent(ctx)
+		rc == 0 || error("switch_device: cuCtxSetCurrent failed for device $(devlist[d]) (CUDA error $rc)")   #0 == CUDA_SUCCESS
+		rc = cudaSetDevice(Int32(d - 1))   #ordinal of devlist[d]
+		rc == 0 || error("switch_device: cudaSetDevice failed for device $(devlist[d]) (cuda error $rc)")    #0 == cudaSuccess
 
 	    #create cublas handle to reference for calls on the new device
 	    global cublas_handle = cublasCreate_v2()
 	    global current_device = devlist[d]
 
 	    #------load ptx modules in new context------------
-        (adamax_md, cost_md) = cu_module_load()
-        # cost_md = cuModuleLoad("NFLOATOUT_COSTFUNCTION_INTRINSIC_KERNELS.ptx")        
-        # adamax_md = cuModuleLoad("ADAMAX_INTRINSIC_KERNELS.ptx")
-       
-        #----------use cuda driver api to create cuFunction pointers-------------
-        #create adamax train and cost function kernels in global scope
-   		create_kernels(adamax_md, adamax_kernel_names)
-   		create_kernels(cost_md, costfunc_kernel_names)
-        
-        # #create error function and derivatives kernel lists
-        # err_kernel_list = map(kname -> cuModuleGetFunction(cost_md, kname), costFuncNames)
-        # err_deriv_kernel_list = map(kname -> cuModuleGetFunction(cost_md, string(kname, "Deriv")), costFuncNames)
+		#cuda modules and function pointers are per context, so everything has to be re-loaded from
+		#the .ptx files that `__init__` compiled.  Recompile them if that temporary directory has
+		#since been removed (by a tmp cleaner, for example).
+		if !(isfile(costpath) && isfile(adamaxpath))
+			paths = cu_module_compile(mktempdir())
+			global costpath = paths[1]
+			global adamaxpath = paths[2]
+		end
 
-        # #make error kernels available in global scope
-        # global costFuncKs = Dict(zip(costFuncNames, err_kernel_list))
-        # global costFuncDerivKs = Dict(zip(costFuncNames, err_deriv_kernel_list))
+		cost_md = cu_module_load(costpath)
+		adamax_md = cu_module_load(adamaxpath)
 
-        #make error kernels available in global scope
-        create_errorfunction_dicts(cost_md) 
+		#----------use cuda driver api to create cuFunction pointers-------------
+		#rebuild the cost function/adamax kernels and the error function and derivative kernel
+		#dictionaries in global scope, now pointing at kernels in the new device's context
+		create_costfunc_kernels(cost_md)
+		create_adamax_kernels(adamax_md)
+		create_errorfunction_dicts(cost_md)
 	end
 	println("Current device set to $(devlist[d])")
 	return current_device

@@ -51,9 +51,90 @@ using Pkg
 using NVIDIALibraries
 using RandomMatrices
 
-#set default backend to CPU
-global backend = :CPU
-global backendList = [:CPU]
+# Opt out of Revise.jl's default package mode (`:eval`), which replays and retracts top-level
+# assignment statements.  This module deliberately keeps a little mutable selection state
+# (`BACKEND`, `gpu_ready`, `backendList`) that is only sensible when it is set up by `__init__`;
+# with `:evalmeth` Revise tracks method definitions only and leaves that state alone.
+# See the Revise documentation section "Configuring the revise mode".
+const __revise_mode__ = :evalmeth
+
+#----------------------------------------------------------------------------
+# Backend selection
+#
+# The active backend is represented by a singleton type and selected through ordinary multiple
+# dispatch (`currentbackend`).  This replaces the former
+# `eval(Symbol("someFunction", backend))(...)` dispatch: a runtime `eval` is invisible to type
+# inference and precompilation, and - contrary to intuition - it does NOT let a task observe
+# methods installed after the task started running (world-age pinning), so it gives no benefit
+# for incremental workflows such as Revise.jl while hiding every real dispatch site.
+#----------------------------------------------------------------------------
+abstract type AbstractBackend end
+struct CPUBackend <: AbstractBackend end
+struct GPUBackend <: AbstractBackend end
+
+const CPUBACKEND = CPUBackend()
+const GPUBACKEND = GPUBackend()
+
+# The active backend.  The *binding* is `const` and only the `Ref` contents change, which keeps
+# the selection out of reach of tools that retract or replay top-level bindings.
+const BACKEND = Ref{AbstractBackend}(CPUBACKEND)
+
+# True once CUDA has been initialized successfully in `__init__`.  This is the single source of
+# truth for GPU availability; `backendList` is derived from it by `refreshbackendlist!`.
+const gpu_ready = Ref(false)
+
+# Guards the `atexit` hook that releases the cuBLAS handle so that re-running `__init__` (which
+# is safe and useful after redefining code in a live session) cannot register it twice.
+const atexit_registered = Ref(false)
+
+# The symbols accepted by `setBackend`.  `refreshbackendlist!` keeps this in sync with `gpu_ready`
+# so it recovers on its own if a session tool re-evaluates the assignment that created it.
+const backendList = Symbol[:CPU]
+
+backendname(::CPUBackend) = :CPU
+backendname(::GPUBackend) = :GPU
+
+"""
+    currentbackend() -> AbstractBackend
+
+Return the currently active backend object (`CPUBACKEND` or `GPUBACKEND`).  Dispatch on this
+type (`::CPUBackend` / `::GPUBackend`) instead of on the `Symbol` returned by `getBackend()`
+whenever you need backend-specific behavior.
+"""
+currentbackend() = BACKEND[]
+
+"""
+    backendname() -> Symbol
+    backendname(b::AbstractBackend) -> Symbol
+
+Return the `Symbol` name (`:CPU` or `:GPU`) of a backend without printing anything.
+"""
+backendname() = backendname(currentbackend())
+
+"""
+    resolvebackend(b) -> AbstractBackend
+
+Convert a `Symbol` (`:CPU` / `:GPU`) or an `AbstractBackend` into a backend object.
+"""
+resolvebackend(b::AbstractBackend) = b
+resolvebackend(b::Symbol) = b === :GPU ? GPUBACKEND : CPUBACKEND
+
+"""
+    availableBackends() -> Vector{Symbol}
+
+Return the backends that are usable in this session: always `:CPU`, plus `:GPU` once CUDA has
+been initialized successfully.
+"""
+availableBackends() = gpu_ready[] ? Symbol[:CPU, :GPU] : Symbol[:CPU]
+
+# Keep the exported `backendList` in agreement with the live GPU state.  `gpu_ready` is the
+# source of truth, so a clobbered or stale list repairs itself the next time it is consulted.
+function refreshbackendlist!()
+    backends = availableBackends()
+    empty!(backendList)
+    append!(backendList, backends)
+    return backendList
+end
 
 
 include("MASTER_FCN_ABSERR_NFLOATOUT.jl")
@@ -110,13 +191,14 @@ setBackend(:CPU)  # Use CPU backend
 ```
 """
 function setBackend(b::Symbol)
-    if in(b, backendList)
-        global backend = b
+    refreshbackendlist!()
+    if b === :CPU || (b === :GPU && gpu_ready[])
+        BACKEND[] = resolvebackend(b)
     else
         println(string("Selected backend: ", b, " is not available."))
     end
-    println(string("Backend is set to ", backend))
-    return backend
+    println(string("Backend is set to ", backendname()))
+    return backendname()
 end
 
 """
@@ -128,72 +210,147 @@ Get the currently selected computation backend.
 The current backend symbol (:CPU or :GPU).
 """
 function getBackend()
-    println(string("Backend is set to ", backend))
-    backend
+    println(string("Backend is set to ", backendname()))
+    backendname()
 end
 
-#normal gradient check with cost functions with target outputs matching size of output layer (or 2x for log cost functions)
+#gradient checks for the currently selected backend (see setBackend).  The first positional
+#argument selects which of the checkNumGrad methods is used; see the docstring for the full list.
 """
-    checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...) -> Float64
+    checkNumGrad(args...; kwargs...) -> Float64
 
 Numerically verify gradients computed by the network using finite differences.
 
-This function compares analytical gradients (computed via backpropagation) with
-numerical gradients (computed via finite differences) to verify correct implementation.
+`checkNumGrad` is polymorphic: it dispatches on the first positional argument to one of the
+methods below, each of which runs on the currently selected backend (CPU or GPU, see
+`setBackend`).  Every method computes both the analytical gradient (backpropagation) and the
+numerical gradient (central finite differences) and returns the relative normed difference
+between them.
 
-## Arguments
-- `lambda::AbstractFloat` - Regularization strength (default: 0.0)
+## Methods
+
+- `checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)` - elementwise cost functions whose
+  target outputs match the output layer size (or 2x for log-likelihood cost functions such as
+  `"normLogErr"` and `"cauchyLogErr"`).
+- `checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)` - gradient at a
+  single output index (`OutputIndex` loss), optionally with entropy-regularized cross
+  entropy via `loss_type = CrossEntropyLoss(beta)`.
+- `checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)` - a cost function applied only
+  at a per-example output index (the "index" variants, e.g. `"absErr"`, `"sqErr"`).
+- `checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)` - cross entropy loss in
+  a batch with per-example output indices, optionally with a per-example scalar value
+  (`use_values = true`).
+- `checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...)` - cross entropy loss with per-row
+  target probability distributions.
+
+`?checkNumGrad` displays each method's docstring in turn.
 
 ## Keyword Arguments
-- `M::Integer` - Input dimension (default: 10)
-- `hidden::Vector{Integer}` - Hidden layer sizes (default: [5])
-- `O::Integer` - Output dimension (default: 3)
-- `batchSize::Integer` - Number of training examples (default: 100)
-- `N::Integer` - Number of epochs for training (default: 10)
-- `costFunc::String` - Cost function name (default: "absErr")
-- `hidden_layers::Vector{Integer}` - Alternative specification of hidden layers
-- `activation_list::Vector{Bool}` - Activation functions per layer
-- `printmsg::Bool` - Print comparison results (default: true)
-- `input_orientation::Char` - Data layout ('N' for normal, 'T' for transposed)
+
+Common keyword arguments accepted by all methods (defaults may vary per method):
+
+- `lambda::Real` - L2 regularization strength (default: 0.0)
+- `m::Int` - Number of training examples (default: 1000, or 100 for batch index methods)
+- `hidden_layers::Vector{Int}` - Hidden layer sizes (default: [5, 5])
+- `resLayers::Int` - Residual connection period; 0 disables (default: 0)
+- `input_layer_size::Int` - Number of input features (default: 3)
+- `output_layer_size::Int` - Number of outputs (default: 2, or 5 for distribution targets)
+- `e::Float32` - Finite-difference step size (default: 1f-3)
+- `activation_list::Vector{Bool}` - Whether each hidden layer applies tanh activation
+- `printmsg::Bool` - Print the per-parameter numerical vs analytical comparison (default: true)
+- `input_orientation::Char` - Data layout: `'N'` = rows are examples, `'T'` = columns are examples
 
 ## Returns
-The maximum absolute difference between numerical and analytical gradients.
+
+The relative normed difference between the numerical and analytical gradients,
+`norm(numGrad - funcGrad)/norm(numGrad + funcGrad)`.  Small values (typically `< 0.015`) indicate
+the analytical gradient implementation is correct.
 
 ## Example
 ```julia
-# Basic gradient check with default parameters
+# Basic gradient check (elementwise absErr cost)
 err = checkNumGrad()
 
-# Gradient check with custom architecture
-err = checkNumGrad(0.1f0; hidden=[32, 16], costFunc="sqErr")
+# Squared error cost with L2 regularization
+err = checkNumGrad(0.1f0; costFunc = "sqErr")
 
-# Gradient check for specific cost function
-err = checkNumGrad(1.0f0, "absErr"; printmsg=true)
+# Cross entropy output index with entropy regularization (beta = 0.1)
+err = checkNumGrad(1, 0.0f0; loss_type = CrossEntropyLoss(0.1f0), m = 1)
+
+# Cross entropy with distribution targets
+err = checkNumGrad(0.0f0, Val(:dist); output_layer_size = 5)
 ```
 """
 function checkNumGrad(lambda::AbstractFloat = 0.0f0; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda; kwargs...)
+    _checkNumGrad(currentbackend())(lambda; kwargs...)
 end
 
+"""
+    checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...) -> Float64
+
+Gradient check at a single output index.  The loss is either `OutputIndex()` (the gradient is
+just the selected output activation) or, when `loss_type = CrossEntropyLoss(beta)`, the cross
+entropy loss at that index with optional entropy regularization `beta`.  Typically used for a
+single example (`m = 1`); for a batch (`m > 1`) pass `output_vector = true` (per-example index
+array) or `force_matrix = true`.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #gradient check for output index cost function and typically only used for a single example rather than a batch
 function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, output_index; kwargs...)
+    _checkNumGrad(currentbackend())(lambda, output_index; kwargs...)
 end
 
+"""
+    checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...) -> Float64
+
+Gradient check for a cost function applied only at a per-example output index (the "index"
+variants, e.g. `"absErr"`, `"sqErr"`).  `err_name` is the base cost function name; the loss is
+evaluated only at the target output index of each example.  Log-likelihood cost functions are
+not supported here.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #gradient check for specialized case of an output value vector and index vector where the loss function is only applied to the target output index
 function checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, err_name; kwargs...)
+    _checkNumGrad(currentbackend())(lambda, err_name; kwargs...)
 end
 
+"""
+    checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...) -> Float64
+
+Gradient check for cross entropy loss in a batch with a per-example output index.
+`input_orientation` selects the data layout: `'N'` for `(m, input_layer_size)` rows-as-examples
+or `'T'` for `(input_layer_size, m)` columns-as-examples.  With `use_values = true` a scalar
+multiplier per example is applied to the loss.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #specialized for checking gradient of cross entropy loss in a batch
 function checkNumGrad(lambda::AbstractFloat, input_orientation::Char; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, input_orientation; kwargs...)
+    _checkNumGrad(currentbackend())(lambda, input_orientation; kwargs...)
 end
 
+"""
+    checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...) -> Float64
+
+Gradient check for cross entropy loss with per-row target probability distributions
+(distribution targets).  `single_example = true` uses a single example with a one-row target
+distribution.
+
+See `checkNumGrad` for the common keyword arguments.
+"""
 #gradient check for cross entropy loss with distribution targets
 function checkNumGrad(lambda::AbstractFloat, ::Val{:dist}; kwargs...)
-    eval(Symbol("checkNumGrad", backend))(lambda, Val(:dist); kwargs...)
+    _checkNumGrad(currentbackend())(lambda, Val(:dist); kwargs...)
 end
+
+# Backend dispatch for the gradient checks.  Each helper returns the implementation for a backend,
+# so a call site reads `_checkNumGrad(currentbackend())(args...; kwargs...)`.  This replaces the
+# former `eval(Symbol("checkNumGrad", backend))(...)` pattern: no runtime `eval`, no world-age
+# trap, and inference sees a two-element union of concrete functions.
+_checkNumGrad(::CPUBackend) = checkNumGradCPU
+_checkNumGrad(::GPUBackend) = checkNumGradGPU
 
 """
     benchmarkDevice(;kwargs...) -> Nothing
@@ -326,7 +483,7 @@ function benchmarkCPUThreads(;costFunc = "absErr", dropout = 0.0f0, Ns = [16, 32
     writedlm(string(cpuname, "_", trainName, "_BLASthreadBenchmark.csv"), [header; body], ',')
 end
          
-export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput, calcfeatureimpact, ADAMAXTrainNNCPU, traintrials, preptraining, LossType, OutputIndex, CrossEntropyLoss
+export archEval, archEvalSample, evalLayers, tuneAlpha, autoTuneParams, autoTuneR, smartTuneR, tuneR, L2Reg, maxNormReg, dropoutReg, advReg, fullTrain, bootstrapTrain, multiTrain, evalMulti, bootstrapTrainAdv, evalBootstrap, testTrain, smartEvalLayers, multiTrainAutoReg, writeParams, readBinParams, writeArray, initializeParams, checkNumGrad, predict, requestCostFunctions, setBackend, getBackend, benchmarkDevice, backendList, availableBackends, currentbackend, backendname, AbstractBackend, CPUBackend, GPUBackend, switch_device, devlist, current_device, benchmarkCPUThreads, readBinInput, calcfeatureimpact, ADAMAXTrainNNCPU, traintrials, preptraining, LossType, OutputIndex, CrossEntropyLoss
 
 """
     __init__() -> Nothing
@@ -348,7 +505,26 @@ informative error message.
 - This function is called automatically on module load
 - Users typically don't need to call this directly
 """
-function __init__()
+function __init__(force::Bool = false)
+    if gpu_ready[]
+        if force
+            # Forced re-initialization: release the handle created by the previous initialization
+            # (the device context that created it is still the current one at this point) and fall
+            # through so the rest of this function rebuilds the CUDA state from scratch.
+            try
+                cublasDestroy_v2(cublas_handle)
+            catch err
+                @warn "Could not destroy the previous cublas handle" err
+            end
+            gpu_ready[] = false
+            refreshbackendlist!()
+        else
+            #already initialized; re-running `__init__` by hand is therefore safe
+            println("GPU backend is already initialized.  Available backends are: CPU, GPU")
+            refreshbackendlist!()
+            return
+        end
+    end
     #get cuda toolkit versions if any
     println("Checking for cuda toolkit versions")
     cuda_versions = if check_cuda_presence()
@@ -451,9 +627,10 @@ function __init__()
             @assert gpu_err < 0.01
 
             println("Available backends are: CPU, GPU")
-            #add GPU to backendList after successful initialization
-            push!(backendList, :GPU)
-            unique!(backendList)
+            #record GPU availability after successful initialization; the exported `backendList`
+            #is derived from `gpu_ready` by `refreshbackendlist!`
+            gpu_ready[] = true
+            refreshbackendlist!()
         catch msg
             println("Could not initialize cuda drivers and compile kernels due to $msg")
             println("Available backends are: CPU")
@@ -461,7 +638,8 @@ function __init__()
                 cublasDestroy_v2(cublas_handle)
             catch
             end
-            global gpu_ready = false
+            gpu_ready[] = false
+            refreshbackendlist!()
         end
     end
 
@@ -473,14 +651,18 @@ function __init__()
 
     
 
-    function f()
-        if in(:GPU, backendList)
-            println("Destroying GPU cublas handle")
-            # cuDevicePrimaryCtxRelease(current_device)
-            cublasDestroy_v2(cublas_handle)
+    #register the cleanup hook once; re-running `__init__` must not stack handlers
+    if !atexit_registered[]
+        atexit_registered[] = true
+        function f()
+            if gpu_ready[]
+                println("Destroying GPU cublas handle")
+                # cuDevicePrimaryCtxRelease(current_device)
+                cublasDestroy_v2(cublas_handle)
+            end
         end
-    end    
-    atexit(f)
+        atexit(f)
+    end
 end
 
 using PrecompileTools

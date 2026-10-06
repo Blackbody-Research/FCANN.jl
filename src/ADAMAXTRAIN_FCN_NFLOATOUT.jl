@@ -895,7 +895,7 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 end
 
 #check numerical gradient for cross entropy loss in a batch with an additional scalar output multiplied to the loss per example that does not depend on the parameters 
-function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true, use_values::Bool = false)
+function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true, use_values::Bool = false, loss_type::LossType = CrossEntropyLoss())
 	Random.seed!(1234)
 	X = if input_orientation == 'N'
 		map(Float32, randn(m, input_layer_size))
@@ -939,7 +939,7 @@ function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden
 	else
 		(T0, B0, hidden_layers, X, output_indices, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
 	end
-	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type, input_orientation = input_orientation)
 
 	nnCostFunction(base_args..., onesVec; kwargs...)
 
@@ -956,8 +956,8 @@ function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden
 		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type, input_orientation = input_orientation)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type, input_orientation = input_orientation)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
@@ -976,7 +976,7 @@ function checkNumGradCPU(lambda::Real, input_orientation::Char; m = 1000, hidden
 end
 
 #check numerical gradient for cross entropy loss with distribution targets (batch)
-function checkNumGradCPU(lambda::Real, ::Val{:dist}; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 5, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true, single_example = false, input_orientation::Char = 'N')
+function checkNumGradCPU(lambda::Real, ::Val{:dist}; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 5, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true, single_example = false, input_orientation::Char = 'N', loss_type::LossType = CrossEntropyLoss())
 	Random.seed!(1234)
 
 	if single_example
@@ -1014,7 +1014,6 @@ function checkNumGradCPU(lambda::Real, ::Val{:dist}; m = 1000, hidden_layers=[5,
 		Bias_grads[i] = similar(B0[i])
 	end
 
-	loss_type = CrossEntropyLoss()
 
 	if single_example
 		onesVec = ones(Float32, 1)

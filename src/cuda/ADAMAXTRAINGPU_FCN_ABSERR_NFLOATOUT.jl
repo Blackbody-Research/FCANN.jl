@@ -611,7 +611,7 @@ function calcMultiOutGPU(input_data, output_data, multiParams; dropout = 0.0f0, 
 	end
 end
 
-function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, input_orientation::Char = 'N')
+function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", input_layer_size = 3, n = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, input_orientation::Char = 'N', return_costs::Bool = false)
 
 	Random.seed!(1234)
 
@@ -705,10 +705,10 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
 	end
 
-	return GPUErr
+	return return_costs ? (grad_err = GPUErr, cost_gpu = costGPU, cost_cpu = costCPU) : GPUErr
 end
 
-function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, e = 1f-3, activation_list=fill(true, length(hidden_layers)), printmsg = true, loss_type::LossType = OutputIndex(), output_vector = false, force_matrix = false)
+function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, e = 1f-3, activation_list=fill(true, length(hidden_layers)), printmsg = true, loss_type::LossType = OutputIndex(), output_vector = false, force_matrix = false, return_costs::Bool = false)
 	Random.seed!(1234)
 
 	@assert output_index <= output_layer_size "The output index ($output_index) must be less than or equal to the number of outputs ($output_layer_size)"
@@ -770,23 +770,37 @@ function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 
 	base_args_cpu = (T0, B0, hidden_layers, X, output, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas)
 
-	base_args_gpu = if output_vector && (m > 1 || force_matrix)
-		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, output, lambda)
+	#GPU batch path requires a 0-based index array (one per example); the single-example path keeps
+	#a plain integer output index which is handled by the single vector nnCostFunction methods.
+	isbatch = (m > 1) || force_matrix
+	d_output_indices = if isbatch
+		idxvec = output isa AbstractVector ? output : fill(output_index, m)
+		cuda_allocate(Cint.(idxvec .- 1))
+	else
+		nothing
+	end
+
+	base_args_gpu = if isbatch
+		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_output_indices, lambda)
 	else
 		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, output, lambda)
 	end
 	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
 
-	if (m == 1) && !force_matrix
+	if !isbatch
 		nnCostFunction(base_args_cpu...; kwargs...)
 	else
 		nnCostFunction(base_args_cpu..., onesVec; kwargs...)
 	end
 
-	nnCostFunction(base_args_gpu...; kwargs...)
+	if isbatch
+		nnCostBatchOutputIndex(base_args_gpu...; kwargs...)
+	else
+		nnCostFunction(base_args_gpu...; kwargs...)
+	end
 
-	costGPU = if (m > 1 || force_matrix)
-		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, output, lambda; kwargs...)
+	costGPU = if isbatch
+		nnCostBatchOutputIndexNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_output_indices, lambda; kwargs...)
 	else
 		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_X, output, lambda; kwargs...)
 	end
@@ -827,10 +841,10 @@ function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
 	end
 
-	return GPUErr
+	return return_costs ? (grad_err = GPUErr, cost_gpu = costGPU, cost_cpu = costCPU) : GPUErr
 end
 
-function checkNumGradGPU(lambda, costFunc::AbstractString; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, input_orientation::Char = 'N')
+function checkNumGradGPU(lambda, costFunc::AbstractString; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, input_orientation::Char = 'N', return_costs::Bool = false)
 
 	Random.seed!(1234)
 
@@ -928,11 +942,11 @@ function checkNumGradGPU(lambda, costFunc::AbstractString; hidden_layers=[5, 5],
 		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
 	end
 
-	return GPUErr
+	return return_costs ? (grad_err = GPUErr, cost_gpu = costGPU, cost_cpu = costCPU) : GPUErr
 end
 
 # check gradient when using cross entropy loss with the option of having a scalar multiple on every example of the loss that does not depend on the input
-function checkNumGradGPU(lambda, input_orientation::Char; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, use_values::Bool = false)
+function checkNumGradGPU(lambda, input_orientation::Char; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, activation_list=fill(true, length(hidden_layers)), printmsg = true, use_values::Bool = false, loss_type::LossType = CrossEntropyLoss(), return_costs::Bool = false)
 
 	Random.seed!(1234)
 
@@ -990,7 +1004,7 @@ function checkNumGradGPU(lambda, input_orientation::Char; hidden_layers=[5, 5], 
 	else
 		(T0, B0, hidden_layers, X, output_indices, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec)
 	end
-	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = CrossEntropyLoss(), input_orientation = input_orientation)
+	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type, input_orientation = input_orientation)
 
 	gpu_outputs = if use_values
 		(d_output_indices, d_output_values)
@@ -999,13 +1013,13 @@ function checkNumGradGPU(lambda, input_orientation::Char; hidden_layers=[5, 5], 
 	end
 
 	#calculate gradient on GPU
-	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, gpu_outputs...; lambda = lambda, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+	nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, gpu_outputs...; lambda = lambda, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation, loss_type = loss_type)
 
 	#calculate gradient on CPU
 	nnCostFunction(base_args...; kwargs...)
 
 	#calculate output cost on GPU
-	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, gpu_outputs...; lambda = lambda, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation)
+	costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, gpu_outputs...; lambda = lambda, resLayers=resLayers, activation_list=activation_list, input_orientation = input_orientation, loss_type = loss_type)
 
 	nograd_args = if use_values
 		(hidden_layers, X, output_indices, output_values, lambda, a)
@@ -1052,7 +1066,7 @@ function checkNumGradGPU(lambda, input_orientation::Char; hidden_layers=[5, 5], 
 		println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
 	end
 
-	return GPUErr
+	return return_costs ? (grad_err = GPUErr, cost_gpu = costGPU, cost_cpu = costCPU) : GPUErr
 end
 
 # checkNumGradGPU(0.0f0)
@@ -1580,4 +1594,121 @@ function ADAMAXTrainNNGPU(data, batchSize, T0, B0, numEpochs, input_layer_size, 
 	end
 
     return (bestThetas, bestBiases, bestCost, [costRecord[1:iter]; currentOut], timeRecord, GFLOPS_per_epoch, testresults...)
+end
+# checkNumGradGPU for cross entropy loss with distribution targets (batch)
+function checkNumGradGPU(lambda::Real, ::Val{:dist}; m = 1000, hidden_layers=[5, 5], resLayers = 0, input_layer_size = 3, output_layer_size = 5, e = 1f-3, activation_list = fill(true, length(hidden_layers)), printmsg = true, single_example = false, input_orientation::Char = 'N', loss_type::LossType = CrossEntropyLoss(), return_costs::Bool = false)
+    Random.seed!(1234)
+
+    #always work in matrix (batch) form, a single example is treated as a batch of 1 so that the
+    #same GPU kernel dispatch can be used for both cases
+    if single_example
+        X = if input_orientation == 'N'
+            reshape(map(Float32, randn(input_layer_size)), 1, input_layer_size)
+        else
+            reshape(map(Float32, randn(input_layer_size)), input_layer_size, 1)
+        end
+        #create random probability distribution target
+        targets_raw = rand(Float32, output_layer_size)
+        targets = reshape(targets_raw ./ sum(targets_raw), 1, output_layer_size)
+        m = 1
+    else
+        X = if input_orientation == 'N'
+            map(Float32, randn(m, input_layer_size))
+        else
+            map(Float32, randn(input_layer_size, m))
+        end
+        #create random probability distribution targets per row
+        targets_raw = rand(Float32, m, output_layer_size)
+        targets = targets_raw ./ sum(targets_raw, dims=2)
+    end
+
+    num_hidden = length(hidden_layers)
+
+    T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
+
+    d_Thetas = device_allocate(T0) 
+    d_Biases = device_allocate(B0) 
+
+    Theta_grads = deepcopy(T0) 
+    TGCPU = deepcopy(T0) 
+
+    Bias_grads = deepcopy(B0) 
+    BGCPU = deepcopy(B0)
+
+    d_Theta_grads = device_allocate(Theta_grads)
+    d_Bias_grads = device_allocate(Bias_grads)
+
+    onesVec = ones(Float32, m)
+    d_ones = cuda_allocate(onesVec)
+
+    a = form_activations(T0, m)
+    d_a = device_allocate(a)
+
+    tanh_grad_z = form_tanh_grads(hidden_layers, m)
+    d_tanh_grad_z = device_allocate(tanh_grad_z)
+
+    deltas = deepcopy(a)
+    d_deltas = device_allocate(deltas)
+
+    numLayers = length(T0)
+
+    params = theta2Params(B0, T0)
+    l = length(params)
+    perturb = zeros(Float32, l)
+    numGrad = Array{Float32}(undef, l)
+
+    # CPU version - use loss_type for entropy regularization
+    cpu_kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type, input_orientation = input_orientation)
+
+    nnCostFunction(T0, B0, hidden_layers, X, targets, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas, onesVec; cpu_kwargs...)
+
+    # GPU version - matrix form routes through the vararg nnCostFunction methods which dispatch
+    # the cross entropy distribution target kernels
+    d_X = cuda_allocate(X)
+    d_targets = cuda_allocate(Float32.(targets))
+
+    gpu_kwargs = (lambda = lambda, resLayers = resLayers, activation_list = activation_list, input_orientation = input_orientation)
+
+    nnCostFunction(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_targets; gpu_kwargs...)
+
+    # Calculate cost without gradients
+    costGPU = nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_targets; lambda = lambda, resLayers = resLayers, activation_list = activation_list, input_orientation = input_orientation)
+
+    costCPU = nnCostFunctionNOGRAD(T0, B0, hidden_layers, X, targets, lambda, a; cpu_kwargs...)
+    
+    GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
+
+    funcGrad = theta2Params(Bias_grads, Theta_grads)
+    funcGradCPU = theta2Params(BGCPU, TGCPU)
+
+    for i = 1:l
+        perturb[i] = e
+        Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
+        Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
+        
+        outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, Float32.(targets), lambda, a; cpu_kwargs...)
+        outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, Float32.(targets), lambda, a; cpu_kwargs...)
+        
+        perturb[i] = 0.0f0  #restore perturb vector to 0
+
+        numGrad[i] = (outplus - outminus)/(2.0f0*e)
+    end
+
+    GPUErr = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)
+    GPUCPUErr = norm(funcGradCPU .- funcGrad)/norm(funcGradCPU .+ funcGrad)
+    if printmsg
+        println("GPU Cost  CPU Cost" )
+        println(string(costGPU, "  ", costCPU))
+
+        println("___________________")
+        
+        println("Num Grads  GPU Grads CPU Grads")
+        for i = 1:length(numGrad)
+            @printf "%0.6f  %0.6f %0.6f \n" numGrad[i] funcGrad[i] funcGradCPU[i]
+        end
+        println(string("Relative differences for method are ", GPUErr, ".  Should be small (1e-9)"))
+        println(string("Relative differences with CPU are ", GPUCPUErr, ".  Should be small (1e-9)"))
+    end
+
+    return return_costs ? (grad_err = GPUErr, cost_gpu = costGPU, cost_cpu = costCPU) : GPUErr
 end

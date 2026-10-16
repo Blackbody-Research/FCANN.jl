@@ -9,11 +9,11 @@ using LinearAlgebra.BLAS
 Compute the absolute error between predicted value `a` and true value `y`.
 
 # Arguments
-- `a::Float32`: Predicted/model output value
-- `y::Float32`: True/target value
+- `a`: Predicted/model output value (any `Real`; e.g. `Float32` or `Float64`)
+- `y`: True/target value (same element type as `a`)
 
 # Returns
-- `Float32`: Absolute difference |a - y|
+- Same type as the inputs: absolute difference |a - y|
 
 # Description
 Primary cost function for measuring prediction error in the neural network.
@@ -35,11 +35,11 @@ end
 Compute the derivative of the absolute error with respect to the predicted value.
 
 # Arguments
-- `a::Float32`: Predicted/model output value
-- `y::Float32`: True/target value
+- `a`: Predicted/model output value (any `Real`; e.g. `Float32` or `Float64`)
+- `y`: True/target value (same element type as `a`)
 
 # Returns
-- `Float32`: Derivative value: +1 if a > y, -1 if a < y, 0 if a == y
+- Same type as `a`: derivative value +1 if a > y, -1 if a < y, 0 if a == y
 
 # Description
 Calculates the gradient of the absolute error cost function for backpropagation.
@@ -59,7 +59,10 @@ in practice for neural network training. The derivative is defined as:
 [`sqErrDeriv`](@ref): Derivative of squared error alternative
 """
 function absErrDeriv(a, y)
-    ifelse(a > y, 1.0f0, ifelse(a < y, -1.0f0, 0.0f0))
+    # one/-one/zero of `a` (not 1.0f0 literals) so the return type tracks the
+    # input dtype — a hardcoded Float32 here would force Float32 output even
+    # for Float64 inputs, causing type instability / silent conversion.
+    ifelse(a > y, one(a), ifelse(a < y, -one(a), zero(a)))
 end
 
 function sqErr(a, y)
@@ -89,8 +92,11 @@ absErrIndexDeriv = Returns(nothing)
 
 #the exponential of a2 is the sigma parameter, this ensures it is always positive
 function normLogErr(a1, a2, y)
-	0.5f0*exp(2*a2)*a1^2 - exp(2*a2)*a1*y + 0.5f0*exp(2*a2)*y*y - a2 + 0.9189385332
-	#0.5f0*(a2^2)*(a1-y)^2 - log(abs.(a2)) + 0.9189385332f0
+	# Constants follow the input dtype via oftype(a1, ...) so a Float32 network
+	# stays Float32 (the old Float64 literal 0.9189385332 upcast the result).
+	e2 = exp(2 * a2)
+	half = oftype(a1, 0.5)
+	half * e2 * a1^2 - e2 * a1 * y + half * e2 * y * y - a2 + oftype(a1, 0.9189385332)
 end
 
 function normLogErrDeriv(a1, a2, y)
@@ -101,11 +107,12 @@ end
 #exp(a2)=-1/b where b is the scale parameter => b = -1/exp(a2) and => log(exp(a2)/2) = log(-1/2b)
 #-abs(x-u)/b - log(2b) = -abs(x-u)*exp(a2)+log(0.5*exp(a2))
 function cauchyLogErr(a1, a2, y)
-	exp(a2)*abs(a1-y) - log(0.5f0*exp(a2))
+	exp(a2)*abs(a1-y) - log(oftype(a2, 0.5)*exp(a2))
 end
 
 function cauchyLogErrDeriv(a1, a2, y)
-	(exp(a2)*ifelse(a1 > y, 1.0f0, ifelse(a1 < y, -1.0f0, 0.0f0)), exp(a2)*abs(a1-y) - 1)
+	# one/-one/zero of a1 (not 1.0f0 literals) so the sign term tracks the input dtype.
+	(exp(a2)*ifelse(a1 > y, one(a1), ifelse(a1 < y, -one(a1), zero(a1))), exp(a2)*abs(a1-y) - 1)
 end
 
 #names, functions, and function derivatives must all be in order here
@@ -223,7 +230,13 @@ costFuncDerivs = Dict(zip(costFuncNames, costFuncDerivsList))
 
 #in case output layer predicts a value and a range, check relative size
 #between the two to dispatch to the proper error function
-function calcDeltaOut!(costFuncDeriv::Function, deltas::Matrix{Float32}, a::Matrix{Float32}, y::Matrix{Float32}, m, n)
+# a/y/deltas are AbstractArray rather than Matrix: the body only compares
+# lengths and indexes linearly over 1:m*n, so any dense storage with a
+# matching element type works - in particular the length-sumO sequence
+# scratch views and plain per-position target vectors from SEQ_COST.jl.
+# Matrix callers dispatch here unchanged and still specialize on their
+# concrete types, so FCN codegen is unaffected.
+function calcDeltaOut!(costFuncDeriv::Function, deltas::AbstractArray{T}, a::AbstractArray{T}, y::AbstractArray{T}, m, n) where {T<:Real}
 	#calculates derivative of the cost function
 	if length(a) == 2*length(y)
 		@simd for i = 1:m*n
@@ -242,8 +255,8 @@ function calcDeltaOut!(costFuncDeriv::Function, deltas::Matrix{Float32}, a::Matr
 	end
 end
 
-function calcDeltaOut!(costFuncDeriv::Function, deltas::Matrix{Float32}, a::Matrix{Float32}, y::Vector{Float32}, indices::Vector{I}, m::Integer) where I<:Integer
-	deltas .= zero(Float32)
+function calcDeltaOut!(costFuncDeriv::Function, deltas::Matrix{T}, a::Matrix{T}, y::Vector{T}, indices::Vector{I}, m::Integer) where {T<:Real, I<:Integer}
+	deltas .= zero(T)
 	#calculates derivative of the cost function
 	@inbounds @simd for i in 1:m
 		j = indices[i]
@@ -252,7 +265,7 @@ function calcDeltaOut!(costFuncDeriv::Function, deltas::Matrix{Float32}, a::Matr
 end
 
 #when the output derivative function is just one of the output indices and there is just one example
-function calcDeltaOut!(deltas::Vector{T}, index::Integer) where T<:Real
+function calcDeltaOut!(deltas::AbstractVector{T}, index::Integer) where T<:Real
 	deltas .= zero(T)
 	deltas[index] = one(T)
 end
@@ -284,21 +297,32 @@ end
 
 abstract type LossType end
 struct OutputIndex <: LossType end
-struct CrossEntropyLoss <: LossType
-	beta::Float32
-	CrossEntropyLoss(beta::Float32=0.0f0) = new(beta)
+struct CrossEntropyLoss{T} <: LossType
+	beta::T
+	# Default the zero-arg / one-arg forms to Float32 to preserve the original
+	# FCN behavior (`CrossEntropyLoss()` and `CrossEntropyLoss(0.0f0)`), while
+	# allowing an explicit Float64/Float16 beta. A single parametric inner
+	# constructor with a default would define both `()` and `(::T)` forms and
+	# collide during precompilation, so the no-arg case is spelled out here.
+	CrossEntropyLoss() = new{Float32}(0.0f0)
+	CrossEntropyLoss(beta::T) where {T<:Real} = new{T}(beta)
 end
 
-calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, index) where {T<:Real, N} = calcDeltaOut!(deltas, index)
+calcDeltaOut!(::OutputIndex, deltas::AbstractArray{T}, a::AbstractArray{T}, index) where {T<:Real} = calcDeltaOut!(deltas, index)
 calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, indices::Vector{I}, values::Vector{T}) where {T<:Real, N, I<:Integer} = calcDeltaOut!(deltas, indices, values)
 
 #perform the calculation of a softmax derivative where the maximum value of each example is subtracted before computing the softmax to ensure numerical stability.  this case is for a single example so the deltas and activations are vectors rather than matrices. there is also only a single index for the output since there is only one example
-function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, index::Integer) where {T<:Real}
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::AbstractVector{T}, a::AbstractVector{T}, index::Integer) where {T<:Real}
 	n = length(a)
 	beta = loss.beta
 	
-	#compute maximum activation value
-	max_value = maximum(a)
+	#compute maximum activation value (explicit loop avoids SubArray allocation)
+	max_value = a[1]
+	@inbounds for i in 2:length(a)
+		@inbounds if a[i] > max_value
+			max_value = a[i]
+		end
+	end
 
 	#initialize variables to track the denominator of the softmax
 	denominator = zero(T)
@@ -310,7 +334,9 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, 
 		deltas[i] = h
 	end
 
-	deltas ./= denominator
+	@inbounds @simd for i in 1:n
+		deltas[i] = deltas[i] / denominator
+	end
 
 	# Add entropy regularization gradient
 	# dH/dz_i = -p_i * (H(p) + log(p_i))
@@ -450,7 +476,7 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, 
 end
 
 #single example with distribution target
-function calcDeltaOut!(::CrossEntropyLoss, deltas::Vector{T}, a::Vector{T}, targets::Vector{T}) where {T<:Real}
+function calcDeltaOut!(::CrossEntropyLoss, deltas::AbstractVector{T}, a::AbstractVector{T}, targets::AbstractVector{T}) where {T<:Real}
 	n = length(a)
 	max_value = maximum(a)
 	denominator = zero(T)
@@ -476,7 +502,13 @@ function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, targ
 	end
 end
 
-function calcFinalOut!(costFunc::Function, a::Matrix{T}, y::Matrix{T}, m::Integer, n::Integer) where T<:AbstractFloat
+# a/y are AbstractArray rather than Matrix for the same reason as
+# calcDeltaOut! above (linear-indexed body, length-driven branching):
+# sequence scratch views and target vectors pass through directly while
+# Matrix callers compile exactly as before.  NOTE: this overwrites `a`
+# in place with the per-element loss - pass a scratch copy, never the
+# live predictions (the sequence cost layer stages one automatically).
+function calcFinalOut!(costFunc::Function, a::AbstractArray{T}, y::AbstractArray{T}, m::Integer, n::Integer) where T<:AbstractFloat
 	if length(a) == 2*length(y)
 		@simd for i = 1:m*n
 			@inbounds a[i] = costFunc(a[i], a[i+(m*n)], y[i])
@@ -504,9 +536,15 @@ end
 #compute the cross entropy loss of the softmax of a for a single example where the desired output is given by index
 #the entropy regularization term (beta*H, where beta = CrossEntropyLoss.beta) is included in the loss to stay
 #consistent with the gradient computed by calcDeltaOut!(CrossEntropyLoss, ...)
-function calcFinalOut!(loss::CrossEntropyLoss, a::Vector{T}, index::Integer) where T<:AbstractFloat
+function calcFinalOut!(loss::CrossEntropyLoss, a::AbstractArray{T}, index::Integer) where T<:AbstractFloat
 	beta = getfield(loss, :beta)
-	m = maximum(a)
+	#compute maximum activation value (explicit loop avoids SubArray allocation)
+	m = a[1]
+	@inbounds for i in 2:length(a)
+		@inbounds if a[i] > m
+			m = a[i]
+		end
+	end
 	s = zero(T)
 	@inbounds for i in eachindex(a)
 		s += exp(a[i] - m)
@@ -525,7 +563,7 @@ function calcFinalOut!(loss::CrossEntropyLoss, a::Vector{T}, index::Integer) whe
 end
 
 #compute the cross entropy loss of the softmax of a for a single example where the desired output is a probability distribution
-function calcFinalOut!(::CrossEntropyLoss, a::Vector{T}, targets::Vector{T}) where T<:AbstractFloat
+function calcFinalOut!(::CrossEntropyLoss, a::AbstractArray{T}, targets::AbstractArray{T}) where T<:AbstractFloat
 	max_value = maximum(a)
 	s = zero(T)
 	loss = zero(T)

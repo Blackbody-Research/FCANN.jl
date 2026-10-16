@@ -820,6 +820,8 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		map(Float32, randn(m, input_layer_size))
 	end
 
+	@info "Input data is $X"
+
 	num_hidden = length(hidden_layers)
 
 	T0, B0 = initializeParams(input_layer_size, hidden_layers, output_layer_size)
@@ -867,6 +869,8 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		nnCostFunction(base_args..., onesVec; kwargs...)
 	end
 
+	@info "Activations are $a"
+	@info "Gradients are $Theta_grads and $Bias_grads"
 	funcGrad = theta2Params(Bias_grads, Theta_grads)
 
 	for i = 1:l
@@ -880,7 +884,9 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
-		numGrad[i] = (outplus - outminus)/(2.0f0*e)
+		δ = outplus - outminus
+		@info "Output plus: $outplus, Output minus: $outminus, Delta: $δ"
+		numGrad[i] = δ/(2.0f0*e)
 	end
 
 	err = norm(numGrad .- funcGrad)/norm(numGrad .+ funcGrad)

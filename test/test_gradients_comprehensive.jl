@@ -191,6 +191,24 @@ end
             end
         end
 
+        # 12b: single-example cross entropy with a scalar value term.  The value
+        # scales only the cross entropy loss; the entropy contribution is added
+        # unscaled so beta always increases entropy after the parameter update,
+        # regardless of the sign of the value (which is random and may be
+        # negative).  Covers the new single-example values variant, which
+        # previously existed only for the batch case.
+        @testset "$tag single example cross entropy output values" begin
+            for lambda in lambdas, beta in betas
+                gradcheck(backend, "ce_single_values,Lambda=$lambda,beta=$beta") do
+                    numgrad(backend, 1, lambda;
+                                 loss_type = CrossEntropyLoss(beta),
+                                 m = 1,
+                                 use_values = true,
+                                 printmsg = false)
+                end
+            end
+        end
+
         # 13: output index loss with each supported loss type
         @testset "$tag output index loss types" begin
             for loss_type in (OutputIndex(), CrossEntropyLoss())
@@ -201,6 +219,7 @@ end
         end
     end
 end
+
 
 # Every variation must pass on both backends, and the CPU and GPU runs must cover exactly the
 # same set of variations - this is what keeps the two implementations in step.  The gradient check

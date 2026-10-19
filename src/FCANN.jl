@@ -295,12 +295,18 @@ single example (`m = 1`); for a batch (`m > 1`) pass `output_vector = true` (per
 array) or `force_matrix = true`.
 
 See `checkNumGrad` for the common keyword arguments.
-"""
 #gradient check for output index cost function and typically only used for a single example rather than a batch
-function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)
+Gradient check for a cost function applied only at a per-example output index
+(the "index" variants, e.g. `checkNumGrad(output_index, lambda)`).
+"""
+@inline function checkNumGrad(output_index::Integer, lambda::AbstractFloat = 0.0f0; kwargs...)
+    # NOTE: the positional argument order here is (index, lambda) - the "index" check
+    # invoked as checkNumGrad(output_index, lambda; ...).  This method is also a fallback
+    # for checkNumGrad(lambda, err_name; kw) where err_name is an index name (a String that
+    # matches Integer); the body below is unchanged so all four match the same
+    # `_checkNumGrad` implementation.
     _checkNumGrad(currentbackend())(lambda, output_index; kwargs...)
 end
-
 """
     checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...) -> Float64
 
@@ -310,8 +316,8 @@ evaluated only at the target output index of each example.  Log-likelihood cost 
 not supported here.
 
 See `checkNumGrad` for the common keyword arguments.
-"""
 #gradient check for specialized case of an output value vector and index vector where the loss function is only applied to the target output index
+"""
 function checkNumGrad(lambda::AbstractFloat, err_name::String; kwargs...)
     _checkNumGrad(currentbackend())(lambda, err_name; kwargs...)
 end

@@ -330,7 +330,7 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 	}
 
 	// Single block version.  The loss at the target index is
-	//     -h[target] + log(sum_j exp h_j) + beta*H,
+	//     -h[target] + log(sum_j exp h_j) - beta*H,
 	// where h = a - max(a) and H = -sum_j p_j*log(p_j) with p the softmax of h.  The beta term
 	// mirrors the CPU calcFinalOut!(::CrossEntropyLoss, a::Vector, index) so the reported cost
 	// matches the CPU for entropy regularized cross entropy.  Only the target entry is left
@@ -404,7 +404,7 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		// Phase 4: leave the loss at the target index, zero the remaining entries
 		for (int i = tid; i < n; i += stride) {
 			if (i == target_index) {
-				a[i] = -(a[i] - global_max) + logf(global_sum) + beta * global_entropy;
+				a[i] = -(a[i] - global_max) + logf(global_sum) - beta * global_entropy;
 			} else {
 				a[i] = 0.0f;
 			}
@@ -689,10 +689,10 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 			}
 			float entropy = sdata[0];
 			__syncthreads();
-			// deltas[i] -= beta * p * (entropy + log(p))
+			// deltas[i] += beta * p * (entropy + log(p))
 			for (int i = tid; i < N; i += stride) {
 				float p = deltas[i];
-				deltas[i] -= beta * p * (entropy + logf(fmaxf(p, 1.1920929e-7f)));
+				deltas[i] += beta * p * (entropy + logf(fmaxf(p, 1.1920929e-7f)));
 			}
 			__syncthreads();
 		}
@@ -768,7 +768,7 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 	}
 	//batch cross entropy derivative with entropy regularization (beta).  one block per example; the
 	//entropy term uses the per-example (row) entropy H_i = -sum_j p_ij*log(p_ij) which makes the
-	//gradient consistent with the batch forward loss that includes beta*H_i per example (and matches
+	//gradient consistent with the batch forward loss that includes -beta*H_i per example (and matches
 	//the CPU single-example (m=1) semantics identically).  All of this is computed on the GPU with no
 	//host round trip - only shared memory block reductions are used.
 	__global__ void crossEntropyBatchDerivBeta(int N, int M, float* deltas, const float* A, const int* indices, float beta) {
@@ -854,7 +854,7 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 		if (beta > 0.0f) {
 			for (int j = tid; j < M; j += stride) {
 				float p = deltas[j * N + i];
-				deltas[j * N + i] = p - beta * p * (entropy + logf(fmaxf(p, 1.1920929e-7f)));
+				deltas[j * N + i] = p + beta * p * (entropy + logf(fmaxf(p, 1.1920929e-7f)));
 			}
 			__syncthreads();
 		}
@@ -866,7 +866,7 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 	}
 
 	//batch cross entropy forward loss with entropy regularization (beta) for per-example output
-	//indices.  stores the per-example loss -h_target + log(sum_j exp h_j) + beta*H_i at column 0 and
+	//indices.  stores the per-example loss -h_target + log(sum_j exp h_j) - beta*H_i at column 0 and
 	//zeros out every other entry so that summing the whole output matrix / N gives the mean batch
 	//loss.  Fully on the GPU (block reductions only, no host round trip).
 	__global__ void crossEntropyBatchLossBeta(int N, int M, float* A, const int* indices, float beta) {
@@ -940,7 +940,142 @@ extern "C"   // ensure function name to be exactly "eeTanh"
 
 		// Phase 4: write loss at column 0 and zero out all other columns
 		if (tid == 0) {
-			A[0 * N + i] = -A[target * N + i] + global_max + logf(global_sum) + beta * entropy;
+			A[0 * N + i] = -A[target * N + i] + global_max + logf(global_sum) - beta * entropy;
+		}
+		for (int j = tid; j < M; j += stride) {
+			if (j != 0) {
+				A[j * N + i] = 0.0f;
+			}
+		}
+	}
+
+	//batch cross entropy derivative with entropy regularization (beta) AND per-example values.
+	//per-example loss is values[i]*CE[i] - beta*H[i], so the gradient is
+	//values[i]*(p-target) + beta*p*(H+log(p)): values scale only the CE term and the
+	//entropy contribution is added unscaled so it increases entropy after the parameter
+	//update (subtraction) regardless of the sign of values[i].
+	__global__ void crossEntropyBatchDerivBetaValues(int N, int M, float* deltas, const float* A, const int* indices, const float* values, float beta) {
+		extern __shared__ float sdata[];
+		int i = blockIdx.x;
+		int tid = threadIdx.x;
+		int stride = blockDim.x;
+		if (i >= N) return;
+		int target = indices[i];
+		float v = values[i];
+		float thread_max = -INFINITY;
+		for (int j = tid; j < M; j += stride) {
+			thread_max = fmaxf(thread_max, A[j * N + i]);
+		}
+		sdata[tid] = thread_max;
+		__syncthreads();
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+			}
+			__syncthreads();
+		}
+		float global_max = sdata[0];
+		__syncthreads();
+		float thread_sum = 0.0f;
+		for (int j = tid; j < M; j += stride) {
+			float exp_val = expf(A[j * N + i] - global_max);
+			deltas[j * N + i] = exp_val;
+			thread_sum += exp_val;
+		}
+		sdata[tid] = thread_sum;
+		__syncthreads();
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] += sdata[tid + s];
+			}
+			__syncthreads();
+		}
+		float global_sum = sdata[0];
+		__syncthreads();
+		float inv_sum = 1.0f / global_sum;
+		for (int j = tid; j < M; j += stride) {
+			deltas[j * N + i] *= inv_sum;
+		}
+		__syncthreads();
+		float thread_ent = 0.0f;
+		for (int j = tid; j < M; j += stride) {
+			float pp = deltas[j * N + i];
+			thread_ent -= pp * logf(fmaxf(pp, 1.1920929e-7f));
+		}
+		sdata[tid] = thread_ent;
+		__syncthreads();
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] += sdata[tid + s];
+			}
+			__syncthreads();
+		}
+		float entropy = sdata[0];
+		__syncthreads();
+		for (int j = tid; j < M; j += stride) {
+			float pp = deltas[j * N + i];
+			float ce = pp - (j == target ? 1.0f : 0.0f);
+			deltas[j * N + i] = v * ce + beta * pp * (entropy + logf(fmaxf(pp, 1.1920929e-7f)));
+		}
+		__syncthreads();
+	}
+
+	//batch cross entropy forward loss with entropy regularization (beta) AND per-example values.
+	//stores values[i]*CE[i] - beta*H[i] at column 0 (entropy never scaled by values).
+	__global__ void crossEntropyBatchLossBetaValues(int N, int M, float* A, const int* indices, const float* values, float beta) {
+		extern __shared__ float sdata[];
+		int i = blockIdx.x;
+		int tid = threadIdx.x;
+		int stride = blockDim.x;
+		if (i >= N) return;
+		int target = indices[i];
+		float v = values[i];
+		float thread_max = -INFINITY;
+		for (int j = tid; j < M; j += stride) {
+			thread_max = fmaxf(thread_max, A[j * N + i]);
+		}
+		sdata[tid] = thread_max;
+		__syncthreads();
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+			}
+			__syncthreads();
+		}
+		float global_max = sdata[0];
+		__syncthreads();
+		float thread_sum = 0.0f;
+		for (int j = tid; j < M; j += stride) {
+			thread_sum += expf(A[j * N + i] - global_max);
+		}
+		sdata[tid] = thread_sum;
+		__syncthreads();
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] += sdata[tid + s];
+			}
+			__syncthreads();
+		}
+		float global_sum = sdata[0];
+		__syncthreads();
+		float thread_ent = 0.0f;
+		for (int j = tid; j < M; j += stride) {
+			float pp = expf(A[j * N + i] - global_max) / global_sum;
+			thread_ent -= pp * logf(fmaxf(pp, 1.1920929e-7f));
+		}
+		sdata[tid] = thread_ent;
+		__syncthreads();
+		for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+			if (tid < s) {
+				sdata[tid] += sdata[tid + s];
+			}
+			__syncthreads();
+		}
+		float entropy = sdata[0];
+		__syncthreads();
+		if (tid == 0) {
+			float ce = -A[target * N + i] + global_max + logf(global_sum);
+			A[0 * N + i] = v * ce - beta * entropy;
 		}
 		for (int j = tid; j < M; j += stride) {
 			if (j != 0) {

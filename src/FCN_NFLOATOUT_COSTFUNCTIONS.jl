@@ -216,12 +216,40 @@ function calcJ(delta::M, output_indices::Vector{I}, output_values::Vector{T}, la
 	return accum1 + accum2
 end
 
+#batch with a shared output index and a single scalar value term applied to every
+#example (e.g. OutputIndex loss with a constant value): J = value * mean_i delta[i, index].
+function calcJ(delta::M, output_index::Integer, output_value::T, lambda::T, Thetas::Vector{M}) where {T<:Real, M<:Matrix{T}}
+	m = size(delta, 1)
+	accum1 = zero(T)
+	@inbounds @simd for i = 1:m
+		accum1 += delta[i, output_index]
+	end
+	accum1 = output_value * accum1 / m
+	iszero(lambda) && return accum1
+	accum2 = lambda*calculate_l2(Thetas) / (T(2) * m)
+	return accum1 + accum2
+end
+
 #calculate output for output which is just selecting one of the indices from the available outputs
 function calcJ(delta::V, output_index::Integer, lambda::T, Thetas::Vector{M}) where {T<:Real, V<:Vector{T}, M<:Matrix{T}}
 	accum1 = delta[output_index]
 	iszero(lambda) && return accum1 
 	accum2 = lambda*calculate_l2(Thetas) / T(2)
 	#println(string("cost is ", accum1+accum2))
+	return accum1 + accum2
+end
+
+#single example with a scalar value term: the value multiplies only the cross entropy loss;
+#the entropy contribution (if baked into delta via calcFinalOut! with value) is already unscaled.
+#this overload sums the pre-combined loss directly.
+#single example with a scalar value term multiplying the selected output (e.g.
+#OutputIndex loss with a value).  For CrossEntropyLoss the values are already
+#baked into delta by the values-aware calcFinalOut! and the 3-arg method above
+#is used instead, so this method multiplies by the value.
+function calcJ(delta::V, output_index::Integer, output_value::T, lambda::T, Thetas::Vector{M}) where {T<:Real, V<:Vector{T}, M<:Matrix{T}}
+	accum1 = output_value * delta[output_index]
+	iszero(lambda) && return accum1
+	accum2 = lambda*calculate_l2(Thetas) / T(2)
 	return accum1 + accum2
 end
 
@@ -309,12 +337,13 @@ struct CrossEntropyLoss{T} <: LossType
 end
 
 calcDeltaOut!(::OutputIndex, deltas::AbstractArray{T}, a::AbstractArray{T}, index) where {T<:Real} = calcDeltaOut!(deltas, index)
+calcDeltaOut!(::OutputIndex, deltas::AbstractVector{T}, a::AbstractVector{T}, index::Integer, value::T) where {T<:Real} = (deltas .= zero(T); deltas[index] = value; deltas)
 calcDeltaOut!(::OutputIndex, deltas::Array{T, N}, a::Array{T, N}, indices::Vector{I}, values::Vector{T}) where {T<:Real, N, I<:Integer} = calcDeltaOut!(deltas, indices, values)
 
 #perform the calculation of a softmax derivative where the maximum value of each example is subtracted before computing the softmax to ensure numerical stability.  this case is for a single example so the deltas and activations are vectors rather than matrices. there is also only a single index for the output since there is only one example
 function calcDeltaOut!(loss::CrossEntropyLoss, deltas::AbstractVector{T}, a::AbstractVector{T}, index::Integer) where {T<:Real}
 	n = length(a)
-	beta = loss.beta
+	beta = T(loss.beta)
 	
 	#compute maximum activation value (explicit loop avoids SubArray allocation)
 	max_value = a[1]
@@ -338,8 +367,8 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::AbstractVector{T}, a::Abs
 		deltas[i] = deltas[i] / denominator
 	end
 
-	# Add entropy regularization gradient
-	# dH/dz_i = -p_i * (H(p) + log(p_i))
+	# Add entropy regularization gradient for the loss CE - beta*H.
+	# d(-beta*H)/dz_i = +beta*p_i * (H(p) + log(p_i))
 	# where H(p) = -sum_j p_j * log(p_j)
 	if beta > zero(T)
 		entropy = zero(T)
@@ -350,11 +379,52 @@ function calcDeltaOut!(loss::CrossEntropyLoss, deltas::AbstractVector{T}, a::Abs
 		@inbounds @simd for k in 1:n
 			p_k = deltas[k]
 			log_p_k = log(max(p_k, eps(T)))
-			deltas[k] -= beta * p_k * (entropy + log_p_k)
+			deltas[k] += beta * p_k * (entropy + log_p_k)
 		end
 	end
 
 	deltas[index] -= one(T)
+	return deltas
+end
+
+#single example cross entropy derivative with a scalar value term that multiplies only the cross entropy loss.  the entropy
+#regularization contribution (beta) is added afterwards and is never scaled by the value, so that after the
+#parameter update (subtraction of the gradient) it always increases entropy regardless of the sign of the value.
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::AbstractVector{T}, a::AbstractVector{T}, index::Integer, value::T) where {T<:Real}
+	n = length(a)
+	beta = T(loss.beta)
+	max_value = a[1]
+	@inbounds for i in 2:length(a)
+		@inbounds if a[i] > max_value
+			max_value = a[i]
+		end
+	end
+	denominator = zero(T)
+	@inbounds @simd for i in 1:n
+		h = exp(a[i] - max_value)
+		denominator += h
+		deltas[i] = h
+	end
+	@inbounds @simd for i in 1:n
+		deltas[i] = deltas[i] / denominator
+	end
+	if beta > zero(T)
+		entropy = zero(T)
+		@inbounds @simd for k in 1:n
+			p_k = deltas[k]
+			entropy -= p_k * log(max(p_k, eps(T)))
+		end
+		@inbounds @simd for k in 1:n
+			p_k = deltas[k]
+			log_p_k = log(max(p_k, eps(T)))
+			ce_k = p_k - (k == index ? one(T) : zero(T))
+			deltas[k] = value * ce_k + beta * p_k * (entropy + log_p_k)
+		end
+	else
+		@inbounds @simd for k in 1:n
+			deltas[k] = value * (deltas[k] - (k == index ? one(T) : zero(T)))
+		end
+	end
 	return deltas
 end
 
@@ -427,52 +497,204 @@ function crossEntropyDeltaOut!(deltas::Matrix{T}, index::Integer) where {T<:Real
 	end
 end
 
-function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index) where {T<:Real} 
-	crossEntropyDeltaOut!(deltas, a)
-	beta = loss.beta
-	if beta > zero(T)
-		#per-example (row) entropy H_r = -sum_c p_rc*log(p_rc), applied to every class of that row
-		#(consistent with the batch forward loss which includes beta*H_r per example and with the
-		#single-example (m=1) calcDeltaOut! so the GPU kernel can mirror this exactly)
-		#rows are independent so entropy is a per-row scalar - no allocation
-		@inbounds for row in 1:size(deltas, 1)
-			entropy = zero(T)
-			@simd for col in 1:size(deltas, 2)
-				p = deltas[row, col]
-				entropy -= p * log(max(p, eps(T))) 
-			end
-			@simd for col in 1:size(deltas, 2)
-				p = deltas[row, col]
-				log_p = log(max(p, eps(T)))
-				deltas[row, col] -= beta * p * (entropy + log_p)
-			end
+#Column-major scalar-value variants (allocation-free broadcast, no `fill`).
+function crossEntropyDeltaOut!(deltas::Matrix{T}, indices::Vector{I}, value::T) where {T<:Real, I<:Integer}
+	@inbounds @simd for i in eachindex(indices)
+		deltas[i, indices[i]] -= one(T)
+	end
+	@inbounds for j in 1:size(deltas, 2)
+		@simd for i in 1:size(deltas, 1)
+			deltas[i, j] *= value
 		end
 	end
+end
+
+function crossEntropyDeltaOut!(deltas::Matrix{T}, index::Integer, value::T) where {T<:Real}
+	@inbounds @simd for i in 1:size(deltas, 1)
+		deltas[i, index] -= one(T)
+	end
+	@inbounds for j in 1:size(deltas, 2)
+		@simd for i in 1:size(deltas, 1)
+			deltas[i, j] *= value
+		end
+	end
+end
+
+#Batch softmax Jacobian shared by every CrossEntropyLoss batch delta below.
+#All loops are column-major: the outer loop runs over classes (columns, stride-1
+#in Julia's column-major layout) and the inner loop over examples (rows) with
+#@simd, matching `crossEntropyDeltaOut!(deltas, a)`.  The per-row entropy sum
+#sum_j p_j*log(p_j) needs a row accumulator; it lives in the dead first column of
+#`a`: `crossEntropyDeltaOut!(deltas, a)` above has already overwritten `a` with
+#unnormalized exponentials, and no caller reads `a` after `calcDeltaOut!` (the
+#backprop loop only uses a[1:end-1]).  So the accumulation costs no allocation
+#and the update pass reads it while writing `deltas` (a different array - no
+#read/write conflict, even on column 1).  No allocation anywhere.
+_nrows(deltas::Matrix) = size(deltas, 1)
+_ncols(deltas::Matrix) = size(deltas, 2)
+
+#Pass 1: accumulate sum_j p_j*log(p_j) per row into a[:, 1] (column-major).
+#After this, H[i] = -a[i, 1].
+function _accumulate_plogp!(deltas::Matrix{T}, a::Matrix{T}) where {T<:Real}
+	(m, n) = size(deltas)
+	@inbounds for i in 1:m
+		a[i, 1] = zero(T)
+	end
+	@inbounds for j in 1:n
+		@simd for i in 1:m
+			p = deltas[i, j]
+			a[i, 1] += p * log(max(p, eps(T)))
+		end
+	end
+	return a
+end
+
+#Pass 2 of the batch entropy gradient (column-major): deltas += beta*p*(H + log_p)
+#with H[i] = -a[i,1] accumulated by _accumulate_plogp!.
+function _crossEntropyEntropyPass!(deltas::Matrix{T}, a::Matrix{T}, beta::T) where {T<:Real}
+	_accumulate_plogp!(deltas, a)
+	(m, n) = size(deltas)
+	@inbounds for j in 1:n
+		@simd for i in 1:m
+			p = deltas[i, j]
+			log_p = log(max(p, eps(T)))
+			deltas[i, j] += beta * p * (log_p - a[i, 1])
+		end
+	end
+	return deltas
+end
+
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index::Integer) where {T<:Real}
+	crossEntropyDeltaOut!(deltas, a)
+	beta = T(loss.beta)
+	beta > zero(T) && _crossEntropyEntropyPass!(deltas, a, beta)
 	crossEntropyDeltaOut!(deltas, index)
 end
 
-function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:Real, I<:Integer} 
+#per-example output indices (no values): entropy pass is target independent, only
+#the final one-hot subtraction differs.
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}) where {T<:Real, I<:Integer}
+	_nrows(deltas) == length(indices) || throw(DimensionMismatch("indices length \$(length(indices)) must match batch size \$(_nrows(deltas))"))
 	crossEntropyDeltaOut!(deltas, a)
-	beta = loss.beta
+	beta = T(loss.beta)
+	beta > zero(T) && _crossEntropyEntropyPass!(deltas, a, beta)
+	crossEntropyDeltaOut!(deltas, indices)
+end
+
+#Fused values-aware batch kernel: per-example loss values[row]*CE[row] - beta*H[row].
+#The entropy contribution beta*p*(H+log(p)) is added AFTER (and never scaled by)
+#values[row]: after the parameter update (subtraction) it increases entropy
+#regardless of the sign of values[row].  H[row] is computed from the softmax
+#probabilities before values scaling; the one-hot subtraction and the values
+#scaling are fused into the column-major update pass so each element is written
+#once.  No allocation.
+function _crossEntropyDeltaOutValues!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, values) where {T<:Real, I<:Integer}
+	crossEntropyDeltaOut!(deltas, a)
+	beta = T(loss.beta)
+	(m, n) = size(deltas)
 	if beta > zero(T)
-		#per-example (row) entropy H_r = -sum_c p_rc*log(p_rc) is applied to every class of that
-		#row (consistent with the batch forward loss, which includes beta*H_r per example, and with
-		#the GPU crossEntropyBatchDerivBeta kernel); the per-row values are then applied to the
-		#entire row as in crossEntropyDeltaOut!(deltas, indices, values).  No allocation.
-		@inbounds for row in 1:size(deltas, 1)
-			entropy = zero(T)
-			@simd for col in 1:size(deltas, 2)
-				p = deltas[row, col]
-				entropy -= p * log(max(p, eps(T)))
-			end
-			@simd for col in 1:size(deltas, 2)
-				p = deltas[row, col]
+		_accumulate_plogp!(deltas, a)
+		@inbounds for j in 1:n
+			@simd for i in 1:m
+				p = deltas[i, j]
 				log_p = log(max(p, eps(T)))
-				deltas[row, col] -= beta * p * (entropy + log_p)
+				v = T(values[i])
+				ce = p - (j == indices[i] ? one(T) : zero(T))
+				deltas[i, j] = v * ce + beta * p * (log_p - a[i, 1])
+			end
+		end
+	else
+		crossEntropyDeltaOut!(deltas, indices, values)
+	end
+end
+
+function _crossEntropyDeltaOutValues!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index::Integer, values) where {T<:Real}
+	crossEntropyDeltaOut!(deltas, a)
+	beta = T(loss.beta)
+	(m, n) = size(deltas)
+	if beta > zero(T)
+		_accumulate_plogp!(deltas, a)
+		@inbounds for j in 1:n
+			@simd for i in 1:m
+				p = deltas[i, j]
+				log_p = log(max(p, eps(T)))
+				v = T(values[i])
+				ce = p - (j == index ? one(T) : zero(T))
+				deltas[i, j] = v * ce + beta * p * (log_p - a[i, 1])
+			end
+		end
+	else
+		crossEntropyDeltaOut!(deltas, index)
+		@inbounds for j in 1:n
+			@simd for i in 1:m
+				deltas[i, j] *= T(values[i])
 			end
 		end
 	end
-	crossEntropyDeltaOut!(deltas, indices, values)
+end
+
+#Scalar-value kernels (allocation-free broadcast of one value across rows).
+function _crossEntropyDeltaOutValues!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, value::T) where {T<:Real, I<:Integer}
+	_nrows(deltas) == length(indices) || throw(DimensionMismatch("indices length \$(length(indices)) must match batch size \$(_nrows(deltas))"))
+	crossEntropyDeltaOut!(deltas, a)
+	beta = T(loss.beta)
+	(m, n) = size(deltas)
+	if beta > zero(T)
+		_accumulate_plogp!(deltas, a)
+		@inbounds for j in 1:n
+			@simd for i in 1:m
+				p = deltas[i, j]
+				log_p = log(max(p, eps(T)))
+				ce = p - (j == indices[i] ? one(T) : zero(T))
+				deltas[i, j] = value * ce + beta * p * (log_p - a[i, 1])
+			end
+		end
+	else
+		crossEntropyDeltaOut!(deltas, indices, value)
+	end
+end
+
+function _crossEntropyDeltaOutValues!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index::Integer, value::T) where {T<:Real}
+	crossEntropyDeltaOut!(deltas, a)
+	beta = T(loss.beta)
+	(m, n) = size(deltas)
+	if beta > zero(T)
+		_accumulate_plogp!(deltas, a)
+		@inbounds for j in 1:n
+			@simd for i in 1:m
+				p = deltas[i, j]
+				log_p = log(max(p, eps(T)))
+				ce = p - (j == index ? one(T) : zero(T))
+				deltas[i, j] = value * ce + beta * p * (log_p - a[i, 1])
+			end
+		end
+	else
+		crossEntropyDeltaOut!(deltas, index)
+		@inbounds for j in 1:n
+			@simd for i in 1:m
+				deltas[i, j] *= value
+			end
+		end
+	end
+end
+
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:Real, I<:Integer}
+	_nrows(deltas) == length(indices) == length(values) || throw(DimensionMismatch("indices/values length must match batch size \$(_nrows(deltas))"))
+	_crossEntropyDeltaOutValues!(loss, deltas, a, indices, values)
+end
+
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index::Integer, values::Vector{T}) where {T<:Real}
+	_nrows(deltas) == length(values) || throw(DimensionMismatch("values length \$(length(values)) must match batch size \$(_nrows(deltas))"))
+	_crossEntropyDeltaOutValues!(loss, deltas, a, index, values)
+end
+
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, indices::Vector{I}, value::T) where {T<:Real, I<:Integer}
+	_nrows(deltas) == length(indices) || throw(DimensionMismatch("indices length \$(length(indices)) must match batch size \$(_nrows(deltas))"))
+	_crossEntropyDeltaOutValues!(loss, deltas, a, indices, value)
+end
+
+function calcDeltaOut!(loss::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, index::Integer, value::T) where {T<:Real}
+	_crossEntropyDeltaOutValues!(loss, deltas, a, index, value)
 end
 
 #single example with distribution target
@@ -494,9 +716,10 @@ end
 
 #batch with distribution targets per row
 function calcDeltaOut!(::CrossEntropyLoss, deltas::Matrix{T}, a::Matrix{T}, targets::Matrix{T}) where {T<:Real}
+	size(deltas) == size(targets) || throw(DimensionMismatch("targets size \$(size(targets)) must match deltas size \$(size(deltas))"))
 	crossEntropyDeltaOut!(deltas, a)
-	@inbounds @simd for i in 1:size(deltas, 1)
-		for j in 1:size(deltas, 2)
+	@inbounds for j in 1:size(deltas, 2)
+		@simd for i in 1:size(deltas, 1)
 			deltas[i, j] -= targets[i, j]
 		end
 	end
@@ -533,11 +756,16 @@ end
 function calcFinalOut!(::OutputIndex, a, output)
 end
 
+function calcFinalOut!(::OutputIndex, a, output, value)
+end
+
 #compute the cross entropy loss of the softmax of a for a single example where the desired output is given by index
-#the entropy regularization term (beta*H, where beta = CrossEntropyLoss.beta) is included in the loss to stay
-#consistent with the gradient computed by calcDeltaOut!(CrossEntropyLoss, ...)
+#the entropy regularization term (-beta*H, where beta = CrossEntropyLoss.beta) is included in the loss to stay
+#consistent with the gradient computed by calcDeltaOut!(CrossEntropyLoss, ...).  minimizing
+#CE - beta*H increases entropy; the gradient contribution +beta*p*(H+log(p)) is subtracted
+#from the parameters, which increases entropy regardless of the CE term.
 function calcFinalOut!(loss::CrossEntropyLoss, a::AbstractArray{T}, index::Integer) where T<:AbstractFloat
-	beta = getfield(loss, :beta)
+	beta = T(getfield(loss, :beta))
 	#compute maximum activation value (explicit loop avoids SubArray allocation)
 	m = a[1]
 	@inbounds for i in 2:length(a)
@@ -559,7 +787,456 @@ function calcFinalOut!(loss::CrossEntropyLoss, a::AbstractArray{T}, index::Integ
 	@inbounds for i in eachindex(a)
 		a[i] = (a[i] - m) * (i == index)
 	end
-	a[index] = -a[index] + log(s) + beta * H
+	a[index] = -a[index] + log(s) - beta * H
+end
+
+#compute the cross entropy loss of the softmax of a for a single example with a scalar value term.
+#the value multiplies only the cross entropy loss; the entropy contribution -beta*H is added
+#unscaled so that minimizing the cost increases entropy regardless of the sign of the value.
+#the combined loss value*CE - beta*H is stored at the target index (paired with the plain
+#calcJ(delta, index, lambda) which does not multiply by the value again).
+function calcFinalOut!(loss::CrossEntropyLoss, a::AbstractArray{T}, index::Integer, value::T) where T<:AbstractFloat
+	beta = T(getfield(loss, :beta))
+	m = a[1]
+	@inbounds for i in 2:length(a)
+		@inbounds if a[i] > m
+			m = a[i]
+		end
+	end
+	s = zero(T)
+	@inbounds for i in eachindex(a)
+		s += exp(a[i] - m)
+	end
+	H = zero(T)
+	if beta > zero(T)
+		@inbounds for i in eachindex(a)
+			p = exp(a[i] - m)/s
+			H -= p * log(max(p, eps(T)))
+		end
+	end
+	@inbounds for i in eachindex(a)
+		a[i] = (a[i] - m) * (i == index)
+	end
+	a[index] = value * (-a[index] + log(s)) - beta * H
+end
+
+#Batch cross entropy forward shared by every CrossEntropyLoss batch loss below.
+#Each row keeps ONLY its own loss at its target column (other columns are zeroed)
+#so `calcJ` can sum one entry per row; this matches the GPU `crossEntropyBatch*`
+#kernels and the pre-existing non-values layout exactly.  The exp-sum and the
+#entropy reduction share a single pass over the row's classes (each class's exp
+#is computed once and reused for both), and the value scaling is fused into the
+#final write, so no `fill(value, m)` temporary is ever built.  No allocation.
+function _crossEntropyFinalOutValues!(loss::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}, values) where {T<:AbstractFloat, I<:Integer}
+	betaT = T(getfield(loss, :beta))
+	needH = betaT > zero(T)
+	n = size(a, 2)
+	if needH
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
+			end
+			s = zero(T)
+			H = zero(T)
+			@simd for j in 1:n
+				e = exp(a[i, j] - max_value)
+				s += e
+				H -= e * log(max(e, eps(T)))
+			end
+			#H currently holds -sum e_j*log(e_j); convert to -sum p_j*log(p_j) via
+			#H = (H + s*log(s))/s, since p_j = e_j/s.
+			H = (H + s * log(max(s, eps(T)))) / s
+			v = T(values[i])
+			ce = -(a[i, target] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, target] = v * ce - betaT * H
+		end
+
+	else
+
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+
+				end
+
+			end
+
+			s = zero(T)
+
+			@simd for j in 1:n
+
+				s += exp(a[i, j] - max_value)
+
+			end
+
+			v = T(values[i])
+
+			ce = -(a[i, target] - max_value) + log(s)
+
+			@simd for j in 1:n
+
+				a[i, j] = zero(T)
+
+			end
+
+			a[i, target] = v * ce
+
+		end
+
+	end
+
+	return a
+
+end
+
+function _crossEntropyFinalOutValues!(loss::CrossEntropyLoss, a::Matrix{T}, index::Integer, values) where {T<:AbstractFloat}
+	betaT = T(getfield(loss, :beta))
+	needH = betaT > zero(T)
+	n = size(a, 2)
+	1 <= index <= n || throw(BoundsError(a, (1, index)))
+	if needH
+		@inbounds for i in 1:size(a, 1)
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
+			end
+			s = zero(T)
+			H = zero(T)
+			@simd for j in 1:n
+				e = exp(a[i, j] - max_value)
+				s += e
+				H -= e * log(max(e, eps(T)))
+			end
+			H = (H + s * log(max(s, eps(T)))) / s
+			v = T(values[i])
+			ce = -(a[i, index] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, index] = v * ce - betaT * H
+		end
+
+	else
+
+		@inbounds for i in 1:size(a, 1)
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+
+					max_value = a[i, j]
+
+				end
+
+			end
+
+			s = zero(T)
+
+			@simd for j in 1:n
+
+				s += exp(a[i, j] - max_value)
+
+			end
+
+			v = T(values[i])
+
+			ce = -(a[i, index] - max_value) + log(s)
+
+			@simd for j in 1:n
+
+				a[i, j] = zero(T)
+
+			end
+
+			a[i, index] = v * ce
+
+		end
+
+	end
+
+	return a
+
+end
+
+function _crossEntropyFinalOutValues!(loss::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}, value::T) where {T<:AbstractFloat, I<:Integer}
+	betaT = T(getfield(loss, :beta))
+	needH = betaT > zero(T)
+	n = size(a, 2)
+	if needH
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+
+					max_value = a[i, j]
+
+				end
+
+			end
+
+			s = zero(T)
+
+			H = zero(T)
+
+			@simd for j in 1:n
+
+				e = exp(a[i, j] - max_value)
+
+				s += e
+
+				H -= e * log(max(e, eps(T)))
+
+			end
+
+			H = (H + s * log(max(s, eps(T)))) / s
+
+			ce = -(a[i, target] - max_value) + log(s)
+
+			@simd for j in 1:n
+
+				a[i, j] = zero(T)
+
+			end
+
+			a[i, target] = value * ce - betaT * H
+
+		end
+
+	else
+
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+
+			max_value = a[i, 1]
+
+			for j in 2:n
+
+				@inbounds if a[i, j] > max_value
+
+					max_value = a[i, j]
+
+				end
+
+			end
+
+			s = zero(T)
+
+			@simd for j in 1:n
+
+				s += exp(a[i, j] - max_value)
+
+			end
+
+			ce = -(a[i, target] - max_value) + log(s)
+
+			@simd for j in 1:n
+
+				a[i, j] = zero(T)
+
+			end
+
+			a[i, target] = value * ce
+
+		end
+
+	end
+
+	return a
+
+end
+
+function _crossEntropyFinalOutValues!(loss::CrossEntropyLoss, a::Matrix{T}, index::Integer, value::T) where {T<:AbstractFloat}
+	betaT = T(getfield(loss, :beta))
+	needH = betaT > zero(T)
+	n = size(a, 2)
+	1 <= index <= n || throw(BoundsError(a, (1, index)))
+	if needH
+		@inbounds for i in 1:size(a, 1)
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+
+					max_value = a[i, j]
+
+				end
+
+			end
+
+			s = zero(T)
+
+			H = zero(T)
+			@simd for j in 1:n
+
+				e = exp(a[i, j] - max_value)
+
+				s += e
+
+				H -= e * log(max(e, eps(T)))
+
+			end
+
+			H = (H + s * log(max(s, eps(T)))) / s
+
+			ce = -(a[i, index] - max_value) + log(s)
+			@simd for j in 1:n
+
+				a[i, j] = zero(T)
+
+			end
+
+			a[i, index] = value * ce - betaT * H
+
+		end
+
+	else
+
+		@inbounds for i in 1:size(a, 1)
+			max_value = a[i, 1]
+
+			for j in 2:n
+
+				@inbounds if a[i, j] > max_value
+
+					max_value = a[i, j]
+
+				end
+
+			end
+
+			s = zero(T)
+
+			@simd for j in 1:n
+
+				s += exp(a[i, j] - max_value)
+
+			end
+
+			ce = -(a[i, index] - max_value) + log(s)
+
+			@simd for j in 1:n
+
+				a[i, j] = zero(T)
+
+			end
+
+			a[i, index] = value * ce
+
+		end
+
+	end
+
+	return a
+
+end
+
+#compute the cross entropy loss of the softmax of a for multiple examples with per-example indices
+#and per-example value terms.  each row stores values[i]*CE[i] - beta*H[i] at its target column
+#(paired with the plain calcJ(delta, indices, lambda) so the value is not applied twice, and so
+#the entropy term is never scaled by the value). other entries hold the shifted logit at the
+#target column only, matching the layout of the non-values batch forward.
+function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}, values::Vector{T}) where {T<:AbstractFloat, I<:Integer}
+	size(a, 1) == length(indices) == length(values) || throw(DimensionMismatch("indices/values length must match batch size \$(size(a, 1))"))
+	_crossEntropyFinalOutValues!(loss, a, indices, values)
+end
+
+#Allocation-free scalar-value forward kernels (no `fill(value, m)` temporary).
+function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}, value::T) where {T<:AbstractFloat, I<:Integer}
+	size(a, 1) == length(indices) || throw(DimensionMismatch("indices length \$(length(indices)) must match batch size \$(size(a, 1))"))
+	_crossEntropyFinalOutValues!(loss, a, indices, value)
+end
+
+function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, index::Integer, value::T) where {T<:AbstractFloat}
+	_crossEntropyFinalOutValues!(loss, a, index, value)
+end
+
+function calcFinalOut!(loss::CrossEntropyLoss, a::AbstractArray{T}, indices::Vector{I}, value::T) where {T<:AbstractFloat, I<:Integer}
+	_abstractFinalOutValues!(loss, a, indices, value)
+end
+
+function calcFinalOut!(loss::CrossEntropyLoss, a::AbstractArray{T}, indices::Vector{I}, values::Vector{T}) where {T<:AbstractFloat, I<:Integer}
+	size(a, 1) == length(indices) == length(values) || throw(DimensionMismatch("indices/values length must match batch size \$(size(a, 1))"))
+	_abstractFinalOutValues!(loss, a, indices, values)
+end
+
+#shared-index batch variant with per-example values (mirrors the (Matrix, index) forward above).
+function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, index::Integer, values::Vector{T}) where {T<:AbstractFloat}
+	size(a, 1) == length(values) || throw(DimensionMismatch("values length \$(length(values)) must match batch size \$(size(a, 1))"))
+	_crossEntropyFinalOutValues!(loss, a, index, values)
+end
+
+#AbstractArray values-aware forward (allocation-free, no `fill`).
+#Used when `a[end]` is an abstract scratch view rather than a Matrix (e.g.
+#the length-sumO sequence scratch); eachindex over rows keeps it generic while
+#the per-row math is identical to the Matrix kernel above.
+function _abstractFinalOutValues!(loss::CrossEntropyLoss, a::AbstractArray{T}, indices::Vector{I}, value) where {T<:AbstractFloat, I<:Integer}
+	betaT = T(getfield(loss, :beta))
+	needH = betaT > zero(T)
+	size(a, 1) == length(indices) || throw(DimensionMismatch("indices length \$(length(indices)) must match batch size \$(size(a, 1))"))
+	n = size(a, 2)
+	if needH
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
+			end
+			s = zero(T)
+			H = zero(T)
+			@simd for j in 1:n
+				e = exp(a[i, j] - max_value)
+				s += e
+				H -= e * log(max(e, eps(T)))
+			end
+			H = (H + s * log(max(s, eps(T)))) / s
+			v = T(value isa AbstractVector ? value[i] : value)
+			ce = -(a[i, target] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, target] = v * ce - betaT * H
+		end
+	else
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
+			end
+			s = zero(T)
+			@simd for j in 1:n
+				s += exp(a[i, j] - max_value)
+			end
+			v = T(value isa AbstractVector ? value[i] : value)
+			ce = -(a[i, target] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, target] = v * ce
+		end
+	end
+	return a
 end
 
 #compute the cross entropy loss of the softmax of a for a single example where the desired output is a probability distribution
@@ -577,82 +1254,131 @@ function calcFinalOut!(::CrossEntropyLoss, a::AbstractArray{T}, targets::Abstrac
 end
 
 #compute the cross entropy loss of the softmax of a for multiple examples contained in the rows of a and the elements of indices
-#entropy regularization (beta*H) is included in the per-example loss to stay consistent with calcDeltaOut!(CrossEntropyLoss, ...)
+#entropy regularization (-beta*H) is included in the per-example loss to stay consistent with calcDeltaOut!(CrossEntropyLoss, ...).
+#minimizing CE - beta*H increases entropy; the gradient contribution is subtracted from the parameters.
 function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, index::Integer) where {T<:AbstractFloat}
-	m = size(a, 1)
+	betaT = T(getfield(loss, :beta))
+	needH = betaT > zero(T)
 	n = size(a, 2)
-	beta = getfield(loss, :beta)
-	@inbounds @simd for i in 1:m
-		max_value = zero(T)
-		for j in 1:n
-			max_value = max(max_value, a[i, j])
-		end
-
-		s = zero(T)
-		for j in 1:n
-			s += exp(a[i, j] - max_value)
-		end
-
-		H = zero(T)
-		if beta > zero(T)
-			for j in 1:n
-				p = exp(a[i, j] - max_value)/s
-				H -= p * log(max(p, eps(T)))
+	1 <= index <= n || throw(BoundsError(a, (1, index)))
+	if needH
+		@inbounds for i in 1:size(a, 1)
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
 			end
+			s = zero(T)
+			H = zero(T)
+			@simd for j in 1:n
+				e = exp(a[i, j] - max_value)
+				s += e
+				H -= e * log(max(e, eps(T)))
+			end
+			H = (H + s * log(max(s, eps(T)))) / s
+			ce = -(a[i, index] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, index] = ce - betaT * H
 		end
-		for j in 1:n
-			a[i, j] = (a[i, j] - max_value)*(j == index)
+	else
+		@inbounds for i in 1:size(a, 1)
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
+			end
+			s = zero(T)
+			@simd for j in 1:n
+				s += exp(a[i, j] - max_value)
+			end
+			ce = -(a[i, index] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, index] = ce
 		end
-		a[i, index] = -a[i, index] + log(s) + beta * H
 	end
+	return a
 end
 #compute the cross entropy loss of the softmax of a for multiple examples contained in the rows of a and the elements of indices
-#entropy regularization (beta*H) is included in the per-example loss to stay consistent with calcDeltaOut!(CrossEntropyLoss, ...)
+#entropy regularization (-beta*H) is included in the per-example loss to stay consistent with calcDeltaOut!(CrossEntropyLoss, ...).
+#minimizing CE - beta*H increases entropy; the gradient contribution is subtracted from the parameters.
 function calcFinalOut!(loss::CrossEntropyLoss, a::Matrix{T}, indices::Vector{I}) where {T<:AbstractFloat, I<:Integer}
-	m = size(a, 1)
+	size(a, 1) == length(indices) || throw(DimensionMismatch("indices length \$(length(indices)) must match batch size \$(size(a, 1))"))
+	betaT = T(getfield(loss, :beta))
+	needH = betaT > zero(T)
 	n = size(a, 2)
-	beta = getfield(loss, :beta)
-	@inbounds @simd for i in eachindex(indices)
-		max_value = zero(T)
-		for j in 1:n
-			max_value = max(max_value, a[i, j])
-		end
-
-		s = zero(T)
-		for j in 1:n
-			s += exp(a[i, j] - max_value)
-		end
-
-		H = zero(T)
-		if beta > zero(T)
-			for j in 1:n
-				p = exp(a[i, j] - max_value)/s
-				H -= p * log(max(p, eps(T)))
+	if needH
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
 			end
+			s = zero(T)
+			H = zero(T)
+			@simd for j in 1:n
+				e = exp(a[i, j] - max_value)
+				s += e
+				H -= e * log(max(e, eps(T)))
+			end
+			H = (H + s * log(max(s, eps(T)))) / s
+			ce = -(a[i, target] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, target] = ce - betaT * H
 		end
-		for j in 1:n
-			a[i, j] = (a[i, j] - max_value)*(j == indices[i])
+	else
+		@inbounds for i in eachindex(indices)
+			target = indices[i]
+			1 <= target <= n || throw(BoundsError(a, (i, target)))
+			max_value = a[i, 1]
+			for j in 2:n
+				@inbounds if a[i, j] > max_value
+					max_value = a[i, j]
+				end
+			end
+			s = zero(T)
+			@simd for j in 1:n
+				s += exp(a[i, j] - max_value)
+			end
+			ce = -(a[i, target] - max_value) + log(s)
+			@simd for j in 1:n
+				a[i, j] = zero(T)
+			end
+			a[i, target] = ce
 		end
-		a[i, indices[i]] = -a[i, indices[i]] + log(s) + beta * H
 	end
+	return a
 end
 
 #compute the cross entropy loss of the softmax of a for multiple examples contained in the rows of a with target probability distributions per row
 function calcFinalOut!(::CrossEntropyLoss, a::Matrix{T}, targets::Matrix{T}) where {T<:AbstractFloat}
+	size(a) == size(targets) || throw(DimensionMismatch("targets size \$(size(targets)) must match activations size \$(size(a))"))
 	(m, n) = size(a)
-	@inbounds @simd for i in 1:m
-		max_value = zero(T)
-		for j in 1:n
+	@inbounds for i in 1:m
+		max_value = a[i, 1]
+		@simd for j in 2:n
 			max_value = max(max_value, a[i, j])
 		end
-
 		s = zero(T)
 		loss = zero(T)
-		for j in 1:n
+		@simd for j in 1:n
 			h = a[i, j] - max_value
 			x = exp(h)
 			s += x
 			loss += targets[i, j] * h
+		end
+		for j in 2:n
+			a[i, j] = zero(T)
 		end
 		a[i, 1] = log(s) - loss
 	end
@@ -1081,15 +1807,77 @@ Forward cost for an output-index loss with a per-example scalar multiplier ``out
 See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
 
 """
-function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output_index::Union{Integer, Vector{I}}, output_value::Union{Float32, Vector{Float32}}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {I <: Integer, N}
-
+#Concrete per-index/per-value NOGRAD methods (no Unions): each combination of
+#index container (Integer/Vector) and value container (Float32/Vector{Float32})
+#has its own method so dispatch is static and every call below is
+#inference-stable.  The CrossEntropyLoss branch is compiled out per loss type
+#via the inner `loss_type isa` on a concrete struct (constant-propagated).
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output_index::Integer, output_value::Float32, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {N}
 	num_hidden = length(hidden_layers)
 
 	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
 
-	calcFinalOut!(loss_type, a[end], output_index)
+	if loss_type isa CrossEntropyLoss
+		#values-aware forward bakes values[i]*CE[i] - beta*H[i] into the target
+		#entries (entropy never scaled by values); pair with the plain calcJ so
+		#values are not applied twice.
+		calcFinalOut!(loss_type, a[end], output_index, output_value)
+		J = calcJ(a[end], output_index, lambda, Thetas)
+	else
+		calcFinalOut!(loss_type, a[end], output_index)
+		J = calcJ(a[end], output_index, output_value, lambda, Thetas)
+	end
+end
 
-	J = calcJ(a[end], output_index, output_value, lambda, Thetas)
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output_index::Integer, output_value::Vector{Float32}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {N}
+	num_hidden = length(hidden_layers)
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
+
+	if loss_type isa CrossEntropyLoss
+		#values-aware forward bakes values[i]*CE[i] - beta*H[i] into the target
+		#entries (entropy never scaled by values); pair with the plain calcJ so
+		#values are not applied twice.
+		calcFinalOut!(loss_type, a[end], output_index, output_value)
+		J = calcJ(a[end], output_index, lambda, Thetas)
+	else
+		calcFinalOut!(loss_type, a[end], output_index)
+		J = calcJ(a[end], output_index, output_value, lambda, Thetas)
+	end
+end
+
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output_index::Vector{I}, output_value::Float32, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {I <: Integer, N}
+	num_hidden = length(hidden_layers)
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
+
+	if loss_type isa CrossEntropyLoss
+		#values-aware forward bakes values[i]*CE[i] - beta*H[i] into the target
+		#entries (entropy never scaled by values); pair with the plain calcJ so
+		#values are not applied twice.
+		calcFinalOut!(loss_type, a[end], output_index, output_value)
+		J = calcJ(a[end], output_index, lambda, Thetas)
+	else
+		calcFinalOut!(loss_type, a[end], output_index)
+		J = calcJ(a[end], output_index, output_value, lambda, Thetas)
+	end
+end
+
+function nnCostFunctionNOGRAD(Thetas::Vector{Matrix{Float32}}, biases::Vector{Vector{Float32}}, hidden_layers, X, output_index::Vector{I}, output_value::Vector{Float32}, lambda::Float32, a::Vector{Array{Float32, N}}, D::Float32 = 0.0f0; resLayers::Int64 = 0, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), kwargs...) where {I <: Integer, N}
+	num_hidden = length(hidden_layers)
+
+	forwardNOGRAD!(a, Thetas, biases, hidden_layers, X, resLayers; activation_list = activation_list, kwargs...)
+
+	if loss_type isa CrossEntropyLoss
+		#values-aware forward bakes values[i]*CE[i] - beta*H[i] into the target
+		#entries (entropy never scaled by values); pair with the plain calcJ so
+		#values are not applied twice.
+		calcFinalOut!(loss_type, a[end], output_index, output_value)
+		J = calcJ(a[end], output_index, lambda, Thetas)
+	else
+		calcFinalOut!(loss_type, a[end], output_index)
+		J = calcJ(a[end], output_index, output_value, lambda, Thetas)
+	end
 end
 
 #forward pass for autoencoder: disambiguates the case where X::Matrix{Float32} and input_layer_size::Int64 are both present
@@ -1944,6 +2732,105 @@ function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{F
 	end
 	
 	calcDeltaOut!(loss_type, deltas[end], a[end], output)	
+
+	# println("deltas[end] CPU is $(deltas[end])")
+
+	i = num_hidden
+	
+	while i >= 1
+		gemm!('N', 'T', 1.0f0, deltas[i+1], a[i], lambda, Theta_grads[i+1])
+		copy!(Bias_grads[i+1], deltas[i+1])
+		# gemv!('T', 1.0f0/m, deltas[i+1], onesVec, 0.0f0, Bias_grads[i+1])
+		#deltas[i] = (deltas[i+1]*Thetas[i+1]) .* tanh_grad_z[i]
+		if (resLayers != 0) && ((i <= (num_hidden - resLayers)) && (((i + resLayers - 1) % resLayers) == 0))
+			#replace deltas[i] with deltas[i+resLayers]
+			# scal!(length(deltas[i]), 0.0f0, deltas[i], 1)
+			# axpy!(1.0f0, deltas[i+resLayers], deltas[i]) 
+			blascopy!(length(deltas[i]), deltas[i+resLayers], 1, deltas[i], 1)
+			#propagate derivative back to deltas from the original input to the residual layers
+			gemv!('T', 1.0f0, Thetas[i+1], deltas[i+1], 1.0f0, deltas[i])
+			# gemm!('N', 'N', 1.0f0, deltas[i+1], Thetas[i+1], 0.0f0, deltas[i])
+		else
+			gemv!('T', 1.0f0, Thetas[i+1], deltas[i+1], 0.0f0, deltas[i]) #do part 1 of line 1 in place
+		end
+		finishDelta!(deltas[i], tanh_grad_z[i]) #do part 2 of line 1 in place
+		i = i - 1
+	end
+
+	gemm!('N', 'T', 1.0f0, deltas[1], x, lambda, Theta_grads[1])
+	copy!(Bias_grads[1], deltas[1])
+	# gemv!('T', 1.0f0/m, deltas[1], onesVec, 0.0f0, Bias_grads[1]) #calculate below line in place
+	#Bias_grads[1] = (ones(Float32, 1, m)*deltas[1]/m)[:]
+end
+
+
+"""
+
+    nnCostFunction(Thetas, biases, hidden_layers, x, output::Integer, output_value::Float32, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas; loss_type::LossType = OutputIndex(), ...) -> Nothing
+
+Backward pass for a single example with a scalar multiplier ``output_value`` on the cross entropy
+loss (the ``CrossEntropyLoss(beta)`` entropy contribution is added unscaled so it always
+increases entropy after the parameter update). Mirrors the batch ``output_values`` variant.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
+function nnCostFunction(Thetas::Array{Matrix{Float32},1}, biases::Array{Vector{Float32}, 1}, hidden_layers::AbstractVector{I}, x, output::Integer, output_value::Float32, lambda::Float32, Theta_grads::Array{Matrix{Float32}, 1}, Bias_grads::Array{Vector{Float32}, 1}, tanh_grad_z::Array{Vector{Float32}, 1}, a::Array{Vector{Float32}, 1}, deltas::Array{Vector{Float32}, 1}, D = 0.0f0; resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex()) where I <: Integer
+	num_hidden = length(hidden_layers)
+
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert all(h == hidden_layers[1] for h in hidden_layers) "hidden layers do not share a dimension" 
+	end
+
+	#Setup some useful variables
+	input_size = length(x)
+	output_size = length(a[end])
+	
+	if lambda > 0.0f0
+		fillThetaGrads!(Theta_grads, Thetas)
+	end
+
+	fillAs!(a, biases)
+
+	gemv!('N', 1.0f0, Thetas[1], x, 1.0f0, a[1])
+
+	if length(Thetas) > 1
+		if activation_list[1]
+			if D == 0.0f0
+				tanhGradient!(a[1], tanh_grad_z[1])
+			else
+				tanhGradient!(a[1], tanh_grad_z[1], D)
+			end
+		else
+			noactivationGradient!(a[1], tanh_grad_z[1], D)
+		end
+
+		if num_hidden > 1
+			for i = 2:num_hidden
+				gemv!('N', 1.0f0, Thetas[i], a[i-1], 1.0f0, a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					#calculate residual skip every resLayers layers past the first hidden layer
+					axpy!(1.0f0, a[i-resLayers], a[i])
+				end
+				
+				if activation_list[i]
+					if D == 0.0f0
+						tanhGradient!(a[i], tanh_grad_z[i])
+					else
+						tanhGradient!(a[i], tanh_grad_z[i], D)
+					end
+				else
+					noactivationGradient!(a[i], tanh_grad_z[i], D)
+				end
+			end
+		end
+
+		gemv!('N', 1.0f0, Thetas[end], a[end-1], 1.0f0, a[end])
+	end
+	
+	calcDeltaOut!(loss_type, deltas[end], a[end], output, output_value)	
 
 	# println("deltas[end] CPU is $(deltas[end])")
 

@@ -62,7 +62,7 @@ get_optimal_1d_launch_params(x::Array) = get_optimal_1d_launch_params(length(x))
 # The loads are now written out explicitly - which keeps them visible to inference and to
 # precompilation and lets Revise.jl see them - and these tuples serve as the drift guard that each
 # loader verifies against, so the two cannot silently diverge.
-costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation", "rowMul", "crossEntropyBatchDerivBeta", "crossEntropyBatchLossBeta", "outputIndexBatchGather")
+costfunc_kernel_names = ("fill_cols", "swap_matrix_col", "finish_delta", "elMul", "tanhGradient", "tanhGradientDropout", "noactivationGradient", "tanhActivation", "rowMul", "crossEntropyBatchDerivBeta", "crossEntropyBatchLossBeta", "crossEntropyBatchDerivBetaValues", "crossEntropyBatchLossBetaValues", "outputIndexBatchGather")
 adamax_kernel_names = ("updateParams", "elSq", "elSq2", "scaleParams", "updateEst")
 
 function create_costfunc_kernels(md; kwargs...)
@@ -77,6 +77,8 @@ function create_costfunc_kernels(md; kwargs...)
 	global rowMul = load_module_patient(md, "rowMul"; kwargs...)
 	global crossEntropyBatchDerivBeta = load_module_patient(md, "crossEntropyBatchDerivBeta"; kwargs...)
 	global crossEntropyBatchLossBeta = load_module_patient(md, "crossEntropyBatchLossBeta"; kwargs...)
+	global crossEntropyBatchDerivBetaValues = load_module_patient(md, "crossEntropyBatchDerivBetaValues"; kwargs...)
+	global crossEntropyBatchLossBetaValues = load_module_patient(md, "crossEntropyBatchLossBetaValues"; kwargs...)
 	global outputIndexBatchGather = load_module_patient(md, "outputIndexBatchGather"; kwargs...)
 	#verify that the explicit loads above still cover the canonical inventory
 	@assert all(kname -> isdefined(@__MODULE__, Symbol(kname)), costfunc_kernel_names) "create_costfunc_kernels did not load every kernel listed in costfunc_kernel_names"
@@ -771,13 +773,44 @@ index (``OutputIndex()``) or the cross entropy of the softmax against that index
 See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
 
 """
-function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, lambda::Float32, D = 0.0f0; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, lambda::Float32; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
 	forwardNOGRAD_vector!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list)
 	#launch across output data size rather than output layer size
 	run_kernel_output(loss_type, d_a[end].size[1], d_a[end], Cint(output_index-1))
 	tmp_out = host_allocate(d_a[end]) 
 	iszero(lambda) && return tmp_out[output_index]
 	return tmp_out[output_index] + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/2.0f0
+end
+
+"""
+
+    nnCostFunctionNOGRAD(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_X, output_index::Integer, output_value::Float32, lambda; loss_type::LossType = OutputIndex(), ...) -> Float32
+
+GPU forward cost for a single example with a scalar multiplier ``output_value`` on the cross
+entropy loss (the ``CrossEntropyLoss(beta)`` entropy contribution is added unscaled so it
+always increases entropy after the parameter update). Mirrors the batch ``values`` variant.
+The output index is decremented by 1 before sending to the GPU.
+
+See ``nnCostFunctionNOGRAD`` for the common keyword arguments.
+
+"""
+function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, output_value::Float32, lambda::Float32; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+	forwardNOGRAD_vector!(d_a, d_Thetas, d_biases, hidden_layers, d_X, resLayers, activation_list)
+	if loss_type isa CrossEntropyLoss
+		#single-example values-aware loss value*CE - beta*H computed on the host from the
+		#forward activations (m = 1, negligible cost) via the CPU overload so the GPU
+		#reported cost matches the CPU exactly.
+		h = host_allocate(d_a[end])
+		a = copy(h)
+		calcFinalOut!(loss_type, a, output_index, output_value)
+		iszero(lambda) && return a[output_index]
+		return a[output_index] + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/2.0f0
+	else
+		run_kernel_output(loss_type, d_a[end].size[1], d_a[end], Cint(output_index-1))
+		tmp_out = host_allocate(d_a[end])
+		iszero(lambda) && return tmp_out[output_index] * output_value
+		return tmp_out[output_index] * output_value + lambda*calculate_l2([host_allocate(T) for T in d_Thetas])/2.0f0
+	end
 end
 
 #note this method will be used for the cross entropy batch loss which requires a different type of kernel launch then the usual batch forward passes, if output values are also included then it will be used for the version of cross entropy loss with a scaling factor on the output error per example
@@ -802,9 +835,11 @@ function nnCostFunctionNOGRAD(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUD
 	else
 		#per-example output index cross entropy (optionally with entropy regularization beta)
 		if (loss_type isa CrossEntropyLoss) && (getfield(loss_type, :beta) > 0.0f0)
-			run_kernel_batch(crossEntropyBatchLossBeta, m, output_layer_size, d_a[end], first(outputs), getfield(loss_type, :beta))
 			if length(outputs) > 1
-				run_kernel(rowMul, m, output_layer_size, d_a[end], outputs[2])
+				#values[i]*CE[i] - beta*H[i]: values scale only CE, entropy added unscaled
+				run_kernel_batch(crossEntropyBatchLossBetaValues, m, output_layer_size, d_a[end], first(outputs), outputs[2], getfield(loss_type, :beta))
+			else
+				run_kernel_batch(crossEntropyBatchLossBeta, m, output_layer_size, d_a[end], first(outputs), getfield(loss_type, :beta))
 			end
 		else
 			run_kernel_output(loss_type, m, output_layer_size, d_a[end], outputs...)
@@ -1305,6 +1340,103 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	memcpy!(d_bias_grads[1], d_deltas[1])
 end
 
+"""
+
+    nnCostFunction(d_Thetas, d_biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_bias_grads, d_X, output_index::Integer, output_value::Float32, lambda; loss_type::LossType = OutputIndex(), ...) -> Nothing
+
+GPU backward pass for a single example with a scalar multiplier ``output_value`` on the cross
+entropy loss (the ``CrossEntropyLoss(beta)`` entropy contribution is added unscaled so it
+always increases entropy after the parameter update). The output index is decremented by 1
+only for the kernel path; the values-aware ``CrossEntropyLoss`` gradient is computed on the
+host from the forward activations (m = 1) via the CPU overload and copied back to the device.
+
+See ``nnCostFunction`` for the common keyword arguments.
+
+"""
+function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray, 1}, input_layer_size::Int64, output_layer_size::Int64, hidden_layers::Vector, d_a::Array{CUDAArray, 1}, d_tanh_grad_z::Array{CUDAArray, 1}, d_deltas::Array{CUDAArray, 1}, d_Theta_grads::Array{CUDAArray, 1}, d_bias_grads::Array{CUDAArray, 1}, d_X::CUDAArray, output_index::Integer, output_value::Float32, lambda::Float32, D::Float32; loss_type::LossType = OutputIndex(), resLayers::Int64 = 0, activation_list::AbstractVector{Bool} = fill(true, length(hidden_layers)))
+	num_hidden = length(hidden_layers)
+	if resLayers != 0
+		@assert num_hidden > 1 "Must have at least two hidden layers"
+		@assert ((num_hidden - 1) % resLayers) == 0 "The length of hidden_layers - 1 ($(num_hidden-1)) is not a multiple of the number of residual layers ($resLayers)"
+		@assert prod(hidden_layers .== hidden_layers[1]) "hidden layers do not share a dimension"
+	end
+	n = d_a[end].size[1]
+	if num_hidden > 0
+		if lambda > 0.0f0
+			for i in 1:length(d_Thetas)
+				memcpy!(d_Theta_grads[i], d_Thetas[i])
+			end
+		end
+	end
+	for i in eachindex(d_a)
+		memcpy!(d_a[i], d_biases[i])
+	end
+	cublasSgemv(cublas_handle, 'N', 1.0f0, d_Thetas[1], d_X, 1.0f0, d_a[1])
+	if num_hidden > 0
+		if activation_list[1]
+			if D == 0.0f0
+				run_kernel_1D(tanhGradient, hidden_layers[1], d_a[1], d_tanh_grad_z[1])
+			else
+				run_kernel_1D(tanhGradientDropout, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+			end
+		else
+			run_kernel_1D(noactivationGradient, hidden_layers[1], d_a[1], d_tanh_grad_z[1], rand(UInt32), D)
+		end
+		if num_hidden > 1
+			for i = 2:num_hidden
+				cublasSgemv(cublas_handle, 'N', 1.0f0, d_Thetas[i], d_a[i-1], 1.0f0, d_a[i])
+				if (resLayers != 0) && (((i - 1) % resLayers) == 0)
+					cublasSaxpy(cublas_handle, 1.0f0, d_a[i-resLayers], d_a[i])
+				end
+				if activation_list[i]
+					if D == 0.0f0
+						run_kernel_1D(tanhGradient, hidden_layers[i], d_a[i], d_tanh_grad_z[i])
+					else
+						run_kernel_1D(tanhGradientDropout, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+					end
+				else
+					run_kernel_1D(noactivationGradient, hidden_layers[i], d_a[i], d_tanh_grad_z[i], rand(UInt32), D)
+				end
+			end
+		end
+		cublasSgemv(cublas_handle, 'N', 1.0f0, d_Thetas[end], d_a[end-1], 1.0f0, d_a[end])
+	end
+	if loss_type isa CrossEntropyLoss
+		#values-aware single-example output delta computed on the host (m = 1) so the
+		#entropy term is never scaled by output_value; copy the result back to device.
+		h_a = host_allocate(d_a[end])
+		h_d = similar(h_a)
+		calcDeltaOut!(loss_type, h_d, h_a, output_index, output_value)
+		memcpy!(d_deltas[end], cuda_allocate(h_d))
+	else
+		run_kernel_deriv(loss_type, n, d_deltas[end], d_a[end], Cint(output_index-1))
+		h_d = host_allocate(d_deltas[end])
+		h_d .*= output_value
+		memcpy!(d_deltas[end], cuda_allocate(h_d))
+	end
+	i = num_hidden
+	while i >= 1
+		if lambda ≠ 1f0
+			cublasSscal(cublas_handle, lambda, d_Theta_grads[i+1])
+		end
+		cublasSger(cublas_handle, 1.0f0, d_deltas[i+1], d_a[i], d_Theta_grads[i+1])
+		memcpy!(d_bias_grads[i+1], d_deltas[i+1])
+		if (resLayers != 0) && ((i <= (num_hidden-resLayers)) && (((i+resLayers-1)%resLayers)==0))
+			memcpy!(d_deltas[i], d_deltas[i+resLayers])
+			cublasSgemv(cublas_handle, 'T', 1.0f0, d_Thetas[i+1], d_deltas[i+1], 1.0f0, d_deltas[i])
+		else
+			cublasSgemv(cublas_handle, 'T', 1.0f0, d_Thetas[i+1], d_deltas[i+1], 0f0, d_deltas[i])
+		end
+		run_kernel_1D(elMul, hidden_layers[i], d_deltas[i], d_tanh_grad_z[i])
+		i = i - 1
+	end
+	if lambda ≠ 1f0
+		cublasSscal(cublas_handle, lambda, d_Theta_grads[1])
+	end
+	cublasSger(cublas_handle, 1.0f0, d_deltas[1], d_X, d_Theta_grads[1])
+	memcpy!(d_bias_grads[1], d_deltas[1])
+end
+
 #note that this will be used for the derivative of the cross entropy loss in a batch context
 """
 
@@ -1387,9 +1519,11 @@ function nnCostFunction(d_Thetas::Array{CUDAArray, 1}, d_biases::Array{CUDAArray
 	else
 		#per-example output index cross entropy derivative (optionally with entropy regularization beta)
 		if (loss_type isa CrossEntropyLoss) && (getfield(loss_type, :beta) > 0.0f0)
-			run_kernel_batch(crossEntropyBatchDerivBeta, m, output_layer_size, d_deltas[end], d_a[end], first(outputs), getfield(loss_type, :beta))
 			if length(outputs) > 1
-				run_kernel(rowMul, m, output_layer_size, d_deltas[end], outputs[2])
+				#values[i]*(p-target) + beta*p*(H+log p): values scale only CE term
+				run_kernel_batch(crossEntropyBatchDerivBetaValues, m, output_layer_size, d_deltas[end], d_a[end], first(outputs), outputs[2], getfield(loss_type, :beta))
+			else
+				run_kernel_batch(crossEntropyBatchDerivBeta, m, output_layer_size, d_deltas[end], d_a[end], first(outputs), getfield(loss_type, :beta))
 			end
 		else
 			run_kernel_deriv(loss_type, m, output_layer_size, d_deltas[end], d_a[end], outputs...)

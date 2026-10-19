@@ -708,7 +708,7 @@ function checkNumGradGPU(lambda; hidden_layers=[5, 5], costFunc = "absErr", inpu
 	return return_costs ? (grad_err = GPUErr, cost_gpu = costGPU, cost_cpu = costCPU) : GPUErr
 end
 
-function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, e = 1f-3, activation_list=fill(true, length(hidden_layers)), printmsg = true, loss_type::LossType = OutputIndex(), output_vector = false, force_matrix = false, return_costs::Bool = false)
+function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], input_layer_size = 3, output_layer_size = 2, m = 100, resLayers=0, e = 1f-3, activation_list=fill(true, length(hidden_layers)), printmsg = true, loss_type::LossType = OutputIndex(), output_vector = false, force_matrix = false, use_values::Bool = false, return_costs::Bool = false)
 	Random.seed!(1234)
 
 	@assert output_index <= output_layer_size "The output index ($output_index) must be less than or equal to the number of outputs ($output_layer_size)"
@@ -718,6 +718,7 @@ function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	else
 		map(Float32, randn(m, input_layer_size))
 	end
+	output_values = map(Float32, randn(m))
 	d_X = cuda_allocate(X)
 
 	num_hidden = length(hidden_layers)
@@ -762,28 +763,39 @@ function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	output = if output_vector && (m > 1 || force_matrix)
-		fill(output_index, m)
-	else
-		output_index
-	end
-
-	base_args_cpu = (T0, B0, hidden_layers, X, output, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas)
-
-	#GPU batch path requires a 0-based index array (one per example); the single-example path keeps
-	#a plain integer output index which is handled by the single vector nnCostFunction methods.
 	isbatch = (m > 1) || force_matrix
-	d_output_indices = if isbatch
-		idxvec = output isa AbstractVector ? output : fill(output_index, m)
-		cuda_allocate(Cint.(idxvec .- 1))
+	use_vals = use_values && (loss_type isa CrossEntropyLoss)
+	#shared per-example index vector: needed for output_vector and for any
+	#batch values path (the batch values kernels take a per-example index array).
+	idx_arg = ((output_vector || use_vals) && isbatch) ? fill(output_index, m) : output_index
+	output = idx_arg
+	output_value = output_values[1]   #scalar value for the single-example path
+
+	#CPU reference: build argument tuples inside each branch so nothing is
+	#constructed (or referenced) when its inputs do not exist for this shape.
+	base_args_cpu = if use_vals && isbatch
+		(T0, B0, hidden_layers, X, idx_arg, output_values, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas)
+	elseif use_vals
+		(T0, B0, hidden_layers, X, output_index, output_value, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas)
+	elseif isbatch
+		(T0, B0, hidden_layers, X, idx_arg, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas)
 	else
-		nothing
+		(T0, B0, hidden_layers, X, output_index, lambda, TGCPU, BGCPU, tanh_grad_z, a, deltas)
 	end
 
-	base_args_gpu = if isbatch
+	#GPU batch path requires a 0-based index array (one per example); the single-example
+	#path keeps a plain integer output index handled by the single vector methods.
+	d_output_indices = isbatch ? cuda_allocate(Cint.((idx_arg isa AbstractVector ? idx_arg : fill(output_index, m)) .- 1)) : nothing
+	d_output_values = use_vals ? cuda_allocate(output_values) : nothing
+
+	base_args_gpu = if isbatch && use_vals
+		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_output_indices, d_output_values)
+	elseif isbatch
 		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_ones, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, d_output_indices, lambda)
+	elseif use_vals
+		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, output_index, output_value, lambda, 0.0f0)
 	else
-		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, output, lambda)
+		(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_tanh_grad_z, d_deltas, d_Theta_grads, d_Bias_grads, d_X, output_index, lambda)
 	end
 	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
 
@@ -793,19 +805,31 @@ function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		nnCostFunction(base_args_cpu..., onesVec; kwargs...)
 	end
 
-	if isbatch
+	if isbatch && use_vals
+		nnCostFunction(base_args_gpu...; lambda = lambda, kwargs...)
+	elseif isbatch
 		nnCostBatchOutputIndex(base_args_gpu...; kwargs...)
 	else
 		nnCostFunction(base_args_gpu...; kwargs...)
 	end
 
-	costGPU = if isbatch
+	costGPU = if isbatch && use_vals
+		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_output_indices, d_output_values; lambda = lambda, kwargs...)
+	elseif isbatch
 		nnCostBatchOutputIndexNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, m, d_a, d_X, d_output_indices, lambda; kwargs...)
+	elseif use_vals
+		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_X, output_index, output_value, lambda; kwargs...)
 	else
-		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_X, output, lambda; kwargs...)
+		nnCostFunctionNOGRAD(d_Thetas, d_Biases, input_layer_size, output_layer_size, hidden_layers, d_a, d_X, output_index, lambda; kwargs...)
 	end
 
-	costCPU = nnCostFunctionNOGRAD(T0, B0, hidden_layers, X, output, lambda, a; kwargs...)
+	costCPU = if use_vals && isbatch
+		nnCostFunctionNOGRAD(T0, B0, hidden_layers, X, idx_arg, output_values, lambda, a; kwargs...)
+	elseif use_vals
+		nnCostFunctionNOGRAD(T0, B0, hidden_layers, X, output_index, output_value, lambda, a; kwargs...)
+	else
+		nnCostFunctionNOGRAD(T0, B0, hidden_layers, X, idx_arg, lambda, a; kwargs...)
+	end
 	
 	GPU2Host((Theta_grads, Bias_grads), (d_Theta_grads, d_Bias_grads))
 
@@ -817,8 +841,15 @@ function checkNumGradGPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		Tplus, Bplus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params+perturb)
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output, lambda, a; kwargs...)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output, lambda, a; kwargs...)
+		nograd_args = if use_vals && isbatch
+			(hidden_layers, X, idx_arg, output_values, lambda, a)
+		elseif use_vals
+			(hidden_layers, X, output_index, output_value, lambda, a)
+		else
+			(hidden_layers, X, idx_arg, lambda, a)
+		end
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, nograd_args...; kwargs...)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, nograd_args...; kwargs...)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 

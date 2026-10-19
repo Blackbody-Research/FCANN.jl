@@ -809,7 +809,7 @@ function checkNumGradCPU(lambda::T, costFunc::AbstractString; input_orientation:
 end
 
 #check numerical gradient for case of output gradient being one of the indices rather than a cost function 
-function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), printmsg = true, output_vector=false, force_matrix=false)
+function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 5], resLayers = 0, m = 1000, input_layer_size = 3, output_layer_size = 2, e = 1f-3, activation_list = fill(true, length(hidden_layers)), loss_type::LossType = OutputIndex(), printmsg = true, output_vector=false, force_matrix=false, use_values::Bool = false)
 	Random.seed!(1234)
 
 	@assert output_index <= output_layer_size "The output index ($output_index) must be less than or equal to the number of outputs ($output_layer_size)"
@@ -819,6 +819,7 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	else
 		map(Float32, randn(m, input_layer_size))
 	end
+	output_values = map(Float32, randn(m))
 
 	@info "Input data is $X"
 
@@ -857,16 +858,27 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 	perturb = zeros(Float32, l)
 	numGrad = Array{Float32}(undef, l)
 
-	base_args = if output_vector && (m > 1 || force_matrix)
-		(T0, B0, hidden_layers, X, fill(output_index, m), lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	use_vals = use_values && (loss_type isa CrossEntropyLoss)
+	isbatch = (m > 1) || force_matrix
+	#shared per-example index vector: needed for output_vector and for any
+	#batch values path (the batch values kernels take a per-example index array).
+	idx_arg = ((output_vector || use_vals) && isbatch) ? fill(output_index, m) : output_index
+	output_value = output_values[1]   #scalar value for the single-example path
+
+	base_args = if use_vals && isbatch
+		(T0, B0, hidden_layers, X, idx_arg, output_values, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	elseif use_vals
+		(T0, B0, hidden_layers, X, output_index, output_value, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
+	elseif isbatch
+		(T0, B0, hidden_layers, X, idx_arg, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
 	else
 		(T0, B0, hidden_layers, X, output_index, lambda, Theta_grads, Bias_grads, tanh_grad_z, a, deltas)
 	end
 	kwargs = (resLayers = resLayers, activation_list = activation_list, loss_type = loss_type)
-	if (m == 1) && !force_matrix 
-		nnCostFunction(base_args...; kwargs...)
-	else
+	if isbatch
 		nnCostFunction(base_args..., onesVec; kwargs...)
+	else
+		nnCostFunction(base_args...; kwargs...)
 	end
 
 	@info "Activations are $a"
@@ -879,8 +891,15 @@ function checkNumGradCPU(lambda::Real, output_index::Integer; hidden_layers=[5, 
 		Tminus, Bminus = params2Theta(input_layer_size, hidden_layers, output_layer_size, params-perturb)
 		
 	
-		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, hidden_layers, X, output_index, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type)
-		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, hidden_layers, X, output_index, lambda, a; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type)
+		nograd_args = if use_vals && isbatch
+			(hidden_layers, X, idx_arg, output_values, lambda, a)
+		elseif use_vals
+			(hidden_layers, X, output_index, output_value, lambda, a)
+		else
+			(hidden_layers, X, idx_arg, lambda, a)
+		end
+		outminus = nnCostFunctionNOGRAD(Tminus, Bminus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type)
+		outplus = nnCostFunctionNOGRAD(Tplus, Bplus, nograd_args...; resLayers = resLayers, activation_list=activation_list, loss_type = loss_type)
 		
 		perturb[i] = 0.0f0  #restore perturb vector to 0
 
